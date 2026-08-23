@@ -122,6 +122,14 @@ never overwrite your actual playthrough.
   fast-forward through the fog or slow-motion in a fight is cheating. The
   hotkey and the OPTION rows are ignored until the match ends.
 - **LINK is off the START menu.** The mod owns the transport for PvP.
+- **SAVE is off the START menu too.** The veto above already made saving
+  impossible, but the row still ran the whole vanilla ceremony — the
+  confirmation, the jingle, "...saved the game!" — and wrote nothing. A
+  menu row that lies gets removed; the veto stays as the guarantee.
+- **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
+  where the party IS your health — deposit fresh Pokémon, fight with one,
+  withdraw and repeat — so storage, Pokémon and items both, is unreachable
+  until the match ends.
 
 None of these write to your saved options — they hold while a match is live
 and your own settings are back the moment it is over.
@@ -280,10 +288,24 @@ of Zubat and Nidoran, so the common case was a team that ignored the ring
 for a whole match. Losing your last Pokémon to the fog eliminates you
 exactly like a whiteout.
 
+The fog does not stop at the battle screen. In a wild or route-trainer
+fight outside the ring **both sides keep taking the bite** — but the two
+Pokémon actually on the field are drained only to 1 HP, never fainted: the
+engine only knows how to faint a mon through its own move flow, so the fog
+brings a battle to the brink and the killing blow is thrown inside it.
+(PvP and bot fights are exempt: two machines biting HP outside the
+lockstep is a desync, and both players sit in the same fog anyway.)
+
 The host owns the clock and announces each shrink; nobody derives it from
 their own wall clock, which would drift. Bots take the fog on the same terms
 you do — they cannot walk between maps, so a bot the ring leaves behind is
 a bot that dies in it, and its team hits the ground like anyone else's.
+
+Kanto's own trainers are not spared either: a map the ring has left gets
+one shared clock with the same grace you get, and when it runs out every
+trainer on it is gone, on every client. They spill nothing — balls on the
+ground mark a kill somebody *earned* — so a route the fog has taken is
+simply empty, and the survivors' PvE shrinks with the world.
 
 `FOG SECONDS` (a mod option, default 120) is how long each ring lasts. The
 schedule is eight rings — the whole map, then 9, 7, 5, 3 and 1.5 squares

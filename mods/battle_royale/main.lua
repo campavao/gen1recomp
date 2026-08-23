@@ -897,7 +897,99 @@ return function(mod)
     end
   end
 
-  -- Are we standing in it, and what it costs.
+  -- Kanto's own trainers die to the fog too (POK-35).  Host-run, like the
+  -- bots' fog: every map that holds trainers gets one shared clock once
+  -- the ring leaves it (per-trainer would be overkill), and when it runs
+  -- out each trainer object on the map is toggled off everywhere -- the
+  -- npcout the beaten path already speaks.  No spill: balls mark a kill
+  -- site somebody EARNED; fog-killed teams would be litter on maps nobody
+  -- can safely loot.
+  function BR:tickNpcFog()
+    if not (self.relay and self.relay:isHost() and self.phase == "match"
+            and self.ring) then return end
+    local now, data = clock(), self.game and self.game.data
+    if not (now and data) then return end
+    if (now - (self.npcFogScanAt or 0)) < 1 then return end
+    self.npcFogScanAt = now
+    if not self.trainerMaps then
+      self.trainerMaps = {}
+      for id, map in pairs(data.maps or {}) do
+        for _, obj in ipairs(map.objects or {}) do
+          if obj.trainerClass then
+            self.trainerMaps[#self.trainerMaps + 1] = id
+            break
+          end
+        end
+      end
+      table.sort(self.trainerMaps)     -- pairs order is not a schedule
+    end
+    self.npcFog = self.npcFog or {}
+    local died = Fog.tickMaps(self.npcFog, self.trainerMaps, townLocations(),
+                              self.ring.center, self.ring.radius, now)
+    for _, mapId in ipairs(died) do
+      local took = 0
+      for _, obj in ipairs((data.maps[mapId] and data.maps[mapId].objects) or {}) do
+        if obj.trainerClass and obj.name then
+          took = took + 1
+          pcall(function() mod.world:toggleObject(mapId, obj.name, false) end)
+          if self.relay then self.relay:broadcast(Wire.npcout(mapId, obj.name)) end
+        end
+      end
+      if took > 0 then
+        -- the measurement POK-35 asks for: how much PvE each phase removes
+        mod.log:info("the fog took %d trainer(s) on %s", took, tostring(mapId))
+      end
+    end
+  end
+
+  -- The live LOCAL battle, if any (wild, or one of Kanto's own trainers).
+  -- PvP and bot fights set status = "battle", which holds tickFog off
+  -- entirely, so anything this returns is by construction a battle the
+  -- fog may reach into (POK-31).  battle.ended clears it; the stack walk
+  -- covers any exit that never said so.
+  function BR:liveLocalBattle()
+    local b = self.localBattle
+    if not b then return nil end
+    local stack = self.game and self.game.stack
+    local states = (stack and stack.states) or {}
+    for i = #states, 1, -1 do
+      if states[i] == b then return b end
+    end
+    self.localBattle = nil
+    return nil
+  end
+
+  -- The other half of POK-31: the enemy's bench ticks like ours, and the
+  -- two ACTIVE battlers are floored at 1 HP -- the engine only knows how
+  -- to faint a mon through its own move flow (an active at 0 outside it
+  -- wedges the menu: ChooseNextMon with no healthy pick just returns
+  -- forever, #core.asm:1086).  The fog drains a battle to the brink; the
+  -- killing blow has to be thrown inside it.  Display: a running drain
+  -- re-reads mon.hp as its goal and lands true on its own; otherwise the
+  -- bar is snapped, on the poison beat the tick already plays.
+  function BR:fogBiteBattle(battle)
+    local seen = {}
+    local function bite(mon, floor)
+      if not (mon and mon.hp and mon.hp > 0) or seen[mon] then return end
+      seen[mon] = true
+      mon.hp = math.max(floor, mon.hp - Fog.bite(mon.stats and mon.stats.hp))
+    end
+    bite(battle.enemy and battle.enemy.mon, 1)
+    for _, mon in ipairs(battle.enemyParty or {}) do bite(mon, 0) end
+    if not battle.draining then
+      local Timing = require("src.core.Timing")
+      for _, b in ipairs({ battle.player, battle.enemy }) do
+        if b and b.mon and b.shownHP then
+          b.shownHP = b.mon.hp
+          b.shownPx = Timing.hpBarPixels(b.mon.hp,
+            math.max(1, (b.mon.stats and b.mon.stats.hp) or 1))
+        end
+      end
+    end
+  end
+
+  -- Are we standing in it, and what it costs.  The fog does not stop at a
+  -- LOCAL battle's screen (POK-31): both sides keep taking the bite.
   function BR:tickFog()
     if not (self.phase == "match" and self.status == "alive" and self.ring) then return end
     local game, now = self.game, clock()
@@ -911,9 +1003,14 @@ return function(mod)
       return
     end
 
+    local battle = self:liveLocalBattle()
+
     if not self.wasInFog then
       self.wasInFog = true
       self.lastFogTick = now
+      -- the ring moved past us mid-fight: no textbox over a battle screen;
+      -- start the clock quietly and let the poison beat carry the news
+      if battle then return end
       if Fog.coversAll(self.ring.radius) then
         -- nowhere to send them: the announcement already said so, and a
         -- "get to X" here would be a lie
@@ -927,13 +1024,18 @@ return function(mod)
 
     if (now - (self.lastFogTick or now)) < Fog.TICK_SECONDS then return end
     self.lastFogTick = now
+    -- makeBattler holds the party table itself, so identity finds the mon
+    -- on the field right now; it is floored at 1 like the enemy's (above)
+    local active = battle and battle.player and battle.player.mon
     local anyLeft = false
     for _, mon in ipairs(game.save.party or {}) do
       if mon.hp > 0 then
-        mon.hp = math.max(0, mon.hp - Fog.bite(mon.stats and mon.stats.hp))
+        mon.hp = math.max((mon == active) and 1 or 0,
+                          mon.hp - Fog.bite(mon.stats and mon.stats.hp))
       end
       if mon.hp > 0 then anyLeft = true end
     end
+    if battle then self:fogBiteBattle(battle) end
     -- the bite has to be FELT: one text box on entry and then silence read
     -- as "the fog is broken" in play.  So each tick is the overworld-poison
     -- beat Gen 1 players already know -- the screen flickers dark and the
@@ -1497,10 +1599,18 @@ return function(mod)
     if spill then self.spills:add(spill) end
   end
 
+  -- Remember the battle the fog may reach into (POK-31).  Only a local
+  -- BattleState says battle.started -- LinkBattle never emits it -- and
+  -- PvP and bot fights hold tickFog off via status anyway.
+  mod.events:on("battle.started", function(ev)
+    if BR.phase == "match" and ev and ev.battle then BR.localBattle = ev.battle end
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
+    BR.localBattle = nil
     local npc = BR.npcFight
     BR.npcFight = nil
     if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
@@ -1730,10 +1840,11 @@ return function(mod)
       BR:tickBotFights()
       BR:tickRing()
       BR:tickBotFog()
-      -- the fog does not reach into a battle: taking the last of your party
-      -- while the battle screen is up would leave the engine holding a
-      -- fainted lead it never saw faint.  Scaling is held back for the same
-      -- reason -- BattleState has already built its battlers from the party.
+      BR:tickNpcFog()
+      -- status == "battle" is PvP or a bot fight: either machine biting HP
+      -- outside the lockstep is a desync (both players sit in the same fog
+      -- anyway, so it stays fair).  A LOCAL battle the fog reaches into,
+      -- both sides -- see tickFog (POK-31).
       if BR.status ~= "battle" then
         BR:tickFog()
         BR:tickLevels()
@@ -1925,11 +2036,34 @@ return function(mod)
     -- the engine's own link play has no business in a match: the mod owns
     -- the transport for PvP, and a second session from inside one is
     -- undefined at best.  Back the moment the match is over.
-    if BR.phase == "match" then mod.ui.removeLabel(out, "LINK") end
+    if BR.phase == "match" then
+      mod.ui.removeLabel(out, "LINK")
+      -- SAVE would run the whole vanilla ceremony -- confirmation, jingle,
+      -- "...saved the game!" -- and write nothing (save.write is vetoed
+      -- below).  A row that lies leaves the menu (POK-33); the veto stays
+      -- as the guarantee for anything else that tries.
+      mod.ui.removeLabel(out, "SAVE")
+    end
     return mod.ui.insertBefore(out, "OPTION", {
       label = label,
       onSelect = function() mod.ui.push(game, SCREEN) end,
     })
+  end)
+
+  -- No storage in a battle royale (POK-36): the party you carry is all you
+  -- have.  Boxes launder party-as-health (deposit healthy, fight with one,
+  -- withdraw fresh), so every row the PC offers -- boxes, item storage,
+  -- the dex rating -- is replaced with one that says so.  LOG OFF is
+  -- appended by the engine AFTER this hook, so the exit cannot be orphaned.
+  mod.hooks:wrap("ui.pc.items", function(next, game, items)
+    if not inMatch() then return next(game, items) end
+    return { {
+      label = "OUT OF ORDER",
+      keepOpen = true,
+      onSelect = function()
+        say("The storage system\nis out of bounds\nduring a match!")
+      end,
+    } }
   end)
 
   -- ...and from the title screen, because everything a match needs it makes

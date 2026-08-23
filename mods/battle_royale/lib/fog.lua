@@ -142,6 +142,37 @@ function Fog.safeMaps(locations, outdoorIds, center, radius)
   return out
 end
 
+-- One shared clock per map the ring has left (POK-35).  `state` persists
+-- between calls (mapId -> {ticks, last, dead}); `mapIds` is the list worth
+-- watching (maps that hold trainers).  A map outside the ring counts the
+-- same TICK_SECONDS beats a player does and dies at TICKS_TO_KILL -- the
+-- same grace, so a trainer just past the edge is not vaporised the moment
+-- the ring moves.  Returns the maps whose clock ran out on THIS call.  A
+-- map the ring re-admits before the end is reprieved (the centre can move
+-- between phases); the dead stay dead.
+function Fog.tickMaps(state, mapIds, locations, center, radius, now)
+  local died = {}
+  if not (state and now) then return died end
+  for _, id in ipairs(mapIds or {}) do
+    local st = state[id]
+    if not (st and st.dead) then
+      if Fog.isSafe(locations, id, center, radius) then
+        if st then state[id] = nil end
+      elseif not st then
+        state[id] = { ticks = 0, last = now }
+      elseif (now - (st.last or 0)) >= Fog.TICK_SECONDS then
+        st.last = now
+        st.ticks = st.ticks + 1
+        if st.ticks >= Fog.TICKS_TO_KILL then
+          st.dead = true
+          died[#died + 1] = id
+        end
+      end
+    end
+  end
+  return died
+end
+
 -- Is this Pokemon a Poison type?
 --
 -- NOT USED right now, and deliberately kept.  A Poison lead used to walk the

@@ -720,5 +720,63 @@ do
 end
 
 
+-- ------- the fog takes Kanto's own trainers (POK-35): Fog.tickMaps
+
+do
+  local Fog = require("mods.battle_royale.lib.fog")
+  -- a 3-map world: A inside the ring, B and C outside it
+  local locations = { A = { x = 0, y = 0 }, B = { x = 9, y = 0 }, C = { x = 0, y = 9 } }
+  local center = { x = 0, y = 0 }
+  local maps = { "A", "B", "C" }
+  local state, t = {}, 1000
+
+  -- first sight of an unsafe map arms its clock but takes nothing
+  local died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 0, "arming the clocks takes nobody")
+  ok(state.B and state.B.ticks == 0, "an unsafe map's clock is armed")
+  ok(state.A == nil, "a safe map has no clock")
+
+  -- the same grace players get: TICKS_TO_KILL beats, TICK_SECONDS apart
+  for i = 1, Fog.TICKS_TO_KILL - 1 do
+    t = t + Fog.TICK_SECONDS
+    died = Fog.tickMaps(state, maps, locations, center, 2, t)
+    eq(#died, 0, "still counting at beat " .. i)
+  end
+  t = t + Fog.TICK_SECONDS
+  died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 2, "both fogged maps die on the last beat")
+  ok(state.B.dead and state.C.dead, "and are marked dead")
+
+  -- the dead stay dead, and are not reported twice
+  t = t + Fog.TICK_SECONDS
+  died = Fog.tickMaps(state, maps, locations, center, 2, t)
+  eq(#died, 0, "a dead map is not taken twice")
+
+  -- a beat needs the full TICK_SECONDS
+  local s2, t2 = {}, 5000
+  Fog.tickMaps(s2, { "B" }, locations, center, 2, t2)
+  Fog.tickMaps(s2, { "B" }, locations, center, 2, t2 + Fog.TICK_SECONDS - 1)
+  eq(s2.B.ticks, 0, "a beat needs the full TICK_SECONDS")
+
+  -- a recentred ring reprieves a counting map...
+  local s3 = {}
+  Fog.tickMaps(s3, { "B" }, locations, center, 2, 100)
+  Fog.tickMaps(s3, { "B" }, locations, { x = 9, y = 0 }, 2, 104)
+  eq(s3.B, nil, "a map the ring re-admits is reprieved")
+
+  -- ...but never resurrects a dead one
+  local s4 = { B = { ticks = Fog.TICKS_TO_KILL, dead = true, last = 0 } }
+  local d4 = Fog.tickMaps(s4, { "B" }, locations, { x = 9, y = 0 }, 2, 200)
+  eq(#d4, 0, "the dead stay dead")
+  ok(s4.B.dead, "even when the ring re-admits their map")
+
+  -- the all-covering ring (radius -1) counts every map down
+  local s5 = {}
+  Fog.tickMaps(s5, maps, locations, center, -1, 300)
+  ok(s5.A ~= nil and s5.B ~= nil and s5.C ~= nil,
+     "the final ring arms every clock")
+end
+
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
