@@ -825,7 +825,11 @@ return function(mod)
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
     if was ~= phase and phase > 1 then
-      say(("The fog closes in\non %s!"):format(place or "KANTO"))
+      if Fog.coversAll(radius) then
+        say("The fog covers\nall of KANTO!")
+      else
+        say(("The fog closes in\non %s!"):format(place or "KANTO"))
+      end
     end
   end
 
@@ -900,8 +904,14 @@ return function(mod)
     if not self.wasInFog then
       self.wasInFog = true
       self.lastFogTick = now
-      say(("You are in the fog!\nGet to %s!")
-        :format((self.ring.center and self.ring.center.name) or "safety"))
+      if Fog.coversAll(self.ring.radius) then
+        -- nowhere to send them: the announcement already said so, and a
+        -- "get to X" here would be a lie
+        say("You are in the fog!")
+      else
+        say(("You are in the fog!\nGet to %s!")
+          :format((self.ring.center and self.ring.center.name) or "safety"))
+      end
       return
     end
 
@@ -1588,22 +1598,26 @@ return function(mod)
     -- one shaded square per town-map cell the fog has taken.  Walking the
     -- grid rather than the location table: several maps share a square, and
     -- shading it once per map would stack the alpha into a solid black blot.
+    local all = Fog.coversAll(radius)
     g.setColor(0.25, 0.15, 0.35, 0.55)
     for gy = 0, 15 do
       for gx = 0, 15 do
         local dx, dy = gx - center.x, gy - center.y
-        if (dx * dx + dy * dy) > (radius * radius) then
+        if all or (dx * dx + dy * dy) > (radius * radius) then
           g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
                       GRID * sx, GRID * sy)
         end
       end
     end
     -- and a box round the eye of it, so the safe place is named as well as
-    -- merely un-shaded
-    g.setColor(1, 1, 1, 0.9)
-    g.setLineWidth(math.max(1, sx))
-    g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
-                GRID * sx, GRID * sy)
+    -- merely un-shaded.  Not once the fog has taken the eye too: a box round
+    -- a shaded square would promise a safety that is not there.
+    if not all then
+      g.setColor(1, 1, 1, 0.9)
+      g.setLineWidth(math.max(1, sx))
+      g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
+                  GRID * sx, GRID * sy)
+    end
     g.pop()
     return out
   end)

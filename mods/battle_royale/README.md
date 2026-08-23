@@ -204,7 +204,10 @@ limitation is gone.
 
 **The fog** (`lib/fog.lua`) is what turns this from a deathmatch into a
 battle royale: a ring that tightens on a shared clock until everyone left is
-in the same few squares.
+in the same few squares — and then keeps tightening. The last phase is fog
+over the whole of Kanto, so a match with survivors who refuse to fight each
+other still ends: whoever lasts longest inside it wins, and that is a
+tiebreak, not the plan.
 
 Drawing it took one decision worth knowing about. Kanto here is not a single
 canvas the way Hoenn was in the sibling project — it is 222 separate maps
@@ -222,19 +225,22 @@ HP every four seconds** — about forty seconds from full to fainted. It is a
 fraction rather than Gen 1's flat 1-HP-per-4-steps because a flat point does
 not survive level scaling: it would kill a Lv5 starter in a minute and take
 twenty patient minutes against a Lv100 team, which is exactly backwards. The
-fog has to bite hardest when the ring is smallest. A **Poison-type lead is
-immune**: the fog is its element
-(DESIGN D11), and it gives an unloved type a real reason to be on your team.
-Losing your last Pokémon to the fog eliminates you exactly like a whiteout.
+fog has to bite hardest when the ring is smallest. Nothing is immune to it:
+a Poison lead used to be (DESIGN D11), and it played badly — Kanto is full
+of Zubat and Nidoran, so the common case was a team that ignored the ring
+for a whole match. Losing your last Pokémon to the fog eliminates you
+exactly like a whiteout.
 
 The host owns the clock and announces each shrink; nobody derives it from
-their own wall clock, which would drift. Bots caught outside walk out of it
-off-screen — real pathing across Kanto's warp graph is a much bigger
-feature, and relocating them keeps the match converging instead of quietly
-wiping the roster on the first shrink.
+their own wall clock, which would drift. Bots take the fog on the same terms
+you do — they cannot walk between maps, so a bot the ring leaves behind is
+a bot that dies in it, and its team hits the ground like anyone else's.
 
-`FOG SECONDS` (a mod option, default 120) is how long each ring lasts, so a
-default match runs about ten minutes and a quick one can be far shorter.
+`FOG SECONDS` (a mod option, default 120) is how long each ring lasts. The
+schedule is eight rings — the whole map, then 9, 7, 5, 3 and 1.5 squares
+around the centre, then the centre's own square, then nothing — so a default
+match reaches the all-fog endgame at sixteen minutes and a quick one can be
+far shorter.
 
 **Open the TOWN MAP to see it.** The ring is a circle in town-map space and
 the TOWN MAP draws that exact grid, so the item you already reach for to
@@ -345,7 +351,7 @@ thing that proves the fallback is honest; run it in either tree.
 **Here (v0):** rooms + lobby over a relay with name entry, bots (up to 30,
 so a match is playable solo), random Kanto drop, the shared loadout plus all
 badges and HMs, real-time presence, forced face-to-face battles, the
-shrinking fog on a shared clock with Poison immunity, party-as-health
+shrinking fog on a shared clock that closes all the way, party-as-health
 elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
 (matches can't overwrite a real save), last-trainer-standing. Route/gym
 trainers stay live as PvE.

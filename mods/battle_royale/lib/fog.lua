@@ -15,19 +15,32 @@
 -- is on the same square as the town it is in.
 --
 -- The schedule is a list of radii.  Phase 1 covers everything (the grace
--- period while people catch a team) and each later phase is tighter, so the
--- last one is a couple of squares around the centre -- the climactic arena
--- DESIGN D11 asks for.
+-- period while people catch a team) and each later phase is tighter: a
+-- couple of squares around the centre is the climactic arena DESIGN D11
+-- asks for, then the town alone, then nothing at all.
+--
+-- THE RING NEVER STOPS.  It used to clamp at the arena, and a match with
+-- survivors who would not fight each other (four of them, at level 100,
+-- standing in Celadon) simply never ended.  So the last phase is fog over
+-- the whole map.  The endgame in that case is who lasts longest inside it --
+-- about forty seconds from full health, longer for whoever kept their
+-- Potions -- and it is expected to be rare, because players in one town
+-- usually finish each other off first.  What matters is that it is a
+-- guarantee: a match ends.
 
 local Fog = {}
 
 -- Radii in town-map squares.  15 is larger than the grid's diagonal, so
--- phase 1 is "no fog anywhere" without needing a special case.
-Fog.PHASES = { 15, 9, 7, 5, 3, 1.5 }
+-- phase 1 is "no fog anywhere" without needing a special case.  0 is the
+-- centre's own square only (the town and its buildings).  A negative radius
+-- is EVERYWHERE: no square is inside it, whatever the distance.
+Fog.EVERYWHERE = -1
+Fog.PHASES = { 15, 9, 7, 5, 3, 1.5, 0, Fog.EVERYWHERE }
 
 -- How long each phase lasts before the next shrink, in seconds.  A default
--- match is therefore about ten minutes; the mod exposes it as an option so
--- a short game (or a test) can turn it right down.
+-- match therefore reaches the all-fog endgame at about sixteen minutes; the
+-- mod exposes it as an option so a short game (or a test) can turn it right
+-- down.
 Fog.DEFAULT_PHASE_SECONDS = 120
 
 -- Fog damage, taken by every party member this often while you are outside
@@ -61,6 +74,9 @@ end
 
 function Fog.isFinalPhase(phase) return (phase or 1) >= #Fog.PHASES end
 
+-- Has the ring closed completely -- is there nowhere left to stand?
+function Fog.coversAll(radius) return (tonumber(radius) or 0) < 0 end
+
 -- Which phase a match of this age is in (1-based).
 function Fog.phaseAt(elapsedSeconds, phaseSeconds)
   phaseSeconds = phaseSeconds or Fog.DEFAULT_PHASE_SECONDS
@@ -90,8 +106,11 @@ end
 -- Is this map inside the ring?  A map with no town-map square is treated as
 -- safe: that only happens for content this build does not place on the map,
 -- and killing a player for standing somewhere the fog cannot describe would
--- be the wrong way to resolve it.
+-- be the wrong way to resolve it.  Until the fog covers everything, that is
+-- -- the final phase has no inside, and a map the grid cannot place is not
+-- a loophole in it.
 function Fog.isSafe(locations, mapId, center, radius)
+  if Fog.coversAll(radius) then return false end
   if not (locations and center) then return true end
   local loc = locations[mapId]
   if not loc then return true end
@@ -102,6 +121,7 @@ end
 -- Distance from the ring's edge in squares: negative inside, positive out.
 -- Used to warn a player who is close to the edge.
 function Fog.distanceOutside(locations, mapId, center, radius)
+  if Fog.coversAll(radius) then return math.huge end
   if not (locations and center) then return -math.huge end
   local loc = locations[mapId]
   if not loc then return -math.huge end

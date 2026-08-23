@@ -13,7 +13,15 @@ picks it up does not repeat the search.
 
 ## P0 — a match can fail to end
 
-### BR-1 · The ring never closes, so a match can run forever `[dx]`
+### BR-1 · The ring never closes, so a match can run forever — DONE (POK-5) `[dx]`
+
+**Resolved 2026-08-23:** `Fog.PHASES` continues past the 1.5-square arena to
+`0` (the centre's own square) and then `Fog.EVERYWHERE` (-1, nothing is
+safe). `Fog.isSafe` returns false for a negative radius before any other
+check, so an unplaced map is not a loophole either. The wire decoder used to
+refuse `r < 0`, which would have silently dropped the final ring on every
+guest — it now accepts -1. The town map shades everything and drops the
+eye box; the announcement reads "The fog covers all of KANTO!".
 
 **Seen:** four survivors at Lv100, ring at its last phase, match not ending.
 

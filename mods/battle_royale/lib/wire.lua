@@ -27,6 +27,7 @@
 --   {t="spill", map=, mons={{key,x,y,species,lv}}} my team hit the ground
 --   {t="took", key=}                              that ball is mine
 --   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
+--                                                 (r < 0: over everything)
 --   {t="winner", id=}                             host: the match is over
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
@@ -278,7 +279,9 @@ decoders.ring = function(m)
     return nil, "bad phase"
   end
   if not (isCoord(m.cx) and isCoord(m.cy)) then return nil, "bad centre" end
-  if type(m.r) ~= "number" or m.r ~= m.r or m.r < 0 or m.r > 64 then
+  -- a negative radius is the fog over everything (Fog.EVERYWHERE), not an
+  -- error: the final ring has to cross the wire like any other
+  if type(m.r) ~= "number" or m.r ~= m.r or m.r < -1 or m.r > 64 then
     return nil, "bad radius"
   end
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,

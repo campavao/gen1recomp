@@ -80,6 +80,11 @@ do
      "phase 0 is refused")
   ok(Wire.decode({ t = "ring", phase = 1, cx = "x", cy = 1, r = 2 }) == nil,
      "a malformed centre is refused")
+  local everywhere = Wire.decode(Wire.ring(8, 8, 9, -1, "CELADON CITY"))
+  eq(everywhere and everywhere.r, -1,
+     "the all-fog ring (a negative radius) crosses the wire intact")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = -7 }) == nil,
+     "but an arbitrary negative radius is still refused")
 
   -- `as`: the host relaying a bot's movement
   eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
@@ -237,6 +242,19 @@ do
   ok(Fog.isFinalPhase(Fog.phaseCount()), "the last phase is final")
   ok(not Fog.isFinalPhase(1), "the first phase is not")
 
+  -- the ring never clamps: the last phase is fog over everything, so a match
+  -- whose survivors will not fight each other still ends
+  ok(Fog.coversAll(Fog.radius(Fog.phaseCount())),
+     "the final phase covers the whole map")
+  ok(not Fog.coversAll(Fog.radius(Fog.phaseCount() - 1)),
+     "the phase before it still has an inside")
+  eq(Fog.radius(Fog.phaseCount() - 1), 0,
+     "and that inside is the centre's own square only")
+  ok(not Fog.coversAll(0), "radius 0 is a place, not the absence of one")
+  ok(Fog.coversAll(Fog.EVERYWHERE), "EVERYWHERE is the absence of one")
+  ok(Fog.radius(Fog.phaseCount() + 50) == Fog.EVERYWHERE,
+     "past the schedule the fog stays everywhere -- no clamp back to a ring")
+
   -- geometry on a town-map grid
   local locations = {
     HOME      = { x = 8, y = 8, name = "HOME" },
@@ -254,6 +272,19 @@ do
   ok(Fog.isSafe(locations, "FARAWAY", center, 15), "everything is in at phase 1")
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
+  ok(Fog.isSafe(locations, "HOME", center, 0), "at radius 0 the centre is safe")
+  ok(Fog.isSafe(locations, "INDOORS", center, 0),
+     "and so are the buildings on its square")
+  ok(not Fog.isSafe(locations, "NEXTDOOR", center, 0),
+     "but the next square over is not")
+  ok(not Fog.isSafe(locations, "HOME", center, Fog.EVERYWHERE),
+     "once the fog covers everything, even the centre is in it")
+  ok(not Fog.isSafe(locations, "NOWHERE", center, Fog.EVERYWHERE),
+     "and an unplaced map is no longer a loophole")
+  ok(not Fog.isSafe(nil, "HOME", nil, Fog.EVERYWHERE),
+     "nor is having no location table at all")
+  ok(Fog.distanceOutside(locations, "HOME", center, Fog.EVERYWHERE) > 0,
+     "everything reads as outside the all-fog ring")
 
   ok(Fog.distanceOutside(locations, "FARAWAY", center, 1.5) > 0, "outside is positive")
   ok(Fog.distanceOutside(locations, "HOME", center, 1.5) < 0, "inside is negative")
@@ -374,8 +405,13 @@ do
   local Levels = require("mods.battle_royale.lib.levels")
   local Fog = require("mods.battle_royale.lib.fog")
 
-  eq(Levels.rungs(), Fog.phaseCount(),
-     "one level rung per fog phase -- one clock, not two")
+  -- one clock, not two: the ladder is indexed by the fog's phase.  The fog
+  -- keeps closing after the ladder tops out (the last rungs are the endgame
+  -- at level 100), so the ladder is never LONGER than the schedule.
+  ok(Levels.rungs() <= Fog.phaseCount(),
+     "every level rung has a fog phase to ride")
+  eq(Levels.at(Fog.phaseCount()), Levels.MAX,
+     "the all-fog phase is at the level cap")
   eq(Levels.at(1), 5, "the drop is the starting level")
   eq(Levels.at(Levels.rungs()), Levels.MAX, "the last ring is level 100")
   eq(Levels.at(0), 5, "a phase below the ladder clamps to the drop")
