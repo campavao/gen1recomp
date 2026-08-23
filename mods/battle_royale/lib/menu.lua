@@ -30,6 +30,10 @@ function Menu.build(mod, BR)
           label = BR.status == "out" and "SPECTATING" or ("ALIVE: " .. alive),
           keepOpen = true, onSelect = function() end,
         }
+        items[#items + 1] = {
+          label = "LEVEL: " .. tostring(BR:level()),
+          keepOpen = true, onSelect = function() end,
+        }
         -- where the fog is, and whether you are standing in it
         local ring = BR.ring
         if ring and ring.phase and ring.phase > 1 then

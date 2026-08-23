@@ -30,14 +30,28 @@ Fog.PHASES = { 15, 9, 7, 5, 3, 1.5 }
 -- a short game (or a test) can turn it right down.
 Fog.DEFAULT_PHASE_SECONDS = 120
 
--- Fog damage: one HP off every party member this often, while you are
--- outside the ring.  Gen 1's overworld poison is 1 HP per 4 steps; this is
--- the same order on a clock instead of a step counter, because a battle
--- royale has to punish camping, not just walking.  A level 5 starter has
--- around 20 HP, so a careless minute in the fog is fatal and a dash across
--- a corner is survivable.
+-- Fog damage, taken by every party member this often while you are outside
+-- the ring.  Gen 1's overworld poison is a flat 1 HP per 4 steps, and that
+-- is the obvious thing to copy -- but it does not survive level scaling
+-- (DESIGN D12).  A level 5 starter has about 20 HP and a level 100 team has
+-- three hundred, so a flat point would kill you in a careless minute at the
+-- drop and take twenty patient minutes in the final ring, which is exactly
+-- backwards: the fog has to bite hardest when the ring is smallest.
+--
+-- So it is a FRACTION of each Pokemon's maximum -- a tenth per tick, which
+-- is ten ticks or about forty seconds from full health to fainted, the same
+-- at level 5 and at level 100.  Long enough to cross a corner of the map on
+-- purpose, far too short to wait out.
 Fog.TICK_SECONDS = 4
-Fog.DAMAGE = 1
+Fog.DAMAGE_FRACTION = 0.10
+Fog.TICKS_TO_KILL = math.ceil(1 / Fog.DAMAGE_FRACTION)
+
+-- What one tick takes off a Pokemon with this much maximum HP.  Always at
+-- least a point, so a very small mon still dies rather than idling forever
+-- on a rounded-down zero.
+function Fog.bite(maxHp)
+  return math.max(1, math.floor((tonumber(maxHp) or 0) * Fog.DAMAGE_FRACTION))
+end
 
 function Fog.phaseCount() return #Fog.PHASES end
 

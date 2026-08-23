@@ -31,6 +31,7 @@ local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
+local Levels = require("mods.battle_royale.lib.levels")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -283,6 +284,8 @@ return function(mod)
     self.matchStartedAt = nil
     self.lastFogTick = nil
     self.wasInFog = false
+    self.lastLevelTick = nil
+    self.announcedLevel = nil
   end
 
   function BR:teardown(message)
@@ -622,6 +625,7 @@ return function(mod)
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
   end
 
+
   function BR:applyRing(phase, cx, cy, radius, place)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
@@ -646,33 +650,46 @@ return function(mod)
     local radius = Fog.radius(phase)
     self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius, center.name))
     self:applyRing(phase, center.x, center.y, radius, center.name)
-    self:sweepBotsIntoRing()
   end
 
-  -- A bot caught outside walks out of the fog off-screen.  Real pathing
-  -- across Kanto's warp graph is a much bigger feature; relocating them is
-  -- invisible (nobody is watching an empty route) and it keeps the match
-  -- converging instead of quietly wiping the roster on the first shrink.
-  function BR:sweepBotsIntoRing()
+  -- The fog takes bots on the same terms it takes players: they cannot walk
+  -- between maps (that would want pathing across the warp graph), so a bot
+  -- the ring leaves behind is a bot that dies in it.  That is the ring doing
+  -- its job -- the field compresses phase by phase (about 30 -> 19 -> 14 ->
+  -- 9 -> 4 -> 1 on Kanto's 34 outdoor maps) and the survivors end up in the
+  -- last few squares with you, which is where the endgame fights come from.
+  -- Anything cleverer (relocating them to safety) would be a rule that
+  -- applies to bots and not to players, and the player can catch you at it.
+  function BR:tickBotFog()
+    if not (self.relay and self.relay:isHost() and self.phase == "match"
+            and self.ring) then return end
+    local now, data = clock(), self.game and self.game.data
+    if not (now and data) then return end
     local locations = townLocations()
-    local data = BR.game and BR.game.data
-    if not (locations and data and self.ring) then return end
-    local outdoor = Spawn.outdoorMaps(data.maps)
-    local safe = Fog.safeMaps(locations, outdoor, self.ring.center, self.ring.radius)
-    if #safe == 0 then return end
+    local level = Levels.at(self.ring.phase)
+
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map
          and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
-        local rng = Bots.rng(self.matchSeed, id + self.ring.phase)
-        local mapId = safe[rng(1, #safe)]
-        local cells = Spawn.cellsOf(data.maps[mapId], data.tilesets[data.maps[mapId].tileset])
-        if #cells > 0 then
-          local c = cells[rng(1, #cells)]
-          p.map, p.x, p.y = mapId, c.x, c.y
-          self.ghosts:despawn(id)
-          self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
-                                          p.status, p.sprite, id))
+        local party = Bots.party(self.matchSeed, id, data, level)
+        -- a Poison lead is at home in the fog, bot or not
+        if not Fog.immune(party[1], data) then
+          -- ticks, not hit points: the bite is a fraction of maximum HP, so
+          -- the same count of them finishes a team at any rung of the ladder
+          -- and nothing here has to know how big a level 100 bot is
+          if (now - (p.lastFogTick or 0)) >= Fog.TICK_SECONDS then
+            p.lastFogTick = now
+            p.fogTicks = (p.fogTicks or 0) + 1
+            if p.fogTicks >= Fog.TICKS_TO_KILL then
+              p.status = "out"
+              self.relay:broadcast(Wire.botout(id))
+              self.ghosts:despawn(id)
+              self:checkWinner()
+            end
+          end
         end
+      else
+        p.lastFogTick = nil
       end
     end
   end
@@ -714,12 +731,88 @@ return function(mod)
     local anyLeft = false
     for _, mon in ipairs(game.save.party or {}) do
       if mon.hp > 0 then
-        mon.hp = math.max(0, mon.hp - Fog.DAMAGE)
+        mon.hp = math.max(0, mon.hp - Fog.bite(mon.stats and mon.stats.hp))
       end
       if mon.hp > 0 then anyLeft = true end
     end
     if not anyLeft then
       self:eliminate("The fog took your\nlast POKeMON!")
+    end
+  end
+
+  -- ------- level scaling (DESIGN D12)
+  --
+  -- The rung is indexed by the fog's phase, so a ring shrink and a power
+  -- spike are the same beat rather than two unrelated timers.
+
+  function BR:level()
+    return Levels.at(self.ring and self.ring.phase or 1)
+  end
+
+  -- Pull one Pokemon up to `target`: real level-ups, the natural level-up
+  -- moves, and automatic LEVEL evolutions (stones and trades stay manual,
+  -- D12).  Damage carries across as an absolute amount, which is what a
+  -- Gen 1 level-up does -- a hurt mon stays hurt rather than being quietly
+  -- healed by the clock.
+  local function scaleMon(game, mon, target)
+    local Pokemon = require("src.pokemon.Pokemon")
+    local Stats = require("src.pokemon.Stats")
+    local Growth = require("src.pokemon.Growth")
+    local Evolution = require("src.pokemon.Evolution")
+    local def = game.data.pokemon[mon.species]
+    if not def then return false end
+
+    local from = mon.level
+    local hpLost = math.max(0, (mon.stats and mon.stats.hp or 0) - (mon.hp or 0))
+    mon.level = target
+    Pokemon.learnMovesFromDayCare(game.data, mon, def, from, target)
+    mon.stats = Stats.calc(def, target, mon.dvs, mon.statExp)
+    mon.hp = math.max(1, mon.stats.hp - hpLost)
+    local okExp, exp = pcall(Growth.expForLevel, def.growthRate, target,
+                             game.data.growthRates)
+    if okExp and exp then mon.exp = exp end
+
+    -- an evolution can itself qualify for the next one (a level 50 jump can
+    -- take a CATERPIE the whole way), so run it to a fixed point
+    for _ = 1, 4 do
+      local evo = Evolution.pendingLevelEvo(game.data, mon)
+      if not evo then break end
+      Evolution.apply(game, mon, evo, "LEVEL")
+      local newDef = game.data.pokemon[mon.species]
+      if newDef then
+        Pokemon.learnMovesFromDayCare(game.data, mon, newDef, from, target)
+      end
+    end
+    return true
+  end
+
+  -- Runs on a slow tick rather than only on the shrink, so a Pokemon caught
+  -- mid-phase snaps up to the rung too (D12: a late catch stays relevant).
+  function BR:tickLevels()
+    if not (self.phase == "match" and self.game) then return end
+    local now = clock()
+    if not now then return end
+    if (now - (self.lastLevelTick or 0)) < 1 then return end
+    self.lastLevelTick = now
+
+    local target = self:level()
+    local raised, evolved = 0, nil
+    for _, mon in ipairs(self.game.save.party or {}) do
+      if Levels.needsScaling(mon, target) then
+        local was = mon.species
+        if scaleMon(self.game, mon, target) then
+          raised = raised + 1
+          if mon.species ~= was then evolved = mon.species end
+        end
+      end
+    end
+    if raised > 0 and self.announcedLevel ~= target then
+      self.announcedLevel = target
+      if evolved then
+        say(("Your POKeMON grew\nto Lv%d, and one\nevolved!"):format(target))
+      else
+        say(("Your POKeMON grew\nto Lv%d!"):format(target))
+      end
     end
   end
 
@@ -775,7 +868,7 @@ return function(mod)
 
     -- the party is handed to BattleState through the trainer.party hook
     -- below, which is the engine's own seam for exactly this
-    self.botParty = Bots.party(self.matchSeed, botId, game.data)
+    self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
     local ok, battle = pcall(function()
       return require("src.battle.BattleState")
         .newTrainer(game, BOT_TRAINER_CLASS, 1)
@@ -980,10 +1073,15 @@ return function(mod)
       -- does not pause because ours did
       BR:tickBots()
       BR:tickRing()
+      BR:tickBotFog()
       -- the fog does not reach into a battle: taking the last of your party
       -- while the battle screen is up would leave the engine holding a
-      -- fainted lead it never saw faint
-      if BR.status ~= "battle" then BR:tickFog() end
+      -- fainted lead it never saw faint.  Scaling is held back for the same
+      -- reason -- BattleState has already built its battlers from the party.
+      if BR.status ~= "battle" then
+        BR:tickFog()
+        BR:tickLevels()
+      end
     end
     return next(game, dt)
   end)
@@ -1113,6 +1211,7 @@ return function(mod)
              place = r.center and r.center.name,
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
+  mod.exports.level = function() return BR:level() end
   mod.exports.inFog = function()
     local here = BR.game and mod.world:current()
     if not (here and BR.ring) then return false end
@@ -1125,7 +1224,10 @@ return function(mod)
     for id, p in pairs(BR.players) do
       if p.bot then
         out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
-                          status = p.status }
+                          status = p.status,
+                          -- how far through the fog's count this one is, so
+                          -- a stalled sweep is diagnosable from outside
+                          fogTicks = p.fogTicks or 0 }
       end
     end
     return out

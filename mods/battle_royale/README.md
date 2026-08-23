@@ -114,11 +114,13 @@ follows the Kanto you know — it closes on a named place, the routes around
 it go first, and hiding in a building doesn't help because the building is
 on the same square as the town.
 
-Outside the ring, every Pokémon in your party loses 1 HP every four seconds
-— Gen 1's overworld poison rate, on a clock rather than a step counter,
-because a battle royale has to punish camping and not just walking. A level
-5 starter dies to about a careless minute in it, and a dash across a corner
-is survivable. A **Poison-type lead is immune**: the fog is its element
+Outside the ring, every Pokémon in your party loses **a tenth of its maximum
+HP every four seconds** — about forty seconds from full to fainted. It is a
+fraction rather than Gen 1's flat 1-HP-per-4-steps because a flat point does
+not survive level scaling: it would kill a Lv5 starter in a minute and take
+twenty patient minutes against a Lv100 team, which is exactly backwards. The
+fog has to bite hardest when the ring is smallest. A **Poison-type lead is
+immune**: the fog is its element
 (DESIGN D11), and it gives an unloved type a real reason to be on your team.
 Losing your last Pokémon to the fog eliminates you exactly like a whiteout.
 

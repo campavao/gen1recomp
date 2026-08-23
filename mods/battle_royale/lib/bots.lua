@@ -92,19 +92,22 @@ end
 --
 -- `species` is filtered against the live data so a pool entry this build
 -- does not have degrades to RATTATA instead of asserting mid-battle.
-function Bots.party(seed, id, data)
+-- `level` is the match's current rung (lib/levels.lua): a bot scales on the
+-- same clock the players do, so a fight in the last ring is a fight between
+-- two level 100 teams and not an ambush by something that never grew.
+function Bots.party(seed, id, data, level)
   local rng = Bots.rng(seed, id)
   local pool = {}
   for _, s in ipairs(SPECIES) do
     if not data or not data.pokemon or data.pokemon[s] then pool[#pool + 1] = s end
   end
   if #pool == 0 then pool = { "RATTATA" } end
-  -- ONE mon at the starting level, because that is what a player has when
-  -- they drop.  Two mons made a bot the favourite in every opening fight,
-  -- so the first trainer you met usually ended your match before you could
-  -- catch anything -- the opposite of a battle royale's build-a-team arc.
-  -- When level scaling lands (DESIGN D12) bots grow on the same clock.
-  return { { species = pool[rng(1, #pool)], level = 5 } }
+  -- ONE mon, because that is what a player has when they drop.  Two mons
+  -- made a bot the favourite in every opening fight, so the first trainer
+  -- you met usually ended your match before you could catch anything --
+  -- the opposite of a battle royale's build-a-team arc.
+  local lv = math.max(1, math.min(100, math.floor(tonumber(level) or 5)))
+  return { { species = pool[rng(1, #pool)], level = lv } }
 end
 
 -- Where a bot tries to step next.  Returns a direction, or nil to stand

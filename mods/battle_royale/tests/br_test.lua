@@ -239,12 +239,61 @@ do
   ok(c1.name ~= nil, "the centre is somewhere with a name")
   ok(Fog.center(1, {}) == nil, "no towns means no centre")
 
+  -- the bite scales with the Pokemon, or level scaling would defang it:
+  -- a flat point kills a Lv5 starter in a minute and a Lv100 team in twenty
+  eq(Fog.bite(20), 2, "a Lv5 starter loses a tenth of its bar a tick")
+  eq(Fog.bite(300), 30, "and a level 100 mon loses a tenth of its much bigger one")
+  eq(Fog.bite(1), 1, "the bite is never zero")
+  eq(Fog.bite(0), 1, "nor for a mon with no recorded maximum")
+  local ticksSmall, ticksBig = math.ceil(20 / Fog.bite(20)), math.ceil(300 / Fog.bite(300))
+  ok(math.abs(ticksSmall - ticksBig) <= 2,
+     "a big team and a small one last about as long (" .. ticksSmall
+     .. " vs " .. ticksBig .. " ticks)")
+  eq(Fog.TICKS_TO_KILL, 10, "ten ticks from full to fainted")
+  eq(Fog.TICKS_TO_KILL * Fog.TICK_SECONDS, 40,
+     "which is forty seconds of standing in it")
+
   -- a Poison lead walks the fog unharmed
   local data = { pokemon = { ZUBAT = { types = { "POISON", "FLYING" } },
                              RATTATA = { types = { "NORMAL" } } } }
   ok(Fog.immune({ species = "ZUBAT" }, data), "a Poison type is immune")
   ok(not Fog.immune({ species = "RATTATA" }, data), "a Normal type is not")
   ok(not Fog.immune(nil, data), "no lead is not immune")
+end
+
+-- ------- level scaling
+
+do
+  local Levels = require("mods.battle_royale.lib.levels")
+  local Fog = require("mods.battle_royale.lib.fog")
+
+  eq(Levels.rungs(), Fog.phaseCount(),
+     "one level rung per fog phase -- one clock, not two")
+  eq(Levels.at(1), 5, "the drop is the starting level")
+  eq(Levels.at(Levels.rungs()), Levels.MAX, "the last ring is level 100")
+  eq(Levels.at(0), 5, "a phase below the ladder clamps to the drop")
+  eq(Levels.at(999), Levels.MAX, "a phase past the ladder clamps to the cap")
+  local prev = 0
+  for p = 1, Levels.rungs() do
+    local lv = Levels.at(p)
+    ok(lv > prev, "rung " .. p .. " is higher than the last (" .. lv .. ")")
+    prev = lv
+  end
+
+  ok(Levels.needsScaling({ level = 5 }, 30), "a Lv5 mon scales up to 30")
+  ok(not Levels.needsScaling({ level = 50 }, 30),
+     "scaling never demotes a mon that is already past the rung")
+  ok(not Levels.needsScaling(nil, 30), "no mon needs no scaling")
+
+  -- a bot's team is built at the rung it is fought at
+  local Bots = require("mods.battle_royale.lib.bots")
+  local low = Bots.party(1, Bots.idFor(1), nil, 5)
+  local high = Bots.party(1, Bots.idFor(1), nil, 75)
+  eq(low[1].species, high[1].species, "scaling does not reroll the species")
+  eq(low[1].level, 5, "a bot at the drop is level 5")
+  eq(high[1].level, 75, "and level 75 in the fifth ring")
+  eq(Bots.party(1, Bots.idFor(1), nil, 999)[1].level, 100, "clamped to 100")
+  eq(Bots.party(1, Bots.idFor(1), nil)[1].level, 5, "defaulting to the drop")
 end
 
 -- ------- engage
