@@ -27,7 +27,7 @@ local SILENT_FOR = 25.0
 -- rather than fatal so a newer relay can add chatter without breaking us
 local CONTROL = {
   room_hosted = true, room_joined = true, room_error = true, roster = true,
-  recv = true, room_closed = true, pong = true,
+  recv = true, room_closed = true, pong = true, no_open_rooms = true,
 }
 
 local ERRORS = {
@@ -57,6 +57,7 @@ function Relay.new(opts)
     id = nil,             -- our member id in the room
     code = nil,           -- the room code
     hostId = nil,
+    open = false,         -- is the relay listing this room for quick_join?
     members = {},         -- ordered { id=, name= }, as the relay last said
     error = nil,
     handlers = {},
@@ -111,8 +112,23 @@ function Relay:_open(control)
   return true
 end
 
-function Relay:host(name)
-  return self:_open({ type = "host_room", name = name })
+-- open = true lists the room for quick_join.  It stays private otherwise:
+-- being findable by strangers is something a host opts into.
+function Relay:host(name, opts)
+  return self:_open({ type = "host_room", name = name,
+                      open = (opts and opts.open) == true })
+end
+
+-- Ask the relay for any open room.  If there are none it answers
+-- no_open_rooms rather than closing, so the caller can host on this same
+-- connection -- which is exactly what "quick play" needs to do.
+function Relay:quickJoin(name)
+  return self:_open({ type = "quick_join", name = name })
+end
+
+function Relay:setOpen(open)
+  self.open = open == true
+  return self:_raw({ type = "set_open", open = self.open })
 end
 
 function Relay:join(code, name)
@@ -218,8 +234,12 @@ function Relay:_receive(msg)
     self:_fire("joined", self)
   elseif t == "room_error" then
     self:_close(ERRORS[msg.reason] or ("Couldn't join:\n" .. tostring(msg.reason)))
+  elseif t == "no_open_rooms" then
+    -- not an error: nobody is hosting yet, so the caller gets to be first
+    self:_fire("noopen", self)
   elseif t == "roster" then
     if type(msg.host) == "number" then self.hostId = msg.host end
+    if type(msg.open) == "boolean" then self.open = msg.open end
     self.members = cleanMembers(msg.members)
     self:_fire("roster", self.members)
   elseif t == "recv" then

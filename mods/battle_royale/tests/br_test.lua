@@ -607,5 +607,34 @@ do
   ok(closedWith ~= nil, "joining a code with no server fails cleanly")
 end
 
+-- ------------------------------------------------------------------
+-- FILL TO: a roster target that bots make up the shortfall in
+-- ------------------------------------------------------------------
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+
+  eq(Bots.FILL[1], 0, "the fill ladder starts at off")
+  eq(Bots.FILL[2], 2, "and then at two, because a match of one is over")
+  eq(Bots.FILL[#Bots.FILL], Bots.MAX + 1, "and tops out at a full bot roster")
+  eq(Bots.nextFill(0), 2, "off steps to two")
+  eq(Bots.nextFill(8), 12, "and climbs the ladder")
+  eq(Bots.nextFill(Bots.MAX + 1), 0, "and wraps back to off")
+
+  -- the arithmetic the lobby does: whichever of the two knobs wants more
+  local function botsFor(botCount, fillTo, humans)
+    local want = botCount
+    if fillTo > 0 then want = math.max(want, fillTo - humans) end
+    return math.max(0, math.min(want, Bots.MAX))
+  end
+  eq(botsFor(0, 8, 1), 7, "alone, a target of eight is seven bots")
+  eq(botsFor(0, 8, 3), 5, "three humans need only five")
+  eq(botsFor(0, 8, 8), 0, "a full lobby of humans needs none")
+  eq(botsFor(0, 8, 12), 0, "and an over-full one does not go negative")
+  eq(botsFor(4, 8, 6), 4, "an explicit BOTS count is a floor, not a ceiling")
+  eq(botsFor(0, 0, 1), 0, "fill off means the BOTS row alone decides")
+  eq(botsFor(99, 0, 1), Bots.MAX, "and the roster never exceeds the bot cap")
+end
+
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

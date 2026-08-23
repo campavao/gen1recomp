@@ -22,9 +22,20 @@ answers the room protocol for a room of one, so the mod hosts, broadcasts
 and runs the same match it always does — the messages just have nowhere to
 go. Everything below is the same code path with other people in it.
 
-**With other people:** everyone needs this mod enabled and the same game
-version. Play runs over a small relay server (see [`relay/`](relay/)) so it
-works over the internet, through NAT, with no port-forwarding.
+**With other people, the short way:** `QUICK PLAY`. It joins whatever open
+game is running, and if there isn't one it opens yours and counts down from
+thirty while it waits for company — bots fill whatever seats are still empty
+when the clock runs out. Nobody types a code and nobody has to press start,
+so a newcomer with the mod installed is in a real match inside a minute.
+
+The relay picks the *fullest* joinable room rather than the first, so a
+handful of strangers arriving at once becomes one match instead of three
+lonely lobbies.
+
+**With other people, by invitation:** everyone needs this mod enabled and
+the same game version. Play runs over a small relay server (see
+[`relay/`](relay/)) so it works over the internet, through NAT, with no
+port-forwarding.
 
 1. `START` → `ROYALE` (or `BATTLE ROYALE` on the title screen)
 2. `NAME` to pick the trainer name everyone else sees (7 letters, the
@@ -34,7 +45,13 @@ works over the internet, through NAT, with no port-forwarding.
 3. One player picks **HOST GAME** and reads out the six-character room code.
 4. Everyone else picks **JOIN BY CODE** and enters it.
 5. The host can add **BOTS** (the row steps 0, 1, 2, 3, 5, 8, 12, 16, 20,
-   25, 30 and wraps) to fill the match out.
+   25, 30 and wraps) to fill the match out, or set **FILL TO** a number of
+   trainers and let bots make up whatever the humans don't. The two compose
+   by taking whichever wants more, and `TRAINERS:` shows the total the drop
+   will actually hold. Fill is the one you want when you can't know how many
+   people turn up.
+6. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
+   without a code. Rooms are private until you say otherwise.
 6. The host sees the roster fill in and picks **START MATCH**. Everyone
    drops into Kanto at once.
 
@@ -67,7 +84,9 @@ world away anyway.
 
 ## Running the relay
 
-Only for playing with other people — `SOLO VS BOTS` never touches it.
+Only for playing with other people — `SOLO VS BOTS` never touches it, and
+`QUICK PLAY` needs one only because the strangers are on the other side of
+it.
 
 ```sh
 node mods/battle_royale/relay/server.js   # :7790 (PORT or BR_RELAY_PORT to change)
@@ -91,7 +110,11 @@ tier) and use its public `host:port`.
 `src/link/Net.lua` (its relay backend). This mod speaks a tiny **room
 protocol** on top of it — host/join by code, then unicast and broadcast
 between members — implemented in `relay/server.js` and spoken by
-`lib/relay.lua`. `network` is the one permission the mod declares, exactly
+`lib/relay.lua`. A room can be *open*, which is the only thing `quick_join`
+looks for; when there are none the relay answers `no_open_rooms` rather than
+an error, so the client can turn around and host on the same connection.
+That is what makes quick play one round trip whether or not anyone else is
+already playing. `network` is the one permission the mod declares, exactly
 so it can reach `src.link`.
 
 **Movement.** Kanto movement is a grid: one tile per step. So presence is

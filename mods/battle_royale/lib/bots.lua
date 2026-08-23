@@ -39,6 +39,19 @@ function Bots.nextCount(n)
   return 0
 end
 
+-- The same idea counted in whole trainers rather than bots, for the FILL TO
+-- row: a target for the roster that bots make up the shortfall in.  Zero is
+-- off, and one is pointless (a match of one is already over), so the ladder
+-- starts at two.
+Bots.FILL = { 0, 2, 4, 6, 8, 12, 16, 20, 26, Bots.MAX + 1 }
+
+function Bots.nextFill(n)
+  for _, step in ipairs(Bots.FILL) do
+    if step > (tonumber(n) or 0) then return step end
+  end
+  return 0
+end
+
 -- Names fit the 7-character Gen 1 box and read like trainers, not robots.
 local NAMES = {
   "JOEY", "MIKEY", "CALVIN", "LASS", "TIANA", "DUDLEY", "SETH", "PIA",

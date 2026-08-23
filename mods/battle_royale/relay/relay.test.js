@@ -222,6 +222,102 @@ test("a guest leaving updates the roster; the host leaving closes the room", asy
   });
 });
 
+test("quick_join finds an open room, and says so when there is none", async () => {
+  await withRelay(async (port) => {
+    // nobody is hosting: the answer is an answer, not an error, so the
+    // client can turn round and host on the same connection
+    const first = await connect(port);
+    first.send({ type: "quick_join", name: "ANNA" });
+    assert.equal((await first.next()).type, "no_open_rooms");
+
+    // ...which is exactly what it then does
+    first.send({ type: "host_room", name: "ANNA", open: true });
+    const hosted = await first.until("room_hosted");
+    const firstRoster = await first.until("roster");
+    assert.equal(firstRoster.open, true);
+
+    // a stranger with no code now lands in that room
+    const second = await connect(port);
+    second.send({ type: "quick_join", name: "BEN" });
+    const joined = await second.until("room_joined");
+    assert.equal(joined.code, hosted.code);
+    assert.equal(joined.host, 1);
+    const roster = await second.until("roster");
+    assert.deepEqual(roster.members.map((m) => m.name), ["ANNA", "BEN"]);
+    first.end();
+    second.end();
+  });
+});
+
+test("quick_join skips private, locked and full rooms", async () => {
+  await withRelay(async (port) => {
+    const priv = await connect(port);
+    priv.send({ type: "host_room", name: "PRIV" });   // open defaults to false
+    await priv.until("room_hosted");
+
+    const shut = await connect(port);
+    shut.send({ type: "host_room", name: "SHUT", open: true });
+    await shut.until("room_hosted");
+    shut.send({ type: "lock_room", locked: true });
+
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+
+    priv.end(); shut.end(); seeker.end();
+  }, { members: 2 });
+});
+
+test("quick_join gathers strangers into the fullest room, not the first", async () => {
+  await withRelay(async (port) => {
+    const small = await connect(port);
+    small.send({ type: "host_room", name: "SMALL", open: true });
+    await small.until("room_hosted");
+
+    const big = await connect(port);
+    big.send({ type: "host_room", name: "BIG", open: true });
+    const bigCode = (await big.until("room_hosted")).code;
+    const mate = await connect(port);
+    mate.send({ type: "join_room", code: bigCode, name: "MATE" });
+    await mate.until("room_joined");
+
+    // two rooms are open; the one with people in it wins, so a handful of
+    // strangers becomes one match rather than three lonely lobbies
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    assert.equal((await seeker.until("room_joined")).code, bigCode);
+
+    small.end(); big.end(); mate.end(); seeker.end();
+  });
+});
+
+test("set_open is the host's alone, and tells the room", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST" });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    await guest.until("room_joined");
+    await guest.until("roster");   // the one their own arrival caused
+
+    // a guest asking is ignored
+    guest.send({ type: "set_open", open: true });
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+
+    // the host asking is not
+    host.send({ type: "set_open", open: true });
+    assert.equal((await guest.until("roster")).open, true);
+    const seeker2 = await connect(port);
+    seeker2.send({ type: "quick_join", name: "SEEK2" });
+    assert.equal((await seeker2.until("room_joined")).code, code);
+
+    host.end(); guest.end(); seeker.end(); seeker2.end();
+  });
+});
+
 test("garbage lines are dropped, a flood of them disconnects", async () => {
   await withRelay(async (port) => {
     const a = await connect(port);

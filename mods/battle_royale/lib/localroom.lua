@@ -44,6 +44,9 @@ function LocalRoom:send(msg)
   elseif t == "join_room" then
     -- there is no room to join but this one, and we are already in it
     self:_deliver({ type = "room_error", reason = "not_found" })
+  elseif t == "quick_join" then
+    -- nobody is hosting in here either, so the caller gets to be first
+    self:_deliver({ type = "no_open_rooms" })
   elseif t == "ping" then
     self:_deliver({ type = "pong", t = msg.t })
   end

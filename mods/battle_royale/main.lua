@@ -58,6 +58,13 @@ local BOT_STEP_SECONDS = 0.45
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
 local SOLO_BOTS = 8
+-- QUICK PLAY aims at this many trainers and lets bots make up the shortfall
+local QUICK_FILL = 8
+-- ...and starts on its own after this long, so a newcomer who quick-plays
+-- into an empty relay is playing rather than staring at a roster of one
+local QUICK_START_SECONDS = 30
+-- somebody arriving late deserves a moment to see the lobby before the drop
+local QUICK_START_GRACE = 10
 
 -- The trainer class a bot fights as.  The class only supplies the sprite,
 -- the name banner and the AI temperament -- the party comes from
@@ -139,7 +146,11 @@ return function(mod)
     -- in that handler finds nil and the loot goes nowhere.
     lastOpponent = nil,
     botCount = 0,         -- how many bots the host will add at start
+    fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
+    quick = false,        -- came in through QUICK PLAY, so it self-starts
+    autoStartAt = nil,    -- quick play starts itself at this clock time
+    lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
     botParty = nil,       -- handed to the trainer.party hook for one battle
@@ -220,8 +231,20 @@ return function(mod)
     relay:on("joined", function()
       BR.myId = relay.id
       BR.phase = "lobby"
+      -- a quick-play host is the only one who counts down: whoever opened
+      -- the room owns the clock, exactly as they own the start
+      if BR.quick and relay:isHost() then
+        BR.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
+      end
     end)
     relay:on("roster", function(members)
+      -- someone arriving with seconds left would be dropped into a match
+      -- they never saw the lobby for; give them a moment
+      if BR.autoStartAt and #members > (BR.lastRoster or 0) then
+        local floor = love.timer.getTime() + QUICK_START_GRACE
+        if BR.autoStartAt < floor then BR.autoStartAt = floor end
+      end
+      BR.lastRoster = #members
       -- forget anyone who left; the host recounts survivors
       local present = {}
       for _, m in ipairs(members) do present[m.id] = true end
@@ -272,6 +295,58 @@ return function(mod)
     return true
   end
 
+  -- Two ways to ask for bots, and they compose by taking whichever wants
+  -- more: BOTS is an absolute number, FILL TO is a target for the whole
+  -- roster that shrinks as humans arrive.  Fill is what quick play wants --
+  -- you cannot know in advance how many strangers show up.
+  function BR:botsAtStart()
+    local humans = self.relay and #self.relay.members or 1
+    local want = self.botCount
+    if self.fillTo > 0 then want = math.max(want, self.fillTo - humans) end
+    return math.max(0, math.min(want, Bots.MAX))
+  end
+
+  function BR:setFill(n)
+    self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
+    return self.fillTo
+  end
+
+  function BR:nextFill() return Bots.nextFill(self.fillTo) end
+
+  -- QUICK PLAY: join whatever is open, and if nothing is, become the thing
+  -- that is open.  The fallback rides the SAME connection -- no_open_rooms
+  -- is an answer, not a failure -- so this is one round trip either way.
+  function BR:quickPlay()
+    self:reset()
+    local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
+    wireRelay(relay)
+    relay:on("noopen", function()
+      relay:host(myName(), { open = true })
+    end)
+    local ok, err = relay:quickJoin(myName())
+    if not ok then return false, err end
+    self.relay = relay
+    self.fillTo = QUICK_FILL
+    self.quick = true
+    return true
+  end
+
+  function BR:setOpen(open)
+    local relay = self.relay
+    if not (relay and relay:isHost()) then return false end
+    relay:setOpen(open)
+    if not open then self.autoStartAt = nil end
+    return true
+  end
+
+  function BR:isOpen() return self.relay and self.relay.open == true end
+
+  -- seconds left on the quick-play countdown, or nil when nothing is counting
+  function BR:startsIn()
+    if not self.autoStartAt then return nil end
+    return math.max(0, math.ceil(self.autoStartAt - love.timer.getTime()))
+  end
+
   function BR:join(code)
     self:reset()
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
@@ -295,6 +370,9 @@ return function(mod)
     end
     self.relay = nil
     self.solo = false
+    self.quick = false
+    self.autoStartAt = nil
+    self.lastRoster = 0
     self.players = {}
     self.pending = nil
     self.phase = "off"
@@ -336,7 +414,7 @@ return function(mod)
     table.sort(ids)
     -- bots ride the same spawn list as everyone else; their ids are far
     -- above any the relay hands out, so nothing has to be kept apart
-    for i = 1, math.min(self.botCount, Bots.MAX) do
+    for i = 1, self:botsAtStart() do
       ids[#ids + 1] = Bots.idFor(i)
     end
     local seed = love.math.random(1, 2 ^ 30)
@@ -1275,6 +1353,14 @@ return function(mod)
       relay = BR.relay -- update() may have closed and reset it
     end
 
+    -- the quick-play countdown: a lobby that starts itself
+    if relay and relay:isOpen() and BR.phase == "lobby"
+       and BR.autoStartAt and relay:isHost()
+       and love.timer.getTime() >= BR.autoStartAt then
+      BR.autoStartAt = nil
+      BR:startMatch()
+    end
+
     if relay and relay:isOpen() and BR.phase == "match" then
       local h = here()
       if h then
@@ -1492,6 +1578,12 @@ return function(mod)
   -- menu taps.  These are the menu's own code paths, nothing extra.
   mod.exports.host = function() return BR:host() end
   mod.exports.hostSolo = function() return BR:hostSolo() end
+  mod.exports.quickPlay = function() return BR:quickPlay() end
+  mod.exports.setOpen = function(v) return BR:setOpen(v ~= false) end
+  mod.exports.isOpen = function() return BR:isOpen() end
+  mod.exports.setFill = function(n) return BR:setFill(n) end
+  mod.exports.botsAtStart = function() return BR:botsAtStart() end
+  mod.exports.startsIn = function() return BR:startsIn() end
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end

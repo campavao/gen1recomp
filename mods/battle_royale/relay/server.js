@@ -74,6 +74,9 @@ class Room {
     this.members = new Map();
     this.nextId = 1;
     this.locked = false;
+    // an open room is one quick_join is allowed to hand strangers; a room
+    // is private until its host says otherwise
+    this.open = false;
   }
 
   add(conn) {
@@ -91,7 +94,8 @@ class Room {
   roster() {
     const members = [];
     for (const m of this.members.values()) members.push({ id: m.id, name: m.name });
-    return { type: "roster", code: this.code, host: this.host.id, members };
+    return { type: "roster", code: this.code, host: this.host.id,
+             open: this.open, members };
   }
 
   broadcast(msg, except) {
@@ -175,11 +179,13 @@ export function createRelay(options = {}) {
         if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
         conn.name = cleanName(msg.name);
         const room = new Room(makeCode(rooms), conn);
+        room.open = msg.open === true;
         rooms.set(room.code, room);
         room.add(conn);
         conn.send({ type: "room_hosted", code: room.code, id: conn.id });
         conn.send(room.roster());
-        log(`room ${room.code} hosted by ${conn.name}#${conn.id}`);
+        log(`room ${room.code} hosted by ${conn.name}#${conn.id}` +
+            (room.open ? " (open)" : ""));
         return;
       }
 
@@ -195,6 +201,36 @@ export function createRelay(options = {}) {
         conn.send({ type: "room_joined", code: room.code, id: conn.id, host: room.host.id });
         room.broadcast(room.roster());
         log(`room ${room.code}: ${conn.name}#${conn.id} joined`);
+        return;
+      }
+
+      // Quick play: the point is that a newcomer needs nothing from anyone
+      // -- no code read out over voice chat, no friend already playing.  We
+      // pick the FULLEST joinable room rather than the first, so strangers
+      // gather into one match instead of scattering one-per-room.
+      case "quick_join": {
+        if (conn.room) { conn.send({ type: "room_error", reason: "already_in_room" }); return; }
+        let best = null;
+        for (const room of rooms.values()) {
+          if (!room.open || room.locked) continue;
+          if (room.members.size >= limits.members) continue;
+          if (!best || room.members.size > best.members.size) best = room;
+        }
+        if (!best) { conn.send({ type: "no_open_rooms" }); return; }
+        conn.name = cleanName(msg.name);
+        best.add(conn);
+        conn.send({ type: "room_joined", code: best.code, id: conn.id, host: best.host.id });
+        best.broadcast(best.roster());
+        log(`room ${best.code}: ${conn.name}#${conn.id} quick-joined`);
+        return;
+      }
+
+      case "set_open": {
+        const room = conn.room;
+        if (!room || room.host !== conn) return;
+        room.open = msg.open === true;
+        room.broadcast(room.roster());
+        log(`room ${room.code} is now ${room.open ? "open" : "private"}`);
         return;
       }
 

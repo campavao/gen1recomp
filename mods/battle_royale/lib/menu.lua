@@ -58,6 +58,17 @@ function Menu.build(mod, BR)
                                 keepOpen = true, onSelect = function() end }
         end
         if relay:isHost() then
+          -- an open room is one strangers can QUICK PLAY into without ever
+          -- being told the code
+          if not BR.solo then
+            items[#items + 1] = {
+              label = "OPEN: " .. (BR:isOpen() and "YES" or "NO"),
+              onSelect = function()
+                BR:setOpen(not BR:isOpen())
+                mod.ui.push(game, "BattleRoyaleMenu")
+              end,
+            }
+          end
           -- steps up the ladder (0,1,2,3,5,8,...,30) and wraps; the menu
           -- closes on select, so reopening it is what shows the new count
           items[#items + 1] = {
@@ -67,13 +78,32 @@ function Menu.build(mod, BR)
               mod.ui.push(game, "BattleRoyaleMenu")
             end,
           }
+          -- ...and the same thing counted in trainers, which is what you
+          -- want when you cannot know how many people turn up
           items[#items + 1] = {
-            label = "START MATCH",
+            label = BR.fillTo > 0 and ("FILL TO: " .. BR.fillTo) or "FILL TO: OFF",
+            onSelect = function()
+              BR:setFill(BR:nextFill())
+              mod.ui.push(game, "BattleRoyaleMenu")
+            end,
+          }
+          local countdown = BR:startsIn()
+          items[#items + 1] = {
+            label = countdown and ("START MATCH (" .. countdown .. ")")
+                    or "START MATCH",
             onSelect = function() BR:startMatch() end,
           }
         else
           items[#items + 1] = {
             label = "WAIT FOR HOST",
+            keepOpen = true, onSelect = function() end,
+          }
+        end
+        -- how many trainers the drop will actually hold, humans and bots
+        if relay:isHost() then
+          local bots = BR:botsAtStart()
+          items[#items + 1] = {
+            label = "TRAINERS: " .. (#relay.members + bots),
             keepOpen = true, onSelect = function() end,
           }
         end
@@ -87,7 +117,15 @@ function Menu.build(mod, BR)
         items[#items + 1] = { label = "CANCEL",
                               onSelect = function() BR:teardown() end }
       else
-        -- first, because it is the one that needs nothing else running
+        -- first, because it is the one that asks least of a newcomer: no
+        -- code from a friend, no server of their own, no decision
+        items[#items + 1] = {
+          label = "QUICK PLAY",
+          onSelect = function()
+            local ok, err = BR:quickPlay()
+            if not ok then say(mod, err or "Couldn't reach\nthe relay.") end
+          end,
+        }
         items[#items + 1] = {
           label = "SOLO VS BOTS",
           onSelect = function()
