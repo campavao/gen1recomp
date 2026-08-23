@@ -1,0 +1,111 @@
+-- The BATTLE ROYALE screen, reached from the start menu.
+--
+-- Deliberately thin: it hosts or joins a room, shows the roster while you
+-- wait, and lets the host start the match.  Once the match is live this
+-- screen only reports -- everything that happens then happens in the
+-- overworld.
+
+local Entry = require("mods.battle_royale.lib.entry")
+
+local Menu = {}
+
+local function say(mod, text)
+  -- the script runner owns the dialogue box, so status lands in a real
+  -- Gen 1 text box rather than a bespoke overlay; refused mid-cutscene,
+  -- which is correct
+  mod.world:queueScript({ { "show_text", text } })
+end
+
+Menu.say = say
+
+function Menu.build(mod, BR)
+  return {
+    new = function(game)
+      local items = {}
+      local relay = BR.relay
+
+      if BR.phase == "match" or BR.phase == "over" then
+        local alive = BR:aliveCount()
+        items[#items + 1] = {
+          label = BR.status == "out" and "SPECTATING" or ("ALIVE: " .. alive),
+          keepOpen = true, onSelect = function() end,
+        }
+        items[#items + 1] = {
+          label = "LEAVE MATCH",
+          onSelect = function() BR:teardown("You left the match.") end,
+        }
+      elseif relay and relay:isOpen() then
+        items[#items + 1] = {
+          label = "CODE " .. tostring(relay.code),
+          keepOpen = true, onSelect = function() end,
+        }
+        for _, m in ipairs(relay.members) do
+          local tag = (m.id == relay.hostId) and "*" or ""
+          items[#items + 1] = { label = "- " .. m.name .. tag,
+                                keepOpen = true, onSelect = function() end }
+        end
+        if relay:isHost() then
+          items[#items + 1] = {
+            label = "START MATCH",
+            onSelect = function() BR:startMatch() end,
+          }
+        else
+          items[#items + 1] = {
+            label = "WAIT FOR HOST",
+            keepOpen = true, onSelect = function() end,
+          }
+        end
+        items[#items + 1] = {
+          label = "LEAVE",
+          onSelect = function() BR:teardown() end,
+        }
+      elseif relay and relay.status == "connecting" then
+        items[#items + 1] = { label = "CONNECTING...", keepOpen = true,
+                              onSelect = function() end }
+        items[#items + 1] = { label = "CANCEL",
+                              onSelect = function() BR:teardown() end }
+      else
+        items[#items + 1] = {
+          label = "HOST GAME",
+          onSelect = function()
+            local ok, err = BR:host()
+            if not ok then say(mod, err or "Couldn't host.") end
+          end,
+        }
+        items[#items + 1] = {
+          label = "JOIN BY CODE",
+          onSelect = function()
+            game.stack:push(Entry.new(game, {
+              title = "ROOM CODE",
+              shape = Entry.CODE,
+              onDone = function(code)
+                if not code or code == "" then return end
+                local ok, err = BR:join(code)
+                if not ok then say(mod, err or "Couldn't join.") end
+              end,
+            }))
+          end,
+        }
+        -- the relay address is a mod option; this row surfaces it and lets
+        -- you point at a different server without editing files
+        items[#items + 1] = {
+          label = "SERVER...",
+          onSelect = function()
+            game.stack:push(Entry.new(game, {
+              title = "RELAY HOST:PORT",
+              shape = Entry.ADDRESS,
+              default = BR:relayAddress(),
+              onDone = function(addr)
+                if addr and addr ~= "" then BR:setRelayAddress(addr) end
+              end,
+            }))
+          end,
+        }
+      end
+
+      return mod.ui.Menu.new(game, items, { startCloses = true })
+    end,
+  }
+end
+
+return Menu
