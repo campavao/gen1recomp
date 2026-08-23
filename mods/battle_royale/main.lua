@@ -1340,6 +1340,64 @@ return function(mod)
     end
   end)
 
+  -- ------- the fog, drawn on the TOWN MAP
+  --
+  -- The ring is a circle in town-map space and the TOWN MAP draws that exact
+  -- grid at eight pixels a cell, so the item you already reach for to work
+  -- out where you are is also the one that shows you where it is safe to be.
+  -- Squares the fog has taken are shaded over; what stays clear is the ring.
+  --
+  -- Done as an overlay through render.hud rather than by registering a
+  -- replacement "TownMap" screen: overriding the id would mean owning the
+  -- whole town map -- background, cursor, fly list, nest markers -- forever,
+  -- to add one circle to it.
+  local GRID = 8 -- field.townMap.gridPixelSize; TownMap draws loc.x * 8
+
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR.ring and BR.phase == "match" and viewport) then return out end
+    local top = game.stack and game.stack:top()
+    if not top then return out end
+    local okTM, TownMap = pcall(require, "src.ui.TownMap")
+    local isTownMap = (okTM and getmetatable(top) == TownMap)
+      or top.screenId == "TownMap"
+    if not isTownMap then return out end
+
+    local field = game.data and game.data.field
+    local locations = field and field.townMap and field.townMap.locations
+    if not locations then return out end
+
+    -- Game Boy pixels -> screen, the mapping Renderer:endFrame hands us
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local ox, oy = viewport.gameX or 0, viewport.gameY or 0
+    local center, radius = BR.ring.center, BR.ring.radius
+
+    local g = love.graphics
+    g.push("all")
+    -- one shaded square per town-map cell the fog has taken.  Walking the
+    -- grid rather than the location table: several maps share a square, and
+    -- shading it once per map would stack the alpha into a solid black blot.
+    g.setColor(0.25, 0.15, 0.35, 0.55)
+    for gy = 0, 15 do
+      for gx = 0, 15 do
+        local dx, dy = gx - center.x, gy - center.y
+        if (dx * dx + dy * dy) > (radius * radius) then
+          g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
+                      GRID * sx, GRID * sy)
+        end
+      end
+    end
+    -- and a box round the eye of it, so the safe place is named as well as
+    -- merely un-shaded
+    g.setColor(1, 1, 1, 0.9)
+    g.setLineWidth(math.max(1, sx))
+    g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
+                GRID * sx, GRID * sy)
+    g.pop()
+    return out
+  end)
+
   -- ------- reaching it from START
 
   mod.content.screens:register(SCREEN, BRMenu.build(mod, BR))

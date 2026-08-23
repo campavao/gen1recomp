@@ -133,6 +133,14 @@ wiping the roster on the first shrink.
 `FOG SECONDS` (a mod option, default 120) is how long each ring lasts, so a
 default match runs about ten minutes and a quick one can be far shorter.
 
+**Open the TOWN MAP to see it.** The ring is a circle in town-map space and
+the TOWN MAP draws that exact grid, so the item you already reach for to
+work out where you are also shows you where it is safe to be: taken squares
+are shaded over, the ring is what stays clear, and a box marks its eye. It
+is an overlay (`render.hud`) rather than a replacement screen — overriding
+the town map's id would mean owning its background, cursor, fly list and
+nest markers forever, to add one circle.
+
 **Party as health.** A whiteout is elimination, however it happened — a bot,
 a route trainer, a wild Pokémon — which the mod picks up from the engine's
 `world.blacked_out`. PvP is the exception that needs its own path: link
@@ -204,13 +212,12 @@ elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
 (matches can't overwrite a real save), last-trainer-standing. Route/gym
 trainers stay live as PvE.
 
-**Next, in rough order** (from the design in the sibling
-`pokemon-battle-royale` project's `docs/DESIGN.md`): the rest of the loot
-spill — the fallen team as 1-HP catchables (D8), level-scaling + evolution
-on the same clock the fog uses (D12), six-tile "eyeline" initiation instead
-of one (change `Engage.inFront`), bots that fight each other rather than
-only the player, and drawing the ring on the Town Map item so you can see
-where to run.
+**Next** (from the design in the sibling `pokemon-battle-royale` project's
+`docs/DESIGN.md`): loose item/money pickups on the ground to finish D8 (the
+bag still transfers straight to the victor); the per-pair re-engage cooldown
+and escape tools of D9; Repel shrinking your own eyeline; type-based
+overworld abilities (D18/D20); a public relay deployment; and bots that pick
+a fight with a *player* on sight rather than only closing distance.
 
 ## Tests
 
