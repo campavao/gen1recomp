@@ -80,6 +80,15 @@ do
      "phase 0 is refused")
   ok(Wire.decode({ t = "ring", phase = 1, cx = "x", cy = 1, r = 2 }) == nil,
      "a malformed centre is refused")
+  local npcout = Wire.decode(Wire.npcout("ROUTE_1", "TRAINER_3"))
+  ok(npcout ~= nil, "npcout round-trips")
+  eq(npcout and npcout.map, "ROUTE_1", "npcout carries the map")
+  eq(npcout and npcout.obj, "TRAINER_3", "and the object to hide")
+  ok(Wire.decode({ t = "npcout", map = "ROUTE_1" }) == nil,
+     "npcout without an object is refused")
+  ok(Wire.decode({ t = "npcout", map = "ROUTE_1", obj = ("X"):rep(65) }) == nil,
+     "and an oversized object name is refused")
+
   local everywhere = Wire.decode(Wire.ring(8, 8, 9, -1, "CELADON CITY"))
   eq(everywhere and everywhere.r, -1,
      "the all-fog ring (a negative radius) crosses the wire intact")
@@ -337,10 +346,11 @@ do
   local open = function() return true end
   local cells = Spills.placeAround(10, 10, 4, open)
   eq(#cells, 4, "a cell per Pokemon")
-  -- never on the faller's own cell: they are still standing there, and two
-  -- objects on one cell makes pressing A a coin toss between them
+  -- the ring is preferred over the faller's own cell, so an open-field pile
+  -- spreads instead of stacking
   for _, c in ipairs(cells) do
-    ok(not (c.x == 10 and c.y == 10), "no ball on the cell they fell on")
+    ok(not (c.x == 10 and c.y == 10),
+       "an open field puts no ball on the cell they fell on")
   end
   local seen, dup = {}, false
   for _, c in ipairs(cells) do
@@ -351,14 +361,20 @@ do
   end
   ok(not dup, "no two Pokemon share a cell")
 
-  -- a wall means fewer places to put them, not a crash
+  -- a wall must not mean lost loot: the shortfall stacks on the faller's
+  -- own cell, which is walkable by definition (they stood on it) and free
+  -- now that a beaten trainer's sprite despawns
   local onlyOne = function(x, y) return x == 11 and y == 10 end
-  eq(#Spills.placeAround(10, 10, 4, onlyOne), 1,
-     "a spill with one free cell drops one ball")
-  eq(#Spills.placeAround(10, 10, 4, function(x, y) return x == 10 and y == 10 end), 0,
-     "and the faller's own cell does not count as free")
-  eq(#Spills.placeAround(10, 10, 4, function() return false end), 0,
-     "nowhere to put them is empty, not an error")
+  local walled = Spills.placeAround(10, 10, 4, onlyOne)
+  eq(#walled, 4, "a walled-in spill still drops every ball")
+  eq(walled[1].x .. "," .. walled[1].y, "11,10", "the one free ring cell is used first")
+  local stacked = 0
+  for _, c in ipairs(walled) do
+    if c.x == 10 and c.y == 10 then stacked = stacked + 1 end
+  end
+  eq(stacked, 3, "and the rest stack where they fell")
+  eq(#Spills.placeAround(10, 10, 4, function() return false end), 4,
+     "even nowhere-free drops the whole team where they fell")
 
   -- the wire payload
   local party = { { species = "RATTATA", level = 12, hp = 0 },

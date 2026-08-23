@@ -130,7 +130,14 @@ dozen Pokémon under fog pressure.
 > POKeMON CENTER and the player spinning on the spot. It now waits to be moved
 > and moves back exactly once.
 
-### BR-9 · A defeated trainer's sprite should disappear, leaving only the balls
+### BR-9 · A defeated trainer's sprite should disappear, leaving only the balls — DONE (POK-13)
+
+**Resolved 2026-08-23:** ghosts of players and bots despawn on `status ==
+"out"` (`Ghosts:sync` filters and despawns; `eliminateBot` already did it
+host-side); Kanto's own trainers are toggled off via the engine's
+`objectToggles` on every client (`npcout` on the wire). The spectator still
+sees their own local sprite — it is their camera avatar, and nobody else
+sees it.
 
 **Decided:** when anything is beaten — an eliminated player, a bot, or one of
 Kanto's own NPC trainers — the sprite goes away entirely and all that is left
@@ -140,14 +147,31 @@ trainer is how you read that somebody else got there first.
 Today eliminated players stay drawn (non-interactive) and NPC trainers stay
 put exactly as in vanilla.
 
-### BR-9b · Kanto's own NPC trainers should drop their Pokémon too
+### BR-9b · Kanto's own NPC trainers should drop their Pokémon too — DONE (POK-14)
+
+**Resolved 2026-08-23:** `world.trainer_engaged` stashes the map object;
+a `battle.ended` win spills `enemyParty` (at the rung, as fought) where the
+trainer stood, broadcasts `npcout` + the spill, and toggles the object off
+everywhere. Spill keys are `npc:<map>:<obj>:<i>`, so a double-beat race
+cannot duplicate loot. Scope note: this covers `engageTrainer` trainers
+(sight and talk); script-driven fights (gym leaders, the rival) are POK-26's
+territory. Wire PROTOCOL bumped to 2.
 
 Not just players and bots. Beating a route trainer leaves its team on the
 ground the same way, which makes the world readable — you can tell at a glance
 which routes have already been picked over, and it gives PvE a reason to
 exist beyond levels.
 
-### BR-10 · Loot balls appear inconsistently
+### BR-10 · Loot balls appear inconsistently — DONE (POK-16)
+
+**Diagnosed 2026-08-23:** the first suspect was right. `Spills.placeAround`
+gave up silently when the outward ring search found fewer walkable cells
+than Pokémon (map edges, water, walls) and `Spills.build` dropped the
+shortfall — "sometimes a ball, sometimes not". The other suspects were
+clean: the spill handler is unconditional, and `Spills:sync` already logs.
+Fixed: the shortfall now stacks on the faller's own cell, which is walkable
+by definition and free now that the corpse despawns (BR-9). Every fallen
+Pokémon lands somewhere, always.
 
 Sometimes a beaten player drops a ball, sometimes not. Suspect the spill
 broadcast or the placement search failing silently on a crowded/edge cell —

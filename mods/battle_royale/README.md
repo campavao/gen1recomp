@@ -82,6 +82,14 @@ shows the prompt Oak's lab uses —
 leaving puts the ball back for the next trainer, and a full party leaves it
 too. Reopen `ROYALE` any time to leave the match.
 
+**Beaten means gone.** When anything falls — a player, a bot, or one of
+Kanto's own route trainers — its sprite disappears for every client and
+only the Poké Balls stay. Walking into an area and finding balls with no
+trainer is how you read that somebody else got there first: the world is a
+record of the match. Kanto's trainers drop their teams too (at the rung
+they fought at), which gives PvE a point beyond levels — and means a route
+can be *picked over*.
+
 **The HUD.** Two small boxes in the top corners of the overworld, drawn in
 the game's own font: `7 LEFT` on the right is how many trainers are still
 in it, and `FOG!` pulses on the left while you are standing outside the
@@ -408,8 +416,9 @@ so a match is playable solo), random Kanto drop, the shared loadout plus all
 badges and HMs, real-time presence, forced face-to-face battles, the
 shrinking fog on a shared clock that closes all the way, party-as-health
 elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
-(matches can't overwrite a real save), last-trainer-standing. Route/gym
-trainers stay live as PvE.
+(matches can't overwrite a real save), last-trainer-standing. Route
+trainers are PvE that pays out: beat one and its team spills, its sprite
+goes, for everyone.
 
 **Next** (from the design in the sibling `pokemon-battle-royale` project's
 `docs/DESIGN.md`): loose item/money pickups on the ground to finish D8 (the

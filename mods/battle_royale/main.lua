@@ -397,6 +397,7 @@ return function(mod)
     self.matchSeed = nil
     self.botFight = nil
     self.botParty = nil
+    self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
     self.matchStartedAt = nil
@@ -624,6 +625,10 @@ return function(mod)
 
     elseif msg.t == "spill" then
       self.spills:add(msg)
+
+    elseif msg.t == "npcout" then
+      -- somebody beat one of Kanto's own; the sprite goes away here too
+      pcall(function() mod.world:toggleObject(msg.map, msg.obj, false) end)
 
     elseif msg.t == "took" then
       self.spills:take(msg.key)
@@ -1455,10 +1460,58 @@ return function(mod)
     return next(game)
   end)
 
+  -- Kanto's own trainers are in the match too (POK-14): beating one leaves
+  -- its team on the ground and takes its sprite away, for every client --
+  -- balls with no trainer is how you read that somebody got there first,
+  -- and a fallen trainer cannot pay out twice.  The engagement is stashed
+  -- here because battle.ended only knows the battle, not which map object
+  -- started it; a bot battle never comes through engageTrainer, so a set
+  -- npcFight is exactly "this was one of Kanto's own".
+  mod.events:on("world.trainer_engaged", function(ev)
+    if BR.phase ~= "match" or BR.status ~= "alive" or BR.botFight then return end
+    local here = mod.world:current()
+    local npc = ev and ev.npc
+    local obj = npc and npc.def and npc.def.name
+    if not (here and npc and obj) then
+      BR.npcFight = nil
+      return
+    end
+    BR.npcFight = { map = here.mapId, obj = obj, x = npc.cellX, y = npc.cellY }
+  end)
+
+  function BR:npcDefeated(npc, party)
+    local data = self.game and self.game.data
+    if not data then return end
+    local spill = Spills.build("npc:" .. npc.map .. ":" .. npc.obj,
+                               npc.map, npc.x, npc.y, party, function(x, y)
+      return Spawn.walkable(data.maps, data.tilesets, npc.map, x, y)
+    end)
+    -- the toggle store is the engine's own "this object is gone" switch; a
+    -- reload mid-fade can refuse, and then the sprite lingers until the map
+    -- is next entered, which is the acceptable failure
+    pcall(function() mod.world:toggleObject(npc.map, npc.obj, false) end)
+    if self.relay then
+      self.relay:broadcast(Wire.npcout(npc.map, npc.obj))
+      if spill then self.relay:broadcast(Wire.spill(spill.map, spill.mons)) end
+    end
+    if spill then self.spills:add(spill) end
+  end
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
+    local npc = BR.npcFight
+    BR.npcFight = nil
+    if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
+      local party = {}
+      for _, mon in ipairs((ev.battle and ev.battle.enemyParty) or {}) do
+        if mon.species then
+          party[#party + 1] = { species = mon.species, level = mon.level, hp = 0 }
+        end
+      end
+      if #party > 0 then BR:npcDefeated(npc, party) end
+    end
     local botId = BR.botFight
     if not botId then return end
     BR.botFight = nil
