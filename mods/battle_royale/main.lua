@@ -1268,6 +1268,61 @@ return function(mod)
     return next(game, context, continue)
   end)
 
+  -- ------- the rules of a match
+  --
+  -- Everything here holds from the drop until the match ends, and nowhere
+  -- else: a real playthrough must be untouched by the mod being installed.
+
+  local function inMatch() return BR.phase == "match" end
+
+  -- Every battle is at the rung.  Trainer parties already ride it through
+  -- trainer.party above; wild encounters did not, so the Safari handed out
+  -- Lv22+ against a Lv5 drop and a route's Pidgey stayed Lv3 at the end.
+  -- The roll keeps its species and its odds -- only the level is rewritten,
+  -- at the same point the spectator guard already sits.
+  mod.hooks:wrap("encounter.species", function(next, enc, ctx)
+    local rolled = next(enc, ctx)
+    if rolled and inMatch() then rolled.level = BR:level() end
+    return rolled
+  end)
+
+  -- ...and a bite is a wild encounter by another rod.  The chain hands back
+  -- the catch ({ species, level }) from the candidate list; the list itself
+  -- is not touched, so Old Rod still hooks its MAGIKARP, just at the rung.
+  mod.hooks:wrap("encounter.fishing", function(next, rod, mapId, candidates)
+    local catch = next(rod, mapId, candidates)
+    if catch and inMatch() then catch.level = BR:level() end
+    return catch
+  end)
+
+  -- SET style, whatever the OPTION row says.  SHIFT's "will you change
+  -- POKeMON?" is free information and a free swap, which makes
+  -- party-as-health softer than it is meant to be.  The row itself is left
+  -- alone: the hook wins without writing to the player's preference.
+  mod.hooks:wrap("battle.style", function(next, battle)
+    if inMatch() then return "set" end
+    return next(battle)
+  end)
+
+  -- No nickname prompt on a catch.  A match team is disposable and you may
+  -- catch a dozen under fog pressure; the naming grid is friction with
+  -- nothing behind it.  false keeps the species name with no prompt.
+  mod.hooks:wrap("catch.nickname", function(next, mon, ctx)
+    if inMatch() then return false end
+    return next(mon, ctx)
+  end)
+
+  -- 1X, whatever the speed rows say.  A match has a shared clock (the fog),
+  -- other people, and a lockstep battle at the end of a walk; fast-forward
+  -- through any of it is cheating, and slow-motion in a fight is too.  The
+  -- engine asks this hook AFTER its own link-play and --speed overrides, so
+  -- a scripted run (POKEPORT_SPEED) still works and the touch skin's hold
+  -- button is the one control this cannot reach.
+  mod.hooks:wrap("core.logic_speed", function(next, game)
+    if inMatch() then return 1 end
+    return next(game)
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
@@ -1631,6 +1686,10 @@ return function(mod)
     if type(out) ~= "table" then return out end
     local label = (BR.phase == "match" or BR.phase == "over") and "ROYALE*"
       or (BR.relay and "ROYALE." or "ROYALE")
+    -- the engine's own link play has no business in a match: the mod owns
+    -- the transport for PvP, and a second session from inside one is
+    -- undefined at best.  Back the moment the match is over.
+    if BR.phase == "match" then mod.ui.removeLabel(out, "LINK") end
     return mod.ui.insertBefore(out, "OPTION", {
       label = label,
       onSelect = function() mod.ui.push(game, SCREEN) end,

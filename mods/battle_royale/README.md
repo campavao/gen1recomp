@@ -77,6 +77,24 @@ A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
 never overwrite your actual playthrough.
 
+**The rules of a match**, from the drop until it ends and nowhere else:
+
+- Every battle is at the current rung — trainers, bots, wild grass and
+  water, the Safari, a bite on a rod. A Lv5 drop never meets a Lv22 Safari
+  mon, and a route's PIDGEY is worth catching in the last ring.
+- Battles are **SET** style whatever your OPTION row says: no "will you
+  change POKéMON?" when the foe faints. SHIFT is free information and a free
+  swap, and party-as-health is meant to bite.
+- **No nickname prompt** on a catch. The team is disposable and you may
+  catch a dozen under fog pressure.
+- **Game speed is 1X.** A match has a shared clock and other people in it;
+  fast-forward through the fog or slow-motion in a fight is cheating. The
+  hotkey and the OPTION rows are ignored until the match ends.
+- **LINK is off the START menu.** The mod owns the transport for PvP.
+
+None of these write to your saved options — they hold while a match is live
+and your own settings are back the moment it is over.
+
 The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
 once a match is live. The same screen is on the title menu, so a match is
 reachable before a save exists — which matters because a match throws its
@@ -307,10 +325,12 @@ diff:
 | `src/world/OverworldController.lua` | the `world.talk` hook around the NPC talk path | a runtime object has no `TEXT_*` id, so the mod claims the `A` press |
 | `src/link/LinkState.lua` | `LinkState.newFromSession` + the `adopted` stage, and the `link.battle_ended` event | adopt an already-paired transport and skip the connect UI; report the battle's outcome + party so a mode above it can react |
 | `src/core/Game.lua` | `Game:startNewGame(opts)` (with `intro=false`) | start a fresh game straight into the world, so a match can drop you in without Oak's speech |
+| `src/battle/BattleState.lua` | the `battle.style` and `catch.nickname` hooks | force SET and skip the nickname prompt for a match without writing the player's OPTION row |
 
-All four are generic — any mod with a self-driven actor, an adopted link
-transport, or its own new-game flow wants them. They are proposed upstream
-as **RFC 0014**.
+All of them are generic — any mod with a self-driven actor, an adopted link
+transport, its own new-game flow, or a rule it wants to hold for a while
+wants them. The first four are proposed upstream as **RFC 0014**, the two
+battle-rule hooks as **RFC 0015**.
 
 ### ...and running without them
 
@@ -342,6 +362,18 @@ Two known gaps, both harmless here: an object reached *across a counter* is
 not claimed by the shimmed path (a ghost is never behind a mart counter),
 and `os.time` is denied to mods, so a shimmed `startNewGame` does not stamp
 `sessionStartedAt` — a match world is thrown away, and nothing reads it.
+
+The two battle-rule hooks are the newest and the least clean to shim.
+`catch.nickname` is fine: the prompt is its own method, so the patch asks the
+hook first and, when it declines, fills the engine's reserved queue slot with
+a text box that closes itself. `battle.style` is not: the stock engine reads
+the OPTION value inline at the moment the foe faints, inside a function far
+too big to replace, so the shim swaps the value for the battle's duration
+(`enter` to `finish`) and puts it back. That is exactly the write-the-row
+workaround the seam exists to avoid — one speed-hotkey press mid-battle
+persists SET to disk, and the restore repairs it on the next press. It is
+reported in the boot line like everything else, so it cannot quietly become
+the normal.
 
 `tests/shim_test.lua` runs the same assertions on both engines and is the
 thing that proves the fallback is honest; run it in either tree.

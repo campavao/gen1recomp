@@ -77,7 +77,18 @@ are outside the ring. Pairs with BR-12's alive counter.
 
 ## P1 — rules that are wrong today
 
-### BR-4 · Wild Pokémon keep their vanilla levels
+> BR-4 to BR-8 all DONE 2026-08-23 (POK-8/9/10/11/12). Three were plain hook
+> wraps (`encounter.species` + `encounter.fishing`, `core.logic_speed`,
+> `ui.start_menu.items` + `removeLabel`). Two had no seam: the engine read
+> `save.options.battleStyle` inline and the nickname prompt was inline in the
+> catch flow. Writing the option would have leaked SET into the player's real
+> options the first time the speed hotkey called `writeOptions`, so they got
+> two small generic hooks instead — `battle.style` and `catch.nickname`
+> (RFC 0015, `src/battle/BattleState.lua`), shimmed on stock engines. Known
+> gap: the touch skin's hold-to-fast-forward sets `speedOverride`, which the
+> engine checks *before* the hook on purpose; not reachable from a mod.
+
+### BR-4 · Wild Pokémon keep their vanilla levels — DONE
 
 Trainer parties now ride the match rung (`trainer.party` hook). Wild
 encounters do not — the Safari hands out Lv22+ against a Lv5 drop. The
@@ -87,21 +98,21 @@ spectator guard, so the level rewrite goes in the same place.
 **Done when:** every battle in a match — trainer, wild, Safari, bot — is at
 the current rung.
 
-### BR-5 · Battles should be SET style
+### BR-5 · Battles should be SET style — DONE
 
 No "switch Pokémon?" prompt when the opponent's mon faints. It is free
 information and a free swap, and it makes party-as-health softer than intended.
 
-### BR-6 · Disable speed-up / slow-down during a match
+### BR-6 · Disable speed-up / slow-down during a match — DONE
 
 The bumpers change game speed. In a match with a shared clock and other
 players that is straightforwardly cheating.
 
-### BR-7 · Remove LINK from the start menu during a match
+### BR-7 · Remove LINK from the start menu during a match — DONE
 
 The engine's own link play has no business being reachable mid-match.
 
-### BR-8 · Skip the nickname prompt on catch
+### BR-8 · Skip the nickname prompt on catch — DONE
 
 Always keep the species name. It is friction in a mode where you may catch a
 dozen Pokémon under fog pressure.
