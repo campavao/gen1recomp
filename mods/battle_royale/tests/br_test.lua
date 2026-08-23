@@ -49,6 +49,20 @@ do
   eq(Wire.decode(Wire.challenge(7)).nonce, 7, "challenge nonce")
   eq(Wire.decode(Wire.accept(7)).nonce, 7, "accept nonce")
   eq(Wire.decode(Wire.winner(3)).id, 3, "winner id")
+
+  local lt = Wire.decode(Wire.loot({ { id = "POKE_BALL", n = 6 },
+                                     { id = "POTION", n = 1 } }, 3000))
+  ok(lt ~= nil, "loot round-trips")
+  eq(lt and #lt.items, 2, "loot carries both stacks")
+  eq(lt and lt.items[1].n, 6, "loot carries the count")
+  eq(lt and lt.money, 3000, "loot carries money")
+  ok(Wire.decode({ t = "loot", items = "x" }) == nil, "malformed loot refused")
+  ok(Wire.decode({ t = "loot", items = { { id = "", n = 1 } } }) == nil,
+     "empty item id refused")
+  eq(Wire.decode({ t = "loot", items = {}, money = -5 }).money, 0,
+     "negative money clamps to zero")
+  eq(Wire.decode({ t = "loot", items = { { id = "X", n = 500 } } }).items[1].n, 99,
+     "oversized stack clamps")
   eq(Wire.cleanName("  ab\1cdef ghi "), "abcdef", "name cleaned + capped to 7")
   eq(Wire.cleanName(nil), "PLAYER", "name falls back")
 end

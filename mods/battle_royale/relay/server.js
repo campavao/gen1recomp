@@ -130,6 +130,10 @@ class Conn {
   destroy(reason) {
     if (this.closed) return;
     this.closed = true;
+    // Why a connection went away is the first thing you need when a match
+    // breaks, and "the client just vanished" is indistinguishable from
+    // "we dropped them for flooding" without it.
+    this.relay.log(`drop ${this.name}#${this.id ?? "-"} (${reason})`);
     this.relay.onClose(this, reason);
     this.socket.destroy();
   }
@@ -267,6 +271,7 @@ export function createRelay(options = {}) {
     rooms,
     conns,
     limits,
+    log,
     onClose(conn, reason) {
       leaveRoom(conn, reason === "left" ? "left" : "host_gone");
       conns.delete(conn);

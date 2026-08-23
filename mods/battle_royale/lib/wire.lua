@@ -17,6 +17,7 @@
 --   {t="accept", n=} / {t="decline", n=, why=}    the reply
 --   {t="bt", m={...}}                             one link-battle message
 --   {t="out"}                                     I have been eliminated
+--   {t="loot", items={{id=,n=}}, money=}          my bag, to my killer
 --   {t="winner", id=}                             host: the match is over
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
@@ -85,6 +86,13 @@ function Wire.accept(nonce) return { t = "accept", n = nonce } end
 function Wire.decline(nonce, why) return { t = "decline", n = nonce, why = why } end
 function Wire.battle(inner) return { t = "bt", m = inner } end
 function Wire.out() return { t = "out" } end
+
+-- items: array of { id=, n= }; the loser's whole bag plus their money,
+-- unicast to whoever beat them (the first slice of the loot spill)
+function Wire.loot(items, money)
+  return { t = "loot", items = items, money = money }
+end
+
 function Wire.winner(id) return { t = "winner", id = id } end
 
 -- ------- decoding
@@ -170,6 +178,25 @@ decoders.bt = function(m)
 end
 
 decoders.out = function() return { t = "out" } end
+
+local MAX_STACKS = 32
+
+decoders.loot = function(m)
+  if type(m.items) ~= "table" then return nil, "bad items" end
+  local items = {}
+  for i, it in ipairs(m.items) do
+    if i > MAX_STACKS then break end
+    if type(it) ~= "table" or type(it.id) ~= "string" or it.id == ""
+       or #it.id > MAX_ID or type(it.n) ~= "number" then
+      return nil, "bad item"
+    end
+    local n = math.floor(it.n)
+    if n >= 1 then items[#items + 1] = { id = it.id, n = math.min(99, n) } end
+  end
+  local money = type(m.money) == "number"
+    and math.max(0, math.min(999999, math.floor(m.money))) or 0
+  return { t = "loot", items = items, money = money }
+end
 
 decoders.winner = function(m)
   if m.id ~= nil and not isId(m.id) then return nil, "bad id" end

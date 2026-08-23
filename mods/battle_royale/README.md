@@ -17,8 +17,10 @@ small relay server (see [`relay/`](relay/)) so it works over the internet,
 through NAT, with no port-forwarding.
 
 1. `START` → `ROYALE`
-2. `SERVER...` once, to point at your relay as `host:port` (default is
-   `127.0.0.1:7790` for a relay on your own machine). It's remembered.
+2. `NAME` to pick the trainer name everyone else sees (7 letters, the
+   Gen 1 naming grid). `SERVER...` once, to point at your relay as
+   `host:port` (default is `127.0.0.1:7790` for a relay on your own
+   machine). Both are remembered.
 3. One player picks **HOST GAME** and reads out the six-character room code.
 4. Everyone else picks **JOIN BY CODE** and enters it.
 5. The host sees the roster fill in and picks **START MATCH**. Everyone
@@ -26,8 +28,13 @@ through NAT, with no port-forwarding.
 
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
-last Pokémon. Reopen `ROYALE` any time to see how many trainers are left, or
-to leave.
+last Pokémon. **Knock someone out and you take their bag and their money**
+(the first slice of the loot spill). Reopen `ROYALE` any time to see how
+many trainers are left, or to leave.
+
+A match plays in a throwaway world: **SAVE is disabled from the drop until
+you return to the title** and start or continue a real game, so a match can
+never overwrite your actual playthrough.
 
 The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
 once a match is live.
@@ -35,9 +42,15 @@ once a match is live.
 ## Running the relay
 
 ```sh
-cd mods/battle_royale/relay
-node server.js            # listens on :7790 (PORT or BR_RELAY_PORT to change)
+node mods/battle_royale/relay/server.js   # :7790 (PORT or BR_RELAY_PORT to change)
 ```
+
+Run it from the repo root, not from inside `relay/`. A process whose working
+directory sits inside `mods/battle_royale/` holds a Windows directory handle,
+and the headless loader's directory probe (`tests/fs_io.lua` uses
+`os.rename(path, path)` there) then reports the mod folder as missing — so
+`br_load_test` fails with a confusing "manifest id: nil" while the game
+itself loads the mod perfectly well.
 
 Zero dependencies — any machine with Node 18+ and a reachable port is a
 server. On a LAN, one player runs it and everyone points `SERVER...` at that
@@ -101,23 +114,29 @@ transport, or its own new-game flow wants them.
 
 ## What's here / what's next
 
-**Here (v0):** rooms + lobby over a relay, random Kanto drop, the shared
-loadout, real-time presence, forced face-to-face battles, party-as-health
-elimination, last-trainer-standing. Route/gym trainers stay live as PvE.
+**Here (v0):** rooms + lobby over a relay with name entry, random Kanto
+drop, the shared loadout, real-time presence, forced face-to-face battles,
+party-as-health elimination, victor-takes-the-bag loot, a save-slot guard
+(matches can't overwrite a real save), last-trainer-standing. Route/gym
+trainers stay live as PvE.
 
 **Next, in rough order** (from the design in the sibling
-`pokemon-battle-royale` project's `docs/DESIGN.md`): the loot spill on a
-whiteout (D8), a shrinking-ring / fog killer on a shared clock (D11),
-level-scaling + evolution on that clock (D12), bots to fill a match, and
-six-tile "eyeline" initiation instead of one (change `Engage.inFront`).
+`pokemon-battle-royale` project's `docs/DESIGN.md`): the rest of the loot
+spill — the fallen team as 1-HP catchables (D8), a shrinking-ring / fog
+killer on a shared clock (D11), level-scaling + evolution on that clock
+(D12), bots to fill a match, and six-tile "eyeline" initiation instead of
+one (change `Engage.inFront`).
 
 ## Tests
 
 ```sh
 luajit mods/battle_royale/tests/br_test.lua        # wire, engage, spawn, a live relay round-trip
 luajit mods/battle_royale/tests/br_load_test.lua   # loads through the real headless loader
-cd mods/battle_royale/relay && node --test         # the relay server over real sockets
+cd mods/battle_royale/relay && node --test && cd -  # the relay server over real sockets
 ```
+
+Run the Lua tests with no shell or server parked inside `mods/battle_royale/`
+(see the relay note above) — `cd -` in that last line is deliberate.
 
 The Lua tests need no imported ROM (the relay round-trip runs over an
 in-memory hub; the spawn test uses the imported Kanto data when present and

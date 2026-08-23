@@ -75,6 +75,15 @@ return function(mod)
     nonceSeq = 0,
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
+    myName = nil,         -- chosen on the NAME row; nil falls back to the save
+    matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
+    pendingLoot = {},     -- loot that arrived before our own battle result did
+    lootFrom = nil,       -- who we just beat (their loot is expected)
+    -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
+    -- the channel (and with it self.battle) is torn down by LinkState before
+    -- link.battle_ended reaches us, so reading the opponent off self.battle
+    -- in that handler finds nil and the loot goes nowhere.
+    lastOpponent = nil,
   }
 
   local function say(text) BRMenu.say(mod, text) end
@@ -95,8 +104,18 @@ return function(mod)
   -- ------- identity + presence
 
   local function myName()
+    if BR.myName then return BR.myName end
     local save = BR.game and BR.game.save
     return Wire.cleanName(save and save.player and save.player.name or "PLAYER")
+  end
+
+  function BR:playerName() return myName() end
+
+  function BR:setName(name)
+    self.myName = Wire.cleanName(name)
+    -- remembered across sessions where durable storage is available
+    pcall(function() mod.storage:write(self.game, "name", self.myName) end)
+    return self.myName
   end
 
   local function mySprite()
@@ -117,6 +136,20 @@ return function(mod)
   end
 
   -- ------- room lifecycle
+
+  -- the fallen trainer's bag lands in ours (the first slice of the loot
+  -- spill, DESIGN D8 -- the team-as-catchables half comes later)
+  local function applyLoot(fromId, msg)
+    local save = BR.game and BR.game.save
+    if not save then return end
+    for _, it in ipairs(msg.items) do
+      save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
+    end
+    save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
+    save.money = math.min(999999, (save.money or 0) + (msg.money or 0))
+    local name = BR.relay and BR.relay:nameOf(fromId) or "their"
+    say(("You took %s's\nitems!"):format(name))
+  end
 
   local function wireRelay(relay)
     relay:on("joined", function()
@@ -183,6 +216,9 @@ return function(mod)
     self.status = "lobby"
     self.myId = nil
     self.started = false
+    self.pendingLoot = {}
+    self.lootFrom = nil
+    self.lastOpponent = nil
   end
 
   function BR:teardown(message)
@@ -244,6 +280,7 @@ return function(mod)
     self.phase = "match"
     self.status = "alive"
     self.started = true
+    self.matchWorld = true
     self.game:startNewGame({ intro = false })
     self.arming = nil
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
@@ -265,6 +302,7 @@ return function(mod)
     save.money = START_MONEY
     save.flags = save.flags or {}
     for _, f in ipairs(STORY_FLAGS) do save.flags[f] = true end
+    save.player.name = Wire.cleanName(BR.myName or save.player.name)
     save.player.map = BR.arming.map
     save.player.x, save.player.y = BR.arming.x, BR.arming.y
     save.player.facing = "down"
@@ -336,6 +374,16 @@ return function(mod)
       if p then p.status = "out" end
       if self.phase == "match" then self:checkWinner() end
 
+    elseif msg.t == "loot" then
+      -- ours only if we actually beat them; their message can outrun our
+      -- own battle result, so an early arrival waits in pendingLoot
+      if fromId == self.lootFrom then
+        self.lootFrom = nil
+        applyLoot(fromId, msg)
+      else
+        self.pendingLoot[fromId] = msg
+      end
+
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
     end
@@ -397,6 +445,7 @@ return function(mod)
       onClose = function() BR:onBattleClosed(opponentId) end,
     })
     self.battle = { channel = channel, opponentId = opponentId, isHost = isHost }
+    self.lastOpponent = opponentId
     self.status = "battle"
     self.pending = nil
     self.ghosts:despawnAll()             -- the world pauses under the battle
@@ -417,8 +466,12 @@ return function(mod)
   -- health here, so we copy the damage back and a wiped party is elimination.
   mod.events:on("link.battle_ended", function(ev)
     if not (BR.phase == "match" and BR.game) then return end
-    local party = BR.game.save.party
-    for i, mon in ipairs(party) do
+    local save = BR.game.save
+    -- self.battle is usually already gone here (LinkState closes the channel
+    -- on its way out), so lastOpponent is the reliable answer
+    local opponent = (BR.battle and BR.battle.opponentId) or BR.lastOpponent
+    BR.lastOpponent = nil
+    for i, mon in ipairs(save.party) do
       local after = ev.myParty and ev.myParty[i]
       if after and after.species == mon.species then
         mon.hp = math.max(0, math.min(mon.stats.hp, after.hp or mon.hp))
@@ -427,11 +480,32 @@ return function(mod)
     end
     if ev.result == "lose" then
       BR.status = "out"
+      -- the victor takes your bag and your money
+      if opponent and BR.relay then
+        local items = {}
+        for id, n in pairs(save.inventory) do
+          items[#items + 1] = { id = id, n = n }
+        end
+        BR.relay:send(opponent, Wire.loot(items, save.money))
+      end
+      save.inventory = {}
+      save.bagOrder = nil
+      save.money = 0
       if BR.relay then BR.relay:broadcast(Wire.out()) end
       say("You whited out!\nYou are out of\nthe match.")
       BR:checkWinner()
     else
       BR.status = "alive"
+      if ev.result == "win" and opponent then
+        -- their loot may already be waiting, or still on the wire
+        local waiting = BR.pendingLoot[opponent]
+        BR.pendingLoot[opponent] = nil
+        if waiting then
+          applyLoot(opponent, waiting)
+        else
+          BR.lootFrom = opponent
+        end
+      end
     end
     broadcastPlace()
   end)
@@ -575,10 +649,37 @@ return function(mod)
     })
   end)
 
-  -- Restore a remembered relay address on load.
+  -- Restore a remembered relay address on load; a vanilla New Game also
+  -- leaves the match world (the save is a real playthrough again).
   mod.events:on("save.created", function()
     local saved = mod.save:get("relay")
     if saved then BR:setRelayAddress(saved) end
+    if not BR.arming then BR.matchWorld = false end
+  end)
+
+  -- CONTINUE loads a real save; SAVE is theirs again.
+  mod.events:on("save.loaded", function()
+    BR.matchWorld = false
+  end)
+
+  -- pick up the game handle early and any remembered name
+  mod.events:on("game.ready", function(ev)
+    BR.game = ev.game
+    local ok, stored = pcall(function() return mod.storage:read(ev.game, "name") end)
+    if ok and type(stored) == "string" and stored ~= "" then
+      BR.myName = Wire.cleanName(stored)
+    end
+  end)
+
+  -- A match plays in a throwaway world: writing it into the player's save
+  -- slot would overwrite a real playthrough, so SAVE is vetoed from the drop
+  -- until a real save exists again (title -> NEW GAME or CONTINUE).
+  mod.hooks:wrap("save.write", function(next, game)
+    if BR.matchWorld then
+      mod.log:info("SAVE is disabled during a battle royale match")
+      return false
+    end
+    return next(game)
   end)
 
   -- Other mods (and the tests) can ask what the match looks like.
@@ -594,6 +695,7 @@ return function(mod)
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
+  mod.exports.setName = function(name) return BR:setName(name) end
   mod.exports.code = function() return BR.relay and BR.relay.code end
   mod.exports.lastError = function() return BR.relay and BR.relay.error end
   mod.exports.memberCount = function()

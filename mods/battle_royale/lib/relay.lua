@@ -238,6 +238,14 @@ function Relay:_close(reason)
   if self.status == "closed" then return end
   self.status = "closed"
   self.error = self.error or reason
+  if self.log then
+    -- one line that says why the room went away: the difference between
+    -- "the relay dropped us" and "we dropped the relay" is undebuggable
+    -- without it
+    self.log:warn("relay connection closed: %s (net.error: %s, net.closed: %s)",
+      tostring(reason), tostring(self.net and self.net.error),
+      tostring(self.net and self.net.closed))
+  end
   if self.net then pcall(self.net.close, self.net) end
   self:_fire("closed", reason)
 end

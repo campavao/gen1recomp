@@ -86,6 +86,21 @@ function Menu.build(mod, BR)
             }))
           end,
         }
+        -- the name every other trainer sees (and the winner banner uses);
+        -- the Gen 1 naming grid handles it since names are letters
+        items[#items + 1] = {
+          label = "NAME: " .. BR:playerName(),
+          onSelect = function()
+            game.stack:push(mod.ui.NamingScreen.new(game, {
+              title = "YOUR NAME?",
+              maxLen = 7,
+              default = BR:playerName(),
+              onDone = function(name)
+                if name and name ~= "" then BR:setName(name) end
+              end,
+            }))
+          end,
+        }
         -- the relay address is a mod option; this row surfaces it and lets
         -- you point at a different server without editing files
         items[#items + 1] = {
