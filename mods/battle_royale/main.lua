@@ -865,20 +865,16 @@ return function(mod)
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map
          and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
-        local party = Bots.party(self.matchSeed, id, data, level)
-        -- a Poison lead is at home in the fog, bot or not
-        if not Fog.immune(party[1], data) then
-          -- ticks, not hit points: the bite is a fraction of maximum HP, so
-          -- the same count of them finishes a team at any rung of the ladder
-          -- and nothing here has to know how big a level 100 bot is
-          if (now - (p.lastFogTick or 0)) >= Fog.TICK_SECONDS then
-            p.lastFogTick = now
-            p.fogTicks = (p.fogTicks or 0) + 1
-            if p.fogTicks >= Fog.TICKS_TO_KILL then
-              -- same exit as losing a fight, so the fog leaves a team on the
-              -- ground too rather than quietly deleting one
-              self:eliminateBot(id, p, nil)
-            end
+        -- ticks, not hit points: the bite is a fraction of maximum HP, so the
+        -- same count of them finishes a team at any rung of the ladder, and
+        -- nothing here has to know how big a level 100 bot is
+        if (now - (p.lastFogTick or 0)) >= Fog.TICK_SECONDS then
+          p.lastFogTick = now
+          p.fogTicks = (p.fogTicks or 0) + 1
+          if p.fogTicks >= Fog.TICKS_TO_KILL then
+            -- same exit as losing a fight, so the fog leaves a team on the
+            -- ground too rather than quietly deleting one
+            self:eliminateBot(id, p, nil)
           end
         end
       else
@@ -898,16 +894,6 @@ return function(mod)
     local locations = townLocations()
     if Fog.isSafe(locations, here.mapId, self.ring.center, self.ring.radius) then
       self.wasInFog = false
-      return
-    end
-
-    -- a Poison lead is at home in it (DESIGN D11)
-    local lead = game.save.party and game.save.party[1]
-    if Fog.immune(lead, game.data) then
-      if not self.wasInFog then
-        self.wasInFog = true
-        say("The fog does not\nharm your POKeMON.")
-      end
       return
     end
 

@@ -122,7 +122,17 @@ function Fog.safeMaps(locations, outdoorIds, center, radius)
   return out
 end
 
--- Is this Pokemon a Poison type?  A poison lead walks the fog unharmed --
+-- Is this Pokemon a Poison type?
+--
+-- NOT USED right now, and deliberately kept.  A Poison lead used to walk the
+-- fog unharmed (DESIGN D11), which read well and played badly: Kanto is full
+-- of Zubat, Nidoran, Koffing and Grimer, so the common case was a lead that
+-- ignored the ring for a whole match -- and once the fog stops clamping and
+-- covers everything, an immune lead wins by standing still.  Immunity is off
+-- until lead-type abilities get a proper design pass, and this stays as the
+-- thing that pass starts from rather than something to write again.
+--
+-- A poison lead walks the fog unharmed --
 -- the fog is its element (DESIGN D11 / O5), and it gives an otherwise
 -- unloved type a real reason to be in your party.
 function Fog.immune(mon, data)
