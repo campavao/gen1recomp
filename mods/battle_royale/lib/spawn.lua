@@ -51,6 +51,17 @@ local function blocked(def)
   return set
 end
 
+-- Can an actor stand on this cell?  Answered off the map DEFINITION, not a
+-- loaded map, so the host can walk a bot around a map nobody is standing on.
+function Spawn.walkable(maps, tilesets, mapId, x, y)
+  local def = maps and maps[mapId]
+  local tilesetDef = def and tilesets and tilesets[def.tileset]
+  if not (def and tilesetDef) then return false end
+  if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then return false end
+  return Map.defIsWalkableCell(def, tilesetDef, x, y)
+     and not Map.defIsWaterCell(def, tilesetDef, x, y)
+end
+
 -- Every cell a player could be dropped on for one map, in row-major order.
 function Spawn.cellsOf(def, tilesetDef)
   local out = {}

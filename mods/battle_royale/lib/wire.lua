@@ -12,12 +12,18 @@
 --   {t="place", map=, x=, y=, f=, st=, sprite=}   where I am + my status
 --   {t="step",  d=, x=, y=, map=}                 a step just committed
 --   {t="face",  f=, map=}                         a turn in place
+--
+-- place/step/face may carry `as = <id>`: "this is about that actor, relayed
+-- by me".  The host uses it to move its bots, since a bot has no connection
+-- of its own for the relay to attribute a message to.  Only the host's `as`
+-- is honoured (see main.lua), so a guest cannot puppet anyone.
 --   {t="start", seed=, spawns={{id=,map=,x=,y=}}} host: the match begins
 --   {t="challenge", n=}                           I am facing you: fight
 --   {t="accept", n=} / {t="decline", n=, why=}    the reply
 --   {t="bt", m={...}}                             one link-battle message
 --   {t="out"}                                     I have been eliminated
 --   {t="loot", items={{id=,n=}}, money=}          my bag, to my killer
+--   {t="botout", id=}                             I beat that bot
 --   {t="winner", id=}                             host: the match is over
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
@@ -63,17 +69,17 @@ end
 
 -- ------- constructors
 
-function Wire.place(map, x, y, facing, status, sprite)
+function Wire.place(map, x, y, facing, status, sprite, as)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
-           st = status, sprite = sprite }
+           st = status, sprite = sprite, as = as }
 end
 
-function Wire.step(dir, x, y, map)
-  return { t = "step", d = dir, x = x, y = y, map = map }
+function Wire.step(dir, x, y, map, as)
+  return { t = "step", d = dir, x = x, y = y, map = map, as = as }
 end
 
-function Wire.face(facing, map)
-  return { t = "face", f = facing, map = map }
+function Wire.face(facing, map, as)
+  return { t = "face", f = facing, map = map, as = as }
 end
 
 -- spawns: array of { id=, map=, x=, y= }, one per player in the match
@@ -93,6 +99,7 @@ function Wire.loot(items, money)
   return { t = "loot", items = items, money = money }
 end
 
+function Wire.botout(id) return { t = "botout", id = id } end
 function Wire.winner(id) return { t = "winner", id = id } end
 
 -- ------- decoding
@@ -103,6 +110,13 @@ function Wire.winner(id) return { t = "winner", id = id } end
 
 local decoders = {}
 
+-- the optional relayed-actor id; absent or malformed means "the sender"
+local function actorOf(m)
+  if m.as == nil then return nil end
+  if not isId(m.as) then return nil end
+  return m.as
+end
+
 decoders.place = function(m)
   if m.v ~= Wire.PROTOCOL then
     return nil, ("protocol %s, expected %d"):format(tostring(m.v), Wire.PROTOCOL)
@@ -112,7 +126,7 @@ decoders.place = function(m)
   if m.f ~= nil and not Wire.DIRS[m.f] then return nil, "bad facing" end
   if not Wire.STATUS[m.st] then return nil, "bad status" end
   return { t = "place", map = m.map, x = m.x, y = m.y, facing = m.f or "down",
-           status = m.st,
+           status = m.st, as = actorOf(m),
            sprite = type(m.sprite) == "string" and #m.sprite <= MAX_ID
                     and m.sprite or nil }
 end
@@ -121,13 +135,13 @@ decoders.step = function(m)
   if not Wire.DIRS[m.d] then return nil, "bad dir" end
   if not (isCell(m.x) and isCell(m.y)) then return nil, "bad cell" end
   if m.map ~= nil and not isMapId(m.map) then return nil, "bad map" end
-  return { t = "step", dir = m.d, x = m.x, y = m.y, map = m.map }
+  return { t = "step", dir = m.d, x = m.x, y = m.y, map = m.map, as = actorOf(m) }
 end
 
 decoders.face = function(m)
   if not Wire.DIRS[m.f] then return nil, "bad facing" end
   if m.map ~= nil and not isMapId(m.map) then return nil, "bad map" end
-  return { t = "face", facing = m.f, map = m.map }
+  return { t = "face", facing = m.f, map = m.map, as = actorOf(m) }
 end
 
 decoders.start = function(m)
@@ -196,6 +210,11 @@ decoders.loot = function(m)
   local money = type(m.money) == "number"
     and math.max(0, math.min(999999, math.floor(m.money))) or 0
   return { t = "loot", items = items, money = money }
+end
+
+decoders.botout = function(m)
+  if not isId(m.id) then return nil, "bad id" end
+  return { t = "botout", id = m.id }
 end
 
 decoders.winner = function(m)

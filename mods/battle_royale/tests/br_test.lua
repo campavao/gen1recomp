@@ -65,6 +65,80 @@ do
      "oversized stack clamps")
   eq(Wire.cleanName("  ab\1cdef ghi "), "abcdef", "name cleaned + capped to 7")
   eq(Wire.cleanName(nil), "PLAYER", "name falls back")
+
+  eq(Wire.decode(Wire.botout(1001)).id, 1001, "botout carries the bot id")
+  ok(Wire.decode({ t = "botout" }) == nil, "botout without an id is refused")
+
+  -- `as`: the host relaying a bot's movement
+  eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
+     "step carries the relayed actor")
+  eq(Wire.decode(Wire.face("down", "ROUTE_1", 1001)).as, 1001,
+     "face carries the relayed actor")
+  eq(Wire.decode(Wire.place("ROUTE_1", 1, 2, "up", "alive", nil, 1001)).as, 1001,
+     "place carries the relayed actor")
+  eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1")).as, nil,
+     "an ordinary step has no actor")
+  eq(Wire.decode({ t = "step", d = "up", x = 1, y = 2, as = "nope" }).as, nil,
+     "a malformed actor is dropped, not trusted")
+end
+
+-- ------- bots
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+
+  ok(Bots.isBot(Bots.ID_BASE), "ID_BASE is a bot id")
+  ok(not Bots.isBot(1), "a room id is not a bot")
+  ok(not Bots.isBot(nil), "nil is not a bot")
+
+  -- everything about a bot is derived, so two clients agree without talking
+  local id = Bots.idFor(1)
+  eq(Bots.name(4242, id), Bots.name(4242, id), "the name is stable for a seed")
+  ok(#Bots.name(4242, id) <= 7, "the name fits the Gen 1 name box")
+  ok(Bots.name(1, id) ~= Bots.name(2, id) or true, "a different seed may differ")
+
+  local a = Bots.party(4242, id, nil)
+  local b = Bots.party(4242, id, nil)
+  eq(#a, #b, "the party size is stable for a seed")
+  eq(a[1].species, b[1].species, "the party species is stable for a seed")
+  eq(#a, 1, "a bot drops with one mon, same as a player")
+  eq(a[1].level, 5, "at the starting level")
+  -- the shape BattleState's trainer.party hook expects
+  ok(type(a[1].species) == "string" and type(a[1].level) == "number",
+     "party rows are {species, level}")
+
+  -- a data table missing a species must not put it in a party
+  local onlyRattata = Bots.party(7, id, { pokemon = { RATTATA = {} } })
+  local allRattata = true
+  for _, row in ipairs(onlyRattata) do
+    if row.species ~= "RATTATA" then allRattata = false end
+  end
+  ok(allRattata, "species the build lacks are filtered out of the pool")
+
+  -- wander: walled in on every side means stand still
+  local bot = { map = "M", x = 5, y = 5, facing = "up" }
+  local never = function() return false end
+  local rng = Bots.rng(1, id)
+  local moved = false
+  for _ = 1, 50 do
+    if Bots.wander(bot, rng, never) then moved = true end
+  end
+  ok(not moved, "a bot with nowhere to go never steps")
+
+  -- open field: it does move, and only ever one of the four grid directions
+  local always = function() return true end
+  local seen, steps = {}, 0
+  local rng2 = Bots.rng(2, id)
+  for _ = 1, 200 do
+    local dir = Bots.wander(bot, rng2, always)
+    if dir then
+      steps = steps + 1
+      seen[dir] = true
+      ok(Bots.DELTA[dir] ~= nil, "wander returns a real direction")
+    end
+  end
+  ok(steps > 0, "a bot in the open walks (" .. steps .. "/200 beats)")
+  ok(steps < 200, "and sometimes pauses")
 end
 
 -- ------- engage

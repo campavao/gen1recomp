@@ -23,8 +23,11 @@ through NAT, with no port-forwarding.
    machine). Both are remembered.
 3. One player picks **HOST GAME** and reads out the six-character room code.
 4. Everyone else picks **JOIN BY CODE** and enters it.
-5. The host sees the roster fill in and picks **START MATCH**. Everyone
+5. The host can add **BOTS** (0–8, the row cycles) to fill the match out.
+6. The host sees the roster fill in and picks **START MATCH**. Everyone
    drops into Kanto at once.
+
+You can run a match entirely on your own: host, set some bots, start.
 
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
@@ -85,16 +88,39 @@ would be a second, worse copy of it. Because the channel is separate from
 the room socket, a battle no longer ends your session — the old co-op
 limitation is gone.
 
-**Party as health.** Link battles don't write damage back to your save (real
-cable rules), so the mod reads the lockstep party copy off the
-`link.battle_ended` engine event and copies the damage onto your real party.
-A wiped party is elimination. The host is the authority on who's left and
-declares the winner.
+**Party as health.** A whiteout is elimination, however it happened — a bot,
+a route trainer, a wild Pokémon — which the mod picks up from the engine's
+`world.blacked_out`. PvP is the exception that needs its own path: link
+battles follow cable rules and never touch your real party, so the mod reads
+the lockstep party copy off `link.battle_ended` and copies the damage back
+itself. The host is the authority on who's left and declares the winner.
 
 **The drop.** The host picks every spawn once (`lib/spawn.lua`: a random
 walkable, non-water cell on a random outdoor Kanto map, dealt round-robin so
 players spread out and never share a cell) and sends the list. Nobody else
 has to agree on the algorithm, only on the answer.
+
+**Bots** (`lib/bots.lua`) fill a match out and make it playable solo. They
+take spawns from the same list as everyone else, and the host walks them —
+relaying each step tagged `as = <bot id>`, so every client renders them
+through the same ghost driver a human gets. Only the host's `as` is
+honoured, so nobody can puppet another trainer.
+
+Everything *about* a bot — its name, its team — is derived from the match
+seed and its id rather than sent, so every client computes the same answer.
+That matters because a bot has no client to run a lockstep battle with:
+whoever walks into one fights it **locally**, as an ordinary trainer battle
+whose party comes from `Bots.party` through the engine's own `trainer.party`
+hook. If two clients disagreed about the team, they would disagree about who
+won. The winner tells the room (`botout`); the host recounts the survivors.
+
+A bot drops with one Pokémon at the starting level, the same as a player —
+two made the bot the favourite in every opening fight, which ended most
+matches before anyone could build a team.
+
+Bot steps are paced in **real seconds**, not ticks. A bot's step is ambience
+that happens to be network traffic, and tying its rate to the host's logic
+clock means a fast-forwarding player floods the relay off its own connection.
 
 ## Engine additions
 
@@ -114,11 +140,12 @@ transport, or its own new-game flow wants them.
 
 ## What's here / what's next
 
-**Here (v0):** rooms + lobby over a relay with name entry, random Kanto
-drop, the shared loadout, real-time presence, forced face-to-face battles,
-party-as-health elimination, victor-takes-the-bag loot, a save-slot guard
-(matches can't overwrite a real save), last-trainer-standing. Route/gym
-trainers stay live as PvE.
+**Here (v0):** rooms + lobby over a relay with name entry, bots (0–8, so a
+match is playable solo), random Kanto drop, the shared loadout, real-time
+presence, forced face-to-face battles, party-as-health elimination from any
+whiteout, victor-takes-the-bag loot, a save-slot guard (matches can't
+overwrite a real save), last-trainer-standing. Route/gym trainers stay live
+as PvE.
 
 **Next, in rough order** (from the design in the sibling
 `pokemon-battle-royale` project's `docs/DESIGN.md`): the rest of the loot

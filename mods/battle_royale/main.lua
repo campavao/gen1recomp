@@ -29,6 +29,7 @@ local Spawn = require("mods.battle_royale.lib.spawn")
 local Engage = require("mods.battle_royale.lib.engage")
 local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
+local Bots = require("mods.battle_royale.lib.bots")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -38,6 +39,28 @@ local DEFAULT_RELAY = "127.0.0.1:7790"
 -- is insurance against a dropped message and against a peer moving in a way
 -- we do not model (a warp).  5 seconds at 60 Hz.
 local RESYNC_TICKS = 300
+
+-- How often a bot takes a beat, in REAL seconds (it may still stand still).
+--
+-- Wall clock rather than ticks on purpose.  A bot's step is not simulation,
+-- it is ambience that happens to be network traffic: one broadcast per bot
+-- per beat, from the host, to everyone.  Pacing it on the logic clock ties
+-- the send rate to how fast the host's loop happens to run -- a
+-- fast-forwarding player, or a scripted run stepping logic as fast as it
+-- can, turns a stroll into hundreds of messages a second and the relay
+-- rightly drops the connection as a flood.  Seconds keep bots walking at a
+-- human pace and the traffic bounded, whatever the host's clock is doing.
+local BOT_STEP_SECONDS = 0.45
+
+-- The trainer class a bot fights as.  The class only supplies the sprite,
+-- the name banner and the AI temperament -- the party comes from
+-- Bots.party through the trainer.party hook below.
+local BOT_TRAINER_CLASS = "OPP_YOUNGSTER"
+
+-- What beating a bot is worth.  Bots do not carry a real bag, so this is
+-- authored rather than transferred: enough to be worth the fight.
+local BOT_LOOT = { items = { { id = "POKE_BALL", n = 2 }, { id = "POTION", n = 1 } },
+                   money = 500 }
 
 -- The starting loadout, all in one place (docs/DESIGN.md D7).
 local START_SPECIES = "RATTATA"
@@ -84,6 +107,10 @@ return function(mod)
     -- link.battle_ended reaches us, so reading the opponent off self.battle
     -- in that handler finds nil and the loot goes nowhere.
     lastOpponent = nil,
+    botCount = 0,         -- how many bots the host will add at start
+    matchSeed = nil,      -- every client derives bot names/parties from this
+    botFight = nil,       -- the bot id we are locally fighting right now
+    botParty = nil,       -- handed to the trainer.party hook for one battle
   }
 
   local function say(text) BRMenu.say(mod, text) end
@@ -110,6 +137,7 @@ return function(mod)
   end
 
   function BR:playerName() return myName() end
+  function BR:maxBots() return Bots.MAX end
 
   function BR:setName(name)
     self.myName = Wire.cleanName(name)
@@ -219,6 +247,9 @@ return function(mod)
     self.pendingLoot = {}
     self.lootFrom = nil
     self.lastOpponent = nil
+    self.matchSeed = nil
+    self.botFight = nil
+    self.botParty = nil
   end
 
   function BR:teardown(message)
@@ -239,6 +270,11 @@ return function(mod)
     local ids = {}
     for _, m in ipairs(relay.members) do ids[#ids + 1] = m.id end
     table.sort(ids)
+    -- bots ride the same spawn list as everyone else; their ids are far
+    -- above any the relay hands out, so nothing has to be kept apart
+    for i = 1, math.min(self.botCount, Bots.MAX) do
+      ids[#ids + 1] = Bots.idFor(i)
+    end
     local seed = love.math.random(1, 2 ^ 30)
     local rng = Spawn.rng(seed)
     local data = self.game.data
@@ -266,13 +302,20 @@ return function(mod)
       say("The match started\nwithout a spawn\nfor you.")
       return
     end
-    -- seed the peers as alive-in-lobby until their first place message
+    -- seed the peers as alive-in-lobby until their first place message.
+    -- A bot's name and party are derived from the shared seed rather than
+    -- sent, so every client agrees on the team it is about to fight.
+    self.matchSeed = msg.seed
     self.players = {}
     for _, s in ipairs(msg.spawns) do
       if s.id ~= self.myId then
-        self.players[s.id] = { name = self.relay:nameOf(s.id), map = nil,
-                               x = s.x, y = s.y, facing = "down",
-                               status = "alive" }
+        local bot = Bots.isBot(s.id)
+        self.players[s.id] = {
+          name = bot and Bots.name(msg.seed, s.id) or self.relay:nameOf(s.id),
+          map = bot and s.map or nil,   -- a bot is where the host says at once
+          x = s.x, y = s.y, facing = "down",
+          status = "alive", bot = bot or nil,
+        }
       end
     end
     -- arm the loadout hook, then start a fresh game straight into the world
@@ -320,11 +363,20 @@ return function(mod)
       mod.log:warn("battle royale dropped a message: %s", tostring(why))
       return
     end
-    local p = self.players[fromId]
+    -- `as` lets the host move its bots.  Honoured only from the host, so a
+    -- guest cannot puppet another trainer, and never to impersonate a human.
+    local actor = fromId
+    if msg.as and self.relay and fromId == self.relay.hostId
+       and Bots.isBot(msg.as) then
+      actor = msg.as
+    end
+    local p = self.players[actor]
 
     if msg.t == "place" then
-      p = p or { name = self.relay:nameOf(fromId) }
-      self.players[fromId] = p
+      p = p or { name = Bots.isBot(actor) and Bots.name(self.matchSeed, actor)
+                        or self.relay:nameOf(actor),
+                 bot = Bots.isBot(actor) or nil }
+      self.players[actor] = p
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
       p.status = msg.status
@@ -334,13 +386,13 @@ return function(mod)
       if p then
         if msg.map then p.map = msg.map end
         p.x, p.y, p.facing = msg.x, msg.y, msg.dir
-        self.ghosts:pushStep(fromId, msg.dir)
+        self.ghosts:pushStep(actor, msg.dir)
       end
 
     elseif msg.t == "face" then
       if p then
         p.facing = msg.facing
-        self.ghosts:face(fromId, msg.facing)
+        self.ghosts:face(actor, msg.facing)
       end
 
     elseif msg.t == "start" then
@@ -372,6 +424,12 @@ return function(mod)
 
     elseif msg.t == "out" then
       if p then p.status = "out" end
+      if self.phase == "match" then self:checkWinner() end
+
+    elseif msg.t == "botout" then
+      -- whoever beat it says so; everyone marks it down, the host recounts
+      local bot = Bots.isBot(msg.id) and self.players[msg.id]
+      if bot then bot.status = "out" end
       if self.phase == "match" then self:checkWinner() end
 
     elseif msg.t == "loot" then
@@ -431,13 +489,134 @@ return function(mod)
                               busy = p.status == "battle" }
     end
     local target = Engage.target(me, others)
-    if target then
-      self.nonceSeq = self.nonceSeq + 1
-      self.pending = { to = target, nonce = self.nonceSeq,
-                       host = Engage.isHost(self.myId, target) }
-      self.relay:send(target, Wire.challenge(self.nonceSeq))
+    if not target then return end
+    -- A bot has no client to lockstep with, so its fight is a local trainer
+    -- battle against the party every client derives from the seed.  No
+    -- challenge/accept: there is nobody to ask.
+    if Bots.isBot(target) then
+      self:startBotBattle(target)
+      return
+    end
+    self.nonceSeq = self.nonceSeq + 1
+    self.pending = { to = target, nonce = self.nonceSeq,
+                     host = Engage.isHost(self.myId, target) }
+    self.relay:send(target, Wire.challenge(self.nonceSeq))
+  end
+
+  -- ------- bots
+  --
+  -- The host walks them and relays each step with `as`; every client renders
+  -- them through the same ghost driver a human gets.  Anyone may fight one.
+
+  local function canWalk(mapId, x, y)
+    local data = BR.game and BR.game.data
+    return Spawn.walkable(data and data.maps, data and data.tilesets, mapId, x, y)
+  end
+
+  local function clock()
+    if love and love.timer and love.timer.getTime then return love.timer.getTime() end
+    return nil
+  end
+
+  function BR:tickBots()
+    if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
+    local now = clock()
+    for id, p in pairs(self.players) do
+      if p.bot and p.status == "alive" and p.map then
+        local due = now == nil or (now - (p.lastStep or 0)) >= BOT_STEP_SECONDS
+        if due then
+          p.lastStep = now or 0
+          -- one stream per bot, kept on the bot so its walk does not depend
+          -- on how many other bots are in the table or what order pairs()
+          -- happens to hand them back
+          p.rng = p.rng or Bots.rng(self.matchSeed, id)
+          local dir = Bots.wander(p, p.rng, canWalk)
+          if dir then
+            local d = Bots.DELTA[dir]
+            p.facing = dir
+            p.x, p.y = p.x + d[1], p.y + d[2]
+            self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, id))
+            self.ghosts:pushStep(id, dir) -- our own copy walks it too
+          end
+        end
+      end
     end
   end
+
+  -- Beating a bot is worth a small authored drop rather than a transfer:
+  -- a bot carries no real bag to hand over.
+  local function giveBotLoot(botId)
+    local save = BR.game and BR.game.save
+    if not save then return end
+    for _, it in ipairs(BOT_LOOT.items) do
+      save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
+    end
+    save.bagOrder = nil
+    save.money = math.min(999999, (save.money or 0) + BOT_LOOT.money)
+    say(("You beat %s!"):format((BR.players[botId] or {}).name or "them"))
+  end
+
+  function BR:startBotBattle(botId)
+    local bot = self.players[botId]
+    local game = self.game
+    if not (bot and bot.status == "alive" and game) then return end
+    local ow = mod.world:overworld()
+    if not ow or ow.transitioning then return end
+    -- the same guards WorldAPI:startWildBattle applies before stacking a
+    -- battle: never a second one, never mid-warp, never with a dead party
+    local BattleTransition = require("src.render.BattleTransition")
+    for _, state in ipairs(game.stack and game.stack.states or {}) do
+      if state.awardExp or getmetatable(state) == BattleTransition then return end
+    end
+    local Party = require("src.pokemon.Party")
+    if not Party.firstHealthy(game.save.party or {}) then return end
+
+    self.status = "battle"
+    self.botFight = botId
+    self.pending = nil
+    broadcastPlace()
+
+    -- the party is handed to BattleState through the trainer.party hook
+    -- below, which is the engine's own seam for exactly this
+    self.botParty = Bots.party(self.matchSeed, botId, game.data)
+    local ok, battle = pcall(function()
+      return require("src.battle.BattleState")
+        .newTrainer(game, BOT_TRAINER_CLASS, 1)
+    end)
+    self.botParty = nil
+    if not ok or not battle then
+      mod.log:warn("couldn't start a bot battle: %s", tostring(battle))
+      self.status = "alive"
+      self.botFight = nil
+      return
+    end
+    battle.onFinish = function(result) ow:afterBattle(result, battle) end
+    ow:pushBattle(battle)
+  end
+
+  -- one battle's worth of party override, for the bot fight we just built
+  mod.hooks:wrap("trainer.party", function(next, oppClass, partyIndex, partyDef)
+    if BR.botParty then return BR.botParty end
+    return next(oppClass, partyIndex, partyDef)
+  end)
+
+  -- A bot battle is an ordinary engine battle, so its outcome arrives on
+  -- battle.ended rather than link.battle_ended.  A loss blacks the player
+  -- out, which world.blacked_out below turns into elimination.
+  mod.events:on("battle.ended", function(ev)
+    local botId = BR.botFight
+    if not botId then return end
+    BR.botFight = nil
+    if BR.status == "battle" then BR.status = "alive" end
+    if ev.result == "win" then
+      local bot = BR.players[botId]
+      if bot then bot.status = "out" end
+      if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
+      giveBotLoot(botId)
+      BR:checkWinner()
+    end
+    broadcastPlace()
+  end)
 
   function BR:beginBattle(opponentId, isHost, _nonce)
     if self.battle then return end
@@ -600,8 +779,30 @@ return function(mod)
           BR:tryEngage()
         end
       end
+      -- bots keep walking while we are in a battle or a menu: their world
+      -- does not pause because ours did
+      BR:tickBots()
     end
     return next(game, dt)
+  end)
+
+  -- Party is health, so a whiteout is elimination however it happened -- a
+  -- bot trainer, a route trainer, a wild encounter.  (A PvP link battle
+  -- never blacks anyone out: cable rules leave the real party untouched,
+  -- which is why link.battle_ended handles that case separately.)
+  mod.events:on("world.blacked_out", function()
+    if not (BR.phase == "match" and BR.status ~= "out") then return end
+    BR.status = "out"
+    local save = BR.game and BR.game.save
+    if save then
+      save.inventory = {}
+      save.bagOrder = nil
+      save.money = 0
+    end
+    if BR.relay then BR.relay:broadcast(Wire.out()) end
+    say("You whited out!\nYou are out of\nthe match.")
+    BR:checkWinner()
+    broadcastPlace()
   end)
 
   -- Leaving a map takes our copy of every ghost with it: they are runtime
@@ -626,7 +827,11 @@ return function(mod)
     npc:facePlayer(ow.player)
     -- talking counts as engaging if they are alive and we are
     if BR.status == "alive" and BR.players[id] and BR.players[id].status == "alive"
-       and not BR.battle and not BR.pending then
+       and not BR.battle and not BR.pending and not BR.botFight then
+      if Bots.isBot(id) then
+        BR:startBotBattle(id)
+        return
+      end
       BR.nonceSeq = BR.nonceSeq + 1
       BR.pending = { to = id, nonce = BR.nonceSeq,
                      host = Engage.isHost(BR.myId, id) }
@@ -696,6 +901,20 @@ return function(mod)
   mod.exports.leave = function() return BR:teardown() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
+  mod.exports.setBots = function(n)
+    BR.botCount = math.max(0, math.min(Bots.MAX, math.floor(tonumber(n) or 0)))
+    return BR.botCount
+  end
+  mod.exports.bots = function()
+    local out = {}
+    for id, p in pairs(BR.players) do
+      if p.bot then
+        out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
+                          status = p.status }
+      end
+    end
+    return out
+  end
   mod.exports.code = function() return BR.relay and BR.relay.code end
   mod.exports.lastError = function() return BR.relay and BR.relay.error end
   mod.exports.memberCount = function()
