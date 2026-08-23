@@ -80,6 +80,12 @@ mobile/ios/bundle_id.local
 # Local options / preferences
 /options.lua*
 
+# The mod loader exports this for the native settings UI.  A real run writes
+# it into the LOVE save directory, but the headless loader in tests/ writes
+# it relative to the working directory, so running the mod suites from the
+# repo root leaves one here.
+/mod_option_schemas.json
+
 # User-owned ROMs imported for individual mods. Manifests declare the
 # destinations, but source checkouts and packaged mods never ship the files.
 /mods/*/baseroms/
