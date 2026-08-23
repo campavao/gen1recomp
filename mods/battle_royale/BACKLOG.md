@@ -259,7 +259,29 @@ leaving and the host re-hosting.
 
 ## P5 — bigger design ideas
 
-### BR-16 · Safari opening phase
+### BR-16 · Safari opening phase — DONE (POK-21)
+
+**Resolved 2026-08-23:** `BR.phase` gained `safari` and `drop`. The host
+deals everyone a distinct cell of `SAFARI_ZONE_CENTER` (`Spawn.pickIn`) and
+`start` carries the round's length (`SAFARI SECONDS`, default 120; wire
+PROTOCOL 3). The loadout hook writes an EMPTY party and the gate's own
+`save.safari = { balls = 30, steps = 502 }`, so the engine's Safari — the
+BALL/BAIT/ROCK/RUN battles, the steps/500 counter, the PA game-over —
+runs unmodified. Three things had to come from outside: the host's clock
+(`safari` beats every 5 s, 0 = buzzer), the centre's two gate warps
+refused via `movement.collision`, and a **stand-in lead** lent for one
+encounter while the party is empty, because `BattleState.newWild` marks a
+battle with no healthy party dead ("skipping") — it never draws the lead
+in a Safari battle, so nobody sees it; it leaves on `battle.ended`. At the
+buzzer: caught nothing → `eliminate()` (its guard now spans the round);
+otherwise the vanilla `ow:safariGameOver()` (PA jingle, "Time's up!",
+walk to the gate), then the picker (BR-17). Nobody fights until the drop:
+`tryEngage`, the ghost-talk path and inbound challenges all wait for
+`phase == "match"`; bots stop hunting in the Safari. The gate's Fuchsia
+door is refused for the rest of the match. Decided during implementation:
+no starter (the Safari IS the team), the vanilla step and ball limits stay
+as the real game's second and third ways out, the fog clock starts at the
+host's landing, and the fog's eye is NOT shown in the picker (v1).
 
 Everyone starts together in the Safari Zone with a time limit to catch what
 they can, seeing each other immediately, unable to battle. When the timer
@@ -267,7 +289,15 @@ ends, everyone is spread across Kanto and the Safari is closed for the rest of
 the match. Solves the cold open (you meet people in minute one) and the
 build-a-team arc at the same time.
 
-### BR-17 · Choose where you drop
+### BR-17 · Choose where you drop — DONE (POK-22)
+
+**Resolved 2026-08-23:** the Safari's exit screen. At the gate a `ListMenu`
+("DROP WHERE?") lists the fly towns in Town Map order; B closes it and the
+tick reopens it, because there is no staying at the gate. The choice lands
+on a random walkable cell of that town (`Spawn.pickIn`, one cell) via
+`mod.world:warpTo(..., { arrive = "fly" })`, `lastHeal` moves with it, and
+`phase` becomes `match` on the choice. Bots get a town from their own rng
+stream at the buzzer and are placed host-side.
 
 Pick a town rather than being scattered at random; the exact tile within it is
 still random so a popular town does not stack everyone on one cell. Pairs
