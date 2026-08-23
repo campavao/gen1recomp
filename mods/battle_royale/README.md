@@ -237,7 +237,42 @@ diff:
 | `src/core/Game.lua` | `Game:startNewGame(opts)` (with `intro=false`) | start a fresh game straight into the world, so a match can drop you in without Oak's speech |
 
 All four are generic — any mod with a self-driven actor, an adopted link
-transport, or its own new-game flow wants them.
+transport, or its own new-game flow wants them. They are proposed upstream
+as **RFC 0014**.
+
+### ...and running without them
+
+`lib/shim.lua` installs the same behaviour from outside on an engine that
+does not have the seams, so **this mod folder works on a stock build too**.
+On an engine that has them it does nothing at all. The boot log says which:
+
+```
+battle royale: engine has every seam natively
+battle royale: shimmed: world.talk (interact wrapper), CodeEntry (...), ...
+```
+
+It is a fallback, not a design. Patching engine modules from a mod is worse
+than a hook in every way that matters — two mods patching one function
+clobber each other instead of chaining, and there is no version contract, so
+an upstream refactor breaks it silently. Each patch therefore touches one
+function, and the summary line keeps "still shimming X" visible instead of
+letting it become the permanent normal.
+
+Four of the five are values that are either there or not. `world.talk` is
+the awkward one: a call site in the *middle* of `interact()`, so there is
+nothing to extend and no way for a mod to see whether it exists. The shim
+raises the hook first and hands the press back to the untouched original
+whenever nobody claims it, and decides whether it is needed at all by asking
+whether the other four are native — they ship in one commit. Guessing wrong
+would raise the hook twice for one press, so it fails toward not patching.
+
+Two known gaps, both harmless here: an object reached *across a counter* is
+not claimed by the shimmed path (a ghost is never behind a mart counter),
+and `os.time` is denied to mods, so a shimmed `startNewGame` does not stamp
+`sessionStartedAt` — a match world is thrown away, and nothing reads it.
+
+`tests/shim_test.lua` runs the same assertions on both engines and is the
+thing that proves the fallback is honest; run it in either tree.
 
 ## What's here / what's next
 
@@ -261,6 +296,7 @@ a fight with a *player* on sight rather than only closing distance.
 ```sh
 luajit mods/battle_royale/tests/br_test.lua        # wire, engage, spawn, a live relay round-trip
 luajit mods/battle_royale/tests/br_load_test.lua   # loads through the real headless loader
+luajit mods/battle_royale/tests/shim_test.lua      # the seams, native or shimmed
 cd mods/battle_royale/relay && node --test && cd -  # the relay server over real sockets
 ```
 

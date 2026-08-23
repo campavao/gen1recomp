@@ -30,6 +30,7 @@ local Engage = require("mods.battle_royale.lib.engage")
 local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
 local LocalRoom = require("mods.battle_royale.lib.localroom")
+local Shim = require("mods.battle_royale.lib.shim")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
@@ -111,6 +112,13 @@ local STORY_FLAGS = {
 }
 
 return function(mod)
+  -- On an engine that already has the seams (RFC 0014) this does nothing.
+  -- On one that does not, it installs them from outside so the same mod
+  -- folder runs on a stock build.  First, because everything below assumes
+  -- they exist.
+  Shim.apply()
+  mod.log:info("battle royale: %s", Shim.summary())
+
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
