@@ -1,10 +1,11 @@
 -- Run on an engine that does not have the seams yet.
 --
--- The mod needs seven things the stock engine has no public way to do (five
+-- The mod needs eight things the stock engine has no public way to do (five
 -- are proposed upstream as RFC 0014, two more -- the battle.style and
--- catch.nickname hooks -- as RFC 0015).  On a build that has them, this
--- file does nothing at all.  On a build that does not, it installs the same
--- behaviour from outside, so one mod folder works on both.
+-- catch.nickname hooks -- as RFC 0015, and the catch.party_full hook as
+-- RFC 0016).  On a build that has them, this file does nothing at all.  On
+-- a build that does not, it installs the same behaviour from outside, so
+-- one mod folder works on both.
 --
 -- Everything here is a LAST RESORT and says so.  Patching engine modules
 -- from a mod is worse than a hook in every way that matters: two mods
@@ -478,6 +479,51 @@ local function shimBattleRules()
   end
 end
 
+-- ----------------------------------------------------------- Boxes.deposit
+--
+-- catch.party_full (RFC 0016): the seam is a call site in the middle of
+-- storeCaughtMon, invisible to a mod on a build that predates it -- the same
+-- shape of problem as world.talk, and with the same answer: raise the hook
+-- from the one call the old branch makes that a patch can reach.  A claim
+-- refuses the deposit, so nothing reaches a box on either engine; on a seam
+-- engine the call site raises first and a claim never gets here, so this
+-- fires a second time only for a hook that already declined, which is
+-- stateless and declines again.  The mod takes custody from the
+-- pokemon.caught emit, which carries the mon the deposit refused.
+--
+-- What the shim cannot repair is the text: the old branch answers a refused
+-- deposit with "But every BOX is full!" before the mod's picker opens --
+-- the wrong reason for the right decision, and the argument for the seam.
+
+local function shimCatchPartyFull()
+  local BattleState = tryRequire("src.battle.BattleState")
+  if BattleState and BattleState.partyFullDestination then
+    return note("native", "catch.party_full")
+  end
+  local Boxes = tryRequire("src.pokemon.Boxes")
+  local Runtime = tryRequire("src.mods.Runtime")
+  if not (Boxes and Runtime) then
+    return note("failed", "catch.party_full", "no Boxes/Runtime")
+  end
+  if Boxes.__brPartyFullShim then return end
+  local original = Boxes.deposit
+  if type(original) ~= "function" then
+    return note("failed", "catch.party_full", "no deposit to wrap")
+  end
+
+  Boxes.deposit = function(save, mon)
+    if Runtime.wantsHook("catch.party_full") then
+      local claimed = Runtime.call("catch.party_full", function() return false end,
+                                   { save = save, mon = mon })
+      if claimed then return nil end
+    end
+    return original(save, mon)
+  end
+
+  Boxes.__brPartyFullShim = true
+  note("patched", "catch.party_full", "deposit asks the hook first")
+end
+
 -- ------------------------------------------------------------------ apply
 
 -- Idempotent: safe to call from more than one place, and a second call is a
@@ -494,6 +540,7 @@ function Shim.apply()
   shimLinkState()
   shimStartNewGame()
   shimBattleRules()
+  shimCatchPartyFull()
   return report
 end
 

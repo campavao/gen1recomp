@@ -394,6 +394,9 @@ return function(mod)
     self.pendingLoot = {}
     self.lootFrom = nil
     self.lastOpponent = nil
+    self.pendingDrop = nil   -- a release that never landed (POK-34)
+    self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
+    self.dropSeq = nil
     self.matchSeed = nil
     self.botFight = nil
     self.botParty = nil
@@ -1297,9 +1300,10 @@ return function(mod)
   -- to earn it was ceremony -- and slow, under fog pressure.  A beaten team
   -- is yours if you reach it first.
   --
-  -- The ball is claimed for everyone only on YES.  NO -- or a full party --
-  -- leaves it on the ground for the next trainer, and a claim that lands
-  -- while the box is still open is answered by the ball being gone.
+  -- The ball is claimed for everyone only on YES.  NO -- or backing out of
+  -- the drop picker at a full party -- leaves it on the ground for the next
+  -- trainer, and a claim that lands while a menu is still open is answered
+  -- by the ball being gone.
   function BR:openSpill(key)
     local ball = self.spills:get(key)
     local game = self.game
@@ -1322,28 +1326,124 @@ return function(mod)
         end
         local save = game.save
         if #(save.party or {}) >= 6 then
-          say("Your party is\nfull!")
+          -- POK-34: full is not a refusal any more -- you choose who makes
+          -- room, and what you release lands here as a ball.  Cancel (or
+          -- losing the race while the picker is up) keeps the status quo:
+          -- the ball stays right where it is.
+          self:offerDropForBall(key, ball, name)
           return
         end
-        -- claimed now, everywhere
-        self.spills:take(key)
-        if self.relay then self.relay:broadcast(Wire.took(key)) end
-        local Pokemon = require("src.pokemon.Pokemon")
-        local Party = require("src.pokemon.Party")
-        local BattleState = require("src.battle.BattleState")
-        local mon = Pokemon.new(data, ball.species, ball.level)
-        mon.hp = 1                 -- on its last legs, exactly as it fell
-        BattleState.stampOT(save, mon)
-        Party.add(save.party, mon)
-        local dex = save.pokedex
-        if dex then
-          dex.seen[ball.species] = true
-          dex.owned[ball.species] = true
-        end
-        say(("%s joined\nyour party!"):format(name))
+        self:claimSpill(key, ball, name)
       end,
     }))
     return true
+  end
+
+  -- Take a claimed spill ball: build the mon at 1 HP exactly as it fell,
+  -- mark the dex, tell the room.  Shared by the plain take and the
+  -- full-party trade (POK-34).
+  function BR:claimSpill(key, ball, name)
+    local game = self.game
+    local save = game.save
+    -- claimed now, everywhere
+    self.spills:take(key)
+    if self.relay then self.relay:broadcast(Wire.took(key)) end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local Party = require("src.pokemon.Party")
+    local BattleState = require("src.battle.BattleState")
+    local mon = Pokemon.new(game.data, ball.species, ball.level)
+    mon.hp = 1                 -- on its last legs, exactly as it fell
+    BattleState.stampOT(save, mon)
+    Party.add(save.party, mon)
+    local dex = save.pokedex
+    if dex then
+      dex.seen[ball.species] = true
+      dex.owned[ball.species] = true
+    end
+    say(("%s joined\nyour party!"):format(name))
+  end
+
+  -- One mon on the ground, in the spill's own language: the same placement
+  -- search, the same wire message, the same claim flow as the balls a
+  -- beaten trainer leaves (POK-34).  Trading up leaves a trace anyone can
+  -- profit from.
+  function BR:spillDropped(mon)
+    local game, relay = self.game, self.relay
+    local here = game and mod.world:current()
+    if not (game and here and here.mapId and mon and mon.species) then return end
+    local data = game.data
+    local cells = Spills.placeAround(here.x, here.y, 1, function(x, y)
+      return Spawn.walkable(data.maps, data.tilesets, here.mapId, x, y)
+    end)
+    local cell = cells[1] or { x = here.x, y = here.y }
+    self.dropSeq = (self.dropSeq or 0) + 1
+    local spill = { map = here.mapId, mons = {
+      { key = (self.myId or 0) .. ":drop:" .. self.dropSeq,
+        x = cell.x, y = cell.y, species = mon.species, level = mon.level or 5 },
+    } }
+    if relay then relay:broadcast(Wire.spill(spill.map, spill.mons)) end
+    self.spills:add(spill)
+  end
+
+  -- The full-party trade for a claimed ball: the party screen as a picker
+  -- (PartyMenu's pickOnly -- A picks, B keeps what you have).  The pick
+  -- re-checks the race, because the ball could change hands while the
+  -- picker was up.
+  function BR:offerDropForBall(key, ball, ballName)
+    local game = self.game
+    local save = game.save
+    local PartyMenu = require("src.ui.PartyMenu")
+    game.stack:push(PartyMenu.new(game, {
+      party = save.party,
+      pickOnly = true,
+      onSwitch = function(dropped)
+        if not self.spills:get(key) then
+          say("It's gone --\nsomeone was\nquicker.")
+          return
+        end
+        for i, member in ipairs(save.party) do
+          if member == dropped then table.remove(save.party, i) break end
+        end
+        self:spillDropped(dropped)
+        self:claimSpill(key, ball, ballName)
+      end,
+    }))
+  end
+
+  -- The catch picker (POK-34): a 6/6 catch hands you the decision the PC
+  -- used to make silently.  Pick a member to release and the catch takes
+  -- their slot; B keeps your six and the catch is gone.  The release itself
+  -- waits for the overworld -- the pick happens inside the battle screen,
+  -- and the ball lands where you stand (pendingDrop, flushed by the tick
+  -- below once the stack is back on the map).
+  function BR:offerDropForCatch(battle, mon)
+    local data = battle.game and battle.game.data
+    local def = data and data.pokemon and data.pokemon[mon.species]
+    local caughtName = (def and def.name) or tostring(mon.species)
+    battle:uiNext(function()
+      return battle:buildScreen("PartyMenu", {
+        battle = battle,
+        party = battle:playerPartyView(),
+        pickOnly = true,
+        onSwitch = function(dropped)
+          local save = battle.game.save
+          local ddef = data and data.pokemon and data.pokemon[dropped.species]
+          local droppedName = (ddef and ddef.name) or tostring(dropped.species)
+          for i, member in ipairs(save.party) do
+            if member == dropped then table.remove(save.party, i) break end
+          end
+          if not require("src.pokemon.Party").add(save.party, mon) then
+            -- cannot happen at 5/6, but a catch is never lost to a table
+            save.party[#save.party + 1] = mon
+          end
+          self.pendingDrop = dropped
+          battle:sayNext(("%s was\nreleased."):format(droppedName))
+        end,
+        onCancel = function()
+          battle:sayNext(("%s was\nreleased."):format(caughtName))
+        end,
+      })
+    end)
   end
 
   -- ------- bots roaming, and bots fighting each other
@@ -1551,6 +1651,22 @@ return function(mod)
     return next(mon, ctx)
   end)
 
+  -- A full party never sends a catch to the box -- there is no box in a
+  -- match (POK-36) -- so the decision is the player's: release a team
+  -- member for it, or let the catch go (POK-34).  On an engine with the
+  -- seam the hook carries the battle and the picker opens right here; on a
+  -- shimmed one it carries only the mon, so custody is taken now and the
+  -- pokemon.caught event (which has the battle) drives the same picker.
+  mod.hooks:wrap("catch.party_full", function(next, ctx)
+    if not inMatch() then return next(ctx) end
+    if ctx.battle then
+      BR:offerDropForCatch(ctx.battle, ctx.mon)
+      return true
+    end
+    BR.claimedCatch = ctx.mon
+    return true
+  end)
+
   -- 1X, whatever the speed rows say.  A match has a shared clock (the fog),
   -- other people, and a lockstep battle at the end of a walk; fast-forward
   -- through any of it is cheating, and slow-motion in a fight is too.  The
@@ -1606,11 +1722,23 @@ return function(mod)
     if BR.phase == "match" and ev and ev.battle then BR.localBattle = ev.battle end
   end)
 
+  -- Custody taken on a shimmed engine (catch.party_full above): the deposit
+  -- was refused, the box text lied, and the mon is only in this payload.
+  -- On a seam engine the destination is "mod" and this never matches.
+  mod.events:on("pokemon.caught", function(ev)
+    local claimed = BR.claimedCatch
+    BR.claimedCatch = nil
+    if not (claimed and ev and ev.mon and claimed == ev.mon) then return end
+    if not (BR.phase == "match" and ev.battle) then return end
+    BR:offerDropForCatch(ev.battle, ev.mon)
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
+    BR.claimedCatch = nil   -- custody never consumed: nothing is pending
     local npc = BR.npcFight
     BR.npcFight = nil
     if npc and BR.phase == "match" and ev.result == "win" and not BR.botFight then
@@ -1738,6 +1866,7 @@ return function(mod)
     if self.phase == "over" then return end
     self.phase = "over"
     self.ghosts:despawnAll()
+    self.pendingDrop = nil   -- the match ended before the release could land
     if id == self.myId then
       say("You are the last\ntrainer standing!\nYou win!")
     elseif id then
@@ -1851,6 +1980,20 @@ return function(mod)
       end
       BR:spectatorInput(game)
       BR:tickWatch()
+    end
+
+    -- A released team member (POK-34) lands where you stand, once you are
+    -- standing somewhere: the pick happened inside the battle screen, and
+    -- the ball belongs to the overworld's loot language.  The guards are
+    -- openSpill's -- on the map, not mid-warp -- so the ball never lands
+    -- under a transition.
+    if BR.pendingDrop and BR.phase == "match" then
+      local ow = mod.world:overworld()
+      if ow and game.stack:top() == ow and not ow.transitioning then
+        local mon = BR.pendingDrop
+        BR.pendingDrop = nil
+        BR:spillDropped(mon)
+      end
     end
     return next(game, dt)
   end)

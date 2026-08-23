@@ -398,6 +398,13 @@ do
      species = "RATTATA" } } }) == nil, "a keyless ball is refused")
   ok(Wire.decode({ t = "spill", map = "R", mons = {} }) == nil,
      "an empty spill is refused")
+  -- a 6/6 release travels as a one-ball spill under its own key namespace,
+  -- which the elimination keys (ownerId:i) can never collide with
+  local drop = Wire.decode(Wire.spill("ROUTE_1",
+    { { key = "5:drop:1", x = 5, y = 6, species = "PIDGEY", level = 8 } }))
+  ok(drop ~= nil, "a single released mon travels as a spill")
+  eq(#drop.mons, 1, "of one ball")
+  eq(drop.mons[1].key, "5:drop:1", "with its drop key intact")
   eq(Wire.decode(Wire.took("7:1")).key, "7:1", "took carries the key")
   ok(Wire.decode({ t = "took" }) == nil, "took without a key is refused")
 

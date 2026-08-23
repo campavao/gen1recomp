@@ -170,6 +170,12 @@ local RULES = {
       if mod.exports.nickname ~= nil then return mod.exports.nickname end
       return next(mon, ctx)
     end)
+    mod.hooks:wrap("catch.party_full", function(next, ctx)
+      mod.exports.fullAsked = (mod.exports.fullAsked or 0) + 1
+      mod.exports.fullMon = ctx and ctx.mon
+      if mod.exports.fullAnswer ~= nil then return mod.exports.fullAnswer end
+      return next(ctx)
+    end)
   ]],
 }
 
@@ -276,6 +282,55 @@ if not nativeEngine then
     "stock: a second finish does not restore a stale baseline")
   T.eq(stubCalls.enter, 2, "stock: the real enter still ran for each battle")
   T.eq(stubCalls.finish, 2, "stock: and the real finish")
+end
+
+-- ------- catch.party_full behaves the same on both engines
+--
+-- The engine's seam is BattleState:partyFullDestination(), asked from the
+-- middle of storeCaughtMon; the stock fallback wraps Boxes.deposit so a
+-- claim shows as a refused deposit.  Same question to both: does a caught
+-- mon reach a box once a mod owns the choice?
+
+local Boxes = require("src.pokemon.Boxes")
+
+local function fullSave()
+  local party = {}
+  for i = 1, 6 do party[i] = { species = "RATTATA", level = 5 } end
+  return { party = party, options = { battleStyle = "shift" } }
+end
+
+if BattleState.partyFullDestination then
+  probe.fullAnswer = true
+  T.eq(fixtureBattle():partyFullDestination({ species = "ABRA" }), "mod",
+    "seam: a claim answers \"mod\"")
+  T.eq(probe.fullAsked, 1, "the hook was asked once for that catch")
+  probe.fullAnswer = false
+  T.eq(fixtureBattle():partyFullDestination({ species = "ABRA" }), "box",
+    "seam: a decline answers \"box\"")
+  probe.fullAnswer = nil
+  T.eq(fixtureBattle():partyFullDestination({ species = "ABRA" }), "box",
+    "seam: falling through answers \"box\"")
+  T.eq(Boxes.__brPartyFullShim, nil, "the shim left Boxes.deposit alone")
+  probe.fullAnswer = true
+  T.eq(Boxes.deposit(fullSave(), { species = "ABRA" }), 1,
+    "seam: deposit itself still deposits -- the call site decides, not the box")
+  T.eq(probe.fullAsked, 3, "so the box code never asked the hook")
+  probe.fullAnswer = nil
+end
+
+-- Stock only: there is no method to ask, so the shim's Boxes.deposit wrap
+-- IS the call site, and custody shows as a refused deposit.
+if not nativeEngine then
+  T.eq(Boxes.__brPartyFullShim, true, "stock: the deposit wrap is installed")
+  probe.fullAnswer = true
+  local save = fullSave()
+  local caught = { species = "ABRA" }
+  T.eq(Boxes.deposit(save, caught), nil, "stock: a claim refuses the deposit")
+  T.eq(#Boxes.active(save), 0, "and the box stays empty")
+  T.eq(probe.fullMon, caught, "and the hook was handed the refused mon")
+  probe.fullAnswer = nil
+  T.eq(Boxes.deposit(save, caught), 1, "stock: falling through deposits")
+  T.eq(#Boxes.active(save), 1, "into the box, as it always did")
 end
 
 rules.release()

@@ -118,6 +118,11 @@ never overwrite your actual playthrough.
   swap, and party-as-health is meant to bite.
 - **No nickname prompt** on a catch. The team is disposable and you may
   catch a dozen under fog pressure.
+- **A full party means choosing who to release.** At 6/6, a catch or a
+  loot-ball take opens the party screen as a picker: drop one to make room,
+  or keep the team you have. The released Pokémon lands as a ball at your
+  feet, claimable by anyone — trading up leaves a trace. Nothing ever
+  reaches a box.
 - **Game speed is 1X.** A match has a shared clock and other people in it;
   fast-forward through the fog or slow-motion in a fight is cheating. The
   hotkey and the OPTION rows are ignored until the match ends.
@@ -379,11 +384,13 @@ diff:
 | `src/link/LinkState.lua` | `LinkState.newFromSession` + the `adopted` stage, and the `link.battle_ended` event | adopt an already-paired transport and skip the connect UI; report the battle's outcome + party so a mode above it can react |
 | `src/core/Game.lua` | `Game:startNewGame(opts)` (with `intro=false`) | start a fresh game straight into the world, so a match can drop you in without Oak's speech |
 | `src/battle/BattleState.lua` | the `battle.style` and `catch.nickname` hooks | force SET and skip the nickname prompt for a match without writing the player's OPTION row |
+| `src/battle/BattleState.lua` | the `catch.party_full` hook (`partyFullDestination`) | hand a full-party catch to the mod's own picker instead of laundering it through a PC the mode has locked |
 
 All of them are generic — any mod with a self-driven actor, an adopted link
 transport, its own new-game flow, or a rule it wants to hold for a while
 wants them. The first four are proposed upstream as **RFC 0014**, the two
-battle-rule hooks as **RFC 0015**.
+battle-rule hooks as **RFC 0015**, and the full-party catch hook as
+**RFC 0016**.
 
 ### ...and running without them
 
@@ -403,7 +410,7 @@ an upstream refactor breaks it silently. Each patch therefore touches one
 function, and the summary line keeps "still shimming X" visible instead of
 letting it become the permanent normal.
 
-Four of the five are values that are either there or not. `world.talk` is
+Five of the six are values that are either there or not. `world.talk` is
 the awkward one: a call site in the *middle* of `interact()`, so there is
 nothing to extend and no way for a mod to see whether it exists. The shim
 raises the hook first and hands the press back to the untouched original
@@ -427,6 +434,15 @@ workaround the seam exists to avoid — one speed-hotkey press mid-battle
 persists SET to disk, and the restore repairs it on the next press. It is
 reported in the boot line like everything else, so it cannot quietly become
 the normal.
+
+`catch.party_full` is the same shape of problem as `world.talk` — a call
+site in the middle of `storeCaughtMon` — but it has a name to check: a seam
+engine answers through `BattleState:partyFullDestination()`, so the shim
+stands down by looking for the method. Without it, the shim asks the hook
+from inside `Boxes.deposit`, and a claim refuses the deposit so nothing
+reaches a box either way. What that cannot repair is the text: the stock
+branch prints "But every BOX is full!" before the mod's picker opens — the
+wrong reason for the right decision, and the argument for the seam.
 
 `tests/shim_test.lua` runs the same assertions on both engines and is the
 thing that proves the fallback is honest; run it in either tree.
