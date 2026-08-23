@@ -17,10 +17,15 @@ recorded so whoever picks it up does not repeat the search.
 radius 1.5 forever. Anyone standing inside it is safe indefinitely, and
 nothing else forces a confrontation.
 
-**Fix:** a final phase that closes to nothing (everything is fog), or an
-explicit sudden-death after the last shrink. The level ladder has the same
-number of rungs, so both clocks stop together — worth deciding whether levels
-keep climbing too.
+**Decided:** the fog never clamps. Past phase 6 it keeps shrinking until it
+covers the whole map, and the endgame becomes who survives longest inside it
+— expected to be rarer than players simply finishing each other off. Remove
+the clamp in `Fog.radius` and let `Fog.PHASES` continue to 0.
+
+**Watch out:** this collides with BR-2. If the whole map is fog and a Poison
+lead is immune, whoever holds a Poison lead wins by standing still, and the
+stalemate comes back in a worse form. One of the two has to give — either
+immunity becomes resistance, or the final all-fog phase ignores immunity.
 
 **Done when:** a match with survivors who refuse to fight still ends.
 
@@ -34,11 +39,13 @@ to be at home in the fog, but *total* immunity means a Poison lead ignores the
 ring for the whole match. Kanto is full of Zubat/Nidoran/Koffing/Grimer, so
 this is the common case, not a corner.
 
-**Fix:** make it resistance rather than immunity — half damage, or immune for
-the first N ticks only, or immune outside the final ring but not inside it.
+**Status:** Poison is the ONLY lead-type ability that exists today — there is
+no wider system, just this one check. Adding more is parked deliberately to
+keep the first version simple.
 
-**Done when:** a Poison lead is a real advantage in the fog and still loses to
-it eventually.
+**Still needs a decision, because BR-1 forces it:** once the fog covers the
+whole map, an immune lead wins by doing nothing. Make it resistance (half
+damage) or have the all-fog phase bite through immunity.
 
 ### BR-3 · No indication you are standing in the fog
 
@@ -86,11 +93,27 @@ dozen Pokémon under fog pressure.
 
 ## P2 — elimination and loot
 
-### BR-9 · Eliminated players' ghosts stay on the map
+> Fixed already, not a ticket: the spectator return warp used to fight the
+> engine's whiteout warp for fifteen seconds, which showed up as a flashing
+> POKeMON CENTER and the player spinning on the spot. It now waits to be moved
+> and moves back exactly once.
 
-They are non-interactive but still drawn, so the world fills up with corpses.
-Decide: despawn them, or keep them as visibly-dead markers (greyed, or a
-gravestone sprite).
+### BR-9 · A defeated trainer's sprite should disappear, leaving only the balls
+
+**Decided:** when anything is beaten — an eliminated player, a bot, or one of
+Kanto's own NPC trainers — the sprite goes away entirely and all that is left
+on the ground is its Poke Balls. Walking into an area and seeing balls with no
+trainer is how you read that somebody else got there first.
+
+Today eliminated players stay drawn (non-interactive) and NPC trainers stay
+put exactly as in vanilla.
+
+### BR-9b · Kanto's own NPC trainers should drop their Pokémon too
+
+Not just players and bots. Beating a route trainer leaves its team on the
+ground the same way, which makes the world readable — you can tell at a glance
+which routes have already been picked over, and it gives PvE a reason to
+exist beyond levels.
 
 ### BR-10 · Loot balls appear inconsistently
 
@@ -98,12 +121,17 @@ Sometimes a beaten player drops a ball, sometimes not. Suspect the spill
 broadcast or the placement search failing silently on a crowded/edge cell —
 `Spills.placeAround` gives up if it finds no walkable ring cell.
 
-### BR-11 · Opening a loot ball starts a battle
+### BR-11 · A loot ball should be a gift, not a second battle
 
-Expected: pick the Pokémon up as a gift. Today it initiates a catch battle at
-1 HP, which is a strange ceremony for something already beaten. (The battle
-was how the design made it *catchable* — but a straight gift is what a player
-expects, and is faster under fog pressure.)
+**Decided:** the hard part was the battle you already won; fighting a 1 HP
+opponent afterwards to earn it again is ceremony. Opening a ball shows the
+prompt Oak's lab uses for the starters —
+
+> This contains a NIDORINO. Do you want it?
+
+— with take-or-leave. No battle, no catch roll.
+
+Leave means the ball stays on the ground for someone else.
 
 ---
 

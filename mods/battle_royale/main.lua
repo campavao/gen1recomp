@@ -1448,37 +1448,31 @@ return function(mod)
     -- Spectating happens where you fell, not in a POKeMON CENTER two towns
     -- away.
     --
-    -- The engine's whiteout warp is asynchronous and lands well after
-    -- world.blacked_out, so this cannot simply warp once and stop: doing that
-    -- put us back on the right tile, saw the position match, let go -- and
-    -- then the engine's warp completed and moved us anyway.  So the position
-    -- has to be observed HOLDING before we stop asserting it.
+    -- Racing the engine's whiteout warp does not work and looks terrible:
+    -- retrying until the position stuck meant a fade to the CENTER, a fade
+    -- back, and the player spinning on the spot for as long as the two warps
+    -- fought.  So this does not race it at all -- it WAITS to be moved, then
+    -- moves back exactly once.  If nothing ever moves us (the fog, a PvP
+    -- loss) there is nothing to undo and this never fires.
     if BR.fellAt and BR.status == "out" then
       local target = BR.fellAt
       local here = mod.world:current()
       local now = clock() or 0
-      target.giveUpAt = target.giveUpAt or (now + 15)
+      target.giveUpAt = target.giveUpAt or (now + 20)
       if here and here.mapId then
-        if here.mapId == target.map and here.x == target.x
-           and here.y == target.y then
-          target.settledAt = target.settledAt or now
-          if now - target.settledAt >= 1.5 then BR.fellAt = nil end
-        else
-          target.settledAt = nil
-          if now >= (target.nextTry or 0) then
-            target.nextTry = now + 0.4
-            local ok, err = mod.world:warpTo(target.map, target.x, target.y,
-                                             target.facing, { arrive = "teleport" })
-            if not ok then
-              mod.log:warn("could not return the spectator to %s (%s)",
-                           tostring(target.map), tostring(err))
-            end
+        local moved = here.mapId ~= target.map
+          or here.x ~= target.x or here.y ~= target.y
+        if moved then
+          BR.fellAt = nil       -- one attempt, after the engine has had its turn
+          local ok, err = mod.world:warpTo(target.map, target.x, target.y,
+                                           target.facing)
+          if not ok then
+            mod.log:warn("could not return the spectator to %s (%s)",
+                         tostring(target.map), tostring(err))
           end
+        elseif now > target.giveUpAt then
+          BR.fellAt = nil       -- never moved: we are already where we fell
         end
-      end
-      if BR.fellAt and now > target.giveUpAt then
-        BR.fellAt = nil
-        mod.log:warn("gave up returning the spectator to %s", tostring(target.map))
       end
     end
 
