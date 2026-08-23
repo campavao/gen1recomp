@@ -29,6 +29,7 @@ local Spawn = require("mods.battle_royale.lib.spawn")
 local Engage = require("mods.battle_royale.lib.engage")
 local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
+local LocalRoom = require("mods.battle_royale.lib.localroom")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
@@ -54,6 +55,9 @@ local RESYNC_TICKS = 300
 -- rightly drops the connection as a flood.  Seconds keep bots walking at a
 -- human pace and the traffic bounded, whatever the host's clock is doing.
 local BOT_STEP_SECONDS = 0.45
+-- what SOLO VS BOTS fills an empty roster with: enough that the match has a
+-- shape to it, few enough that the first fight is not immediate
+local SOLO_BOTS = 8
 
 -- The trainer class a bot fights as.  The class only supplies the sprite,
 -- the name banner and the AI temperament -- the party comes from
@@ -135,6 +139,7 @@ return function(mod)
     -- in that handler finds nil and the loot goes nowhere.
     lastOpponent = nil,
     botCount = 0,         -- how many bots the host will add at start
+    solo = false,         -- hosting a room of one, with no server
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
     botParty = nil,       -- handed to the trainer.party hook for one battle
@@ -250,6 +255,23 @@ return function(mod)
     return true
   end
 
+  -- A match against bots needs no server: hand the relay a room that has
+  -- nobody else in it.  Everything above this line is unchanged -- the mod
+  -- still hosts, still broadcasts, still runs the same match; the messages
+  -- just have nowhere to go.  It matters because "I want to try this" should
+  -- not begin with starting a Node process.
+  function BR:hostSolo()
+    self:reset()
+    local relay = Relay.new({ transport = LocalRoom.new(), log = mod.log })
+    wireRelay(relay)
+    local ok, err = relay:host(myName())
+    if not ok then return false, err end
+    self.relay = relay
+    self.solo = true
+    if self.botCount < 1 then self.botCount = SOLO_BOTS end
+    return true
+  end
+
   function BR:join(code)
     self:reset()
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
@@ -272,6 +294,7 @@ return function(mod)
       self.battle = nil
     end
     self.relay = nil
+    self.solo = false
     self.players = {}
     self.pending = nil
     self.phase = "off"
@@ -1413,6 +1436,19 @@ return function(mod)
     })
   end)
 
+  -- ...and from the title screen, because everything a match needs it makes
+  -- itself.  Requiring a save first meant sitting through Oak before you
+  -- could reach a mode that throws the save away.
+  mod.hooks:wrap("ui.title_menu.items", function(next, game, items)
+    local out = next(game, items)
+    if type(out) ~= "table" then return out end
+    return mod.ui.insertBefore(out, "OPTION", {
+      label = "BATTLE ROYALE",
+      keepOpen = true,
+      onSelect = function() mod.ui.push(game, SCREEN) end,
+    })
+  end)
+
   -- Restore a remembered relay address on load; a vanilla New Game also
   -- leaves the match world (the save is a real playthrough again).
   mod.events:on("save.created", function()
@@ -1455,6 +1491,7 @@ return function(mod)
   -- mod, or a POKEPORT_DRIVER script can run a match without simulating
   -- menu taps.  These are the menu's own code paths, nothing extra.
   mod.exports.host = function() return BR:host() end
+  mod.exports.hostSolo = function() return BR:hostSolo() end
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end

@@ -561,5 +561,51 @@ do
   eq(hostRoster and #hostRoster, 1, "host roster shrinks when the guest leaves")
 end
 
+-- ------------------------------------------------------------------
+-- the room with nobody in it: solo play without a server
+-- ------------------------------------------------------------------
+do
+  local LocalRoom = require("mods.battle_royale.lib.localroom")
+
+  local relay = Relay.new({ transport = LocalRoom.new() })
+  local joined, roster = false, nil
+  relay:on("joined", function() joined = true end)
+  relay:on("roster", function(m) roster = m end)
+  relay:on("message", function() ok(false, "a room of one delivered a message") end)
+  relay:on("closed", function(r) ok(false, "the local room closed: " .. tostring(r)) end)
+
+  ok(relay:host("LONER"), "hosting a local room succeeds with no server")
+  relay:update()
+  ok(relay:isOpen(), "the local room reaches the lobby")
+  ok(joined, "and reports joined")
+  ok(relay:isHost(), "the one member is the host")
+  eq(roster and #roster, 1, "the roster is a room of one")
+  eq(roster and roster[1].name, "LONER", "under the name we gave")
+
+  -- broadcasting into an empty room is a no-op rather than an error, which
+  -- is exactly what lets every match path above run solo unchanged
+  ok(relay:broadcast(Wire.place("ROUTE_1", 1, 2, "down", "alive", "SPRITE_RED")),
+     "broadcasting into an empty room is accepted")
+  ok(relay:send(99, Wire.challenge(1)), "so is a unicast to nobody")
+  relay:update()
+
+  -- it has to answer its own pings, or the silence timeout would make a solo
+  -- match disconnect itself partway through
+  relay.lastPing = -1000
+  relay:update()
+  ok(relay.lastHeard > 0, "its pong refreshes the silence timer")
+  relay.lastPing = -1000
+  relay:update()
+  ok(relay:isOpen(), "the local room stays open across ping cycles")
+
+  -- there is no other room to join
+  local j = Relay.new({ transport = LocalRoom.new() })
+  local closedWith = nil
+  j:on("closed", function(r) closedWith = r end)
+  j:join("ABC123", "NOBODY")
+  j:update()
+  ok(closedWith ~= nil, "joining a code with no server fails cleanly")
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

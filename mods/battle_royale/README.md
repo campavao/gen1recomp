@@ -12,11 +12,21 @@ level scaling, no loot spill yet. See "What's here / what's next" below.
 
 ## Playing it
 
-Everyone needs this mod enabled and the same game version. Play runs over a
-small relay server (see [`relay/`](relay/)) so it works over the internet,
-through NAT, with no port-forwarding.
+**On your own, from a cold start:** pick `BATTLE ROYALE` on the title
+screen, then `SOLO VS BOTS`, then `START MATCH`. That is the whole setup.
+No server to run, no save to make, no Oak. A solo room fills itself with
+eight bots if you haven't picked a number, and the `BOTS` row changes it.
 
-1. `START` → `ROYALE`
+Solo needs no relay because there is nobody to relay to: `lib/localroom.lua`
+answers the room protocol for a room of one, so the mod hosts, broadcasts
+and runs the same match it always does — the messages just have nowhere to
+go. Everything below is the same code path with other people in it.
+
+**With other people:** everyone needs this mod enabled and the same game
+version. Play runs over a small relay server (see [`relay/`](relay/)) so it
+works over the internet, through NAT, with no port-forwarding.
+
+1. `START` → `ROYALE` (or `BATTLE ROYALE` on the title screen)
 2. `NAME` to pick the trainer name everyone else sees (7 letters, the
    Gen 1 naming grid). `SERVER...` once, to point at your relay as
    `host:port` (default is `127.0.0.1:7790` for a relay on your own
@@ -51,9 +61,13 @@ you return to the title** and start or continue a real game, so a match can
 never overwrite your actual playthrough.
 
 The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
-once a match is live.
+once a match is live. The same screen is on the title menu, so a match is
+reachable before a save exists — which matters because a match throws its
+world away anyway.
 
 ## Running the relay
+
+Only for playing with other people — `SOLO VS BOTS` never touches it.
 
 ```sh
 node mods/battle_royale/relay/server.js   # :7790 (PORT or BR_RELAY_PORT to change)

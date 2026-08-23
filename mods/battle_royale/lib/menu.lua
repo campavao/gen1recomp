@@ -49,7 +49,7 @@ function Menu.build(mod, BR)
         }
       elseif relay and relay:isOpen() then
         items[#items + 1] = {
-          label = "CODE " .. tostring(relay.code),
+          label = BR.solo and "SOLO MATCH" or ("CODE " .. tostring(relay.code)),
           keepOpen = true, onSelect = function() end,
         }
         for _, m in ipairs(relay.members) do
@@ -87,6 +87,14 @@ function Menu.build(mod, BR)
         items[#items + 1] = { label = "CANCEL",
                               onSelect = function() BR:teardown() end }
       else
+        -- first, because it is the one that needs nothing else running
+        items[#items + 1] = {
+          label = "SOLO VS BOTS",
+          onSelect = function()
+            local ok, err = BR:hostSolo()
+            if not ok then say(mod, err or "Couldn't start.") end
+          end,
+        }
         items[#items + 1] = {
           label = "HOST GAME",
           onSelect = function()
