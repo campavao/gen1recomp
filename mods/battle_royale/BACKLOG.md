@@ -1,8 +1,13 @@
 # Kanto Battle Royale — backlog
 
-Ticket-shaped, so it can be pasted into Linear as-is. Ordered by priority
-within each group. `[dx]` marks something already diagnosed, with the finding
-recorded so whoever picks it up does not repeat the search.
+**These are now Linear issues** — PLA-63 to PLA-86, in the
+[Kanto Battle Royale](https://linear.app/planning-friend/project/kanto-battle-royale-de6d9da09a87)
+project. Linear is the source of truth from here; this file is kept as the
+long-form version, since the diagnoses in it are longer than a ticket wants to
+be and were expensive to find.
+
+`[dx]` marks something already diagnosed, with the finding recorded so whoever
+picks it up does not repeat the search.
 
 ---
 
