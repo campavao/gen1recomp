@@ -1,0 +1,16 @@
+{
+  "id": "coop",
+  "name": "Kanto Co-op",
+  "version": "0.1.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "category": "MULTIPLAYER",
+  "game_version": ">=0.0.0-0 <2.0.0",
+  "priority": 100,
+  "permissions": ["network"],
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "description": "Two trainers, one Kanto. Connect over the link transport and see each other walk the overworld in real time, then talk to start a battle or a trade."
+}
