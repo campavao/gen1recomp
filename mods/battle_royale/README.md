@@ -23,7 +23,8 @@ through NAT, with no port-forwarding.
    machine). Both are remembered.
 3. One player picks **HOST GAME** and reads out the six-character room code.
 4. Everyone else picks **JOIN BY CODE** and enters it.
-5. The host can add **BOTS** (0–8, the row cycles) to fill the match out.
+5. The host can add **BOTS** (the row steps 0, 1, 2, 3, 5, 8, 12, 16, 20,
+   25, 30 and wraps) to fill the match out.
 6. The host sees the roster fill in and picks **START MATCH**. Everyone
    drops into Kanto at once.
 
@@ -117,6 +118,17 @@ won. The winner tells the room (`botout`); the host recounts the survivors.
 A bot drops with one Pokémon at the starting level, the same as a player —
 two made the bot the favourite in every opening fight, which ended most
 matches before anyone could build a team.
+
+**How many bots?** Up to **30**, verified live end-to-end. Kanto has 34
+outdoor maps, so thirty bots each get a route or town of their own and the
+drop stays spread out. The limit above that is the wire rather than the
+world: the host relays one step per bot per beat, about 1.4 messages a
+second each, against the relay's 120-a-second flood guard — thirty sits near
+40/s with comfortable room for everyone's own movement and a battle in
+flight, while sixty would be at three quarters of the cap before a fight
+starts. Going much past thirty wants area-of-interest relaying (only
+broadcast a bot when somebody is on its map), which is DESIGN D6 and would
+make the count nearly free.
 
 Bot steps are paced in **real seconds**, not ticks. A bot's step is ambience
 that happens to be network traffic, and tying its rate to the host's logic

@@ -17,7 +17,27 @@ local Spawn = require("mods.battle_royale.lib.spawn")
 local Bots = {}
 
 Bots.ID_BASE = 1000
-Bots.MAX = 8
+
+-- Kanto has 34 outdoor maps, so up to ~34 bots each get a route of their
+-- own and the drop stays spread out.  The binding limit above that is not
+-- the world, it is the wire: the host broadcasts one step per bot per beat,
+-- which at BOT_STEP_SECONDS works out around 1.4 messages a second per bot
+-- against the relay's 120-a-second flood guard.  Thirty leaves comfortable
+-- room for that plus everyone's own movement and a battle in flight; sixty
+-- would sit at roughly three quarters of the cap before a fight starts.
+Bots.MAX = 30
+
+-- What the lobby's BOTS row cycles through.  A row that stepped one at a
+-- time would take thirty presses to fill a match.
+Bots.LADDER = { 0, 1, 2, 3, 5, 8, 12, 16, 20, 25, 30 }
+
+-- the next rung up from `n`, wrapping back to none
+function Bots.nextCount(n)
+  for _, step in ipairs(Bots.LADDER) do
+    if step > (tonumber(n) or 0) then return step end
+  end
+  return 0
+end
 
 -- Names fit the 7-character Gen 1 box and read like trainers, not robots.
 local NAMES = {
@@ -49,13 +69,20 @@ function Bots.rng(seed, id)
   return Spawn.rng((tonumber(seed) or 1) + (tonumber(id) or 0) * 7919)
 end
 
+-- Names are DEALT, not rolled.  Drawing each one independently collides by
+-- the pigeonhole principle long before the roster is full -- a thirty-bot
+-- match produced two SETHs and two KIMs -- and "SETH beat you" has to name
+-- one trainer.  So the list is rotated by a per-match amount and then
+-- indexed by the bot's position, which is unique by construction and still
+-- varies from match to match.  Past the end of the list the rotation wraps
+-- and a digit distinguishes the lap, inside the 7-character name box.
 function Bots.name(seed, id)
-  local rng = Bots.rng(seed, id)
-  local base = NAMES[rng(1, #NAMES)]
-  -- a suffix keeps two bots that rolled the same name distinguishable
-  -- without pushing past the name box
-  local n = id - Bots.ID_BASE
-  if n > 0 and n <= 9 and #base <= 6 then return base .. tostring(n) end
+  local n = (id - Bots.ID_BASE) - 1 -- 0-based position in the roster
+  if n < 0 then n = 0 end
+  local offset = Spawn.rng(seed)(0, #NAMES - 1)
+  local base = NAMES[(n + offset) % #NAMES + 1]
+  local lap = math.floor(n / #NAMES)
+  if lap > 0 then return base:sub(1, 6) .. tostring(lap) end
   return base
 end
 

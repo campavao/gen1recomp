@@ -87,6 +87,15 @@ end
 do
   local Bots = require("mods.battle_royale.lib.bots")
 
+  -- the lobby ladder covers 0..MAX and always comes back to none
+  eq(Bots.nextCount(0), 1, "the ladder starts at one bot")
+  eq(Bots.nextCount(Bots.MAX), 0, "the ladder wraps at the cap")
+  eq(Bots.nextCount(4), 5, "an off-ladder count steps to the next rung")
+  local seen, n = { [0] = true }, 0
+  for _ = 1, #Bots.LADDER + 1 do n = Bots.nextCount(n); seen[n] = true end
+  ok(seen[Bots.MAX], "the ladder reaches the cap")
+  eq(Bots.LADDER[#Bots.LADDER], Bots.MAX, "the ladder ends at the cap")
+
   ok(Bots.isBot(Bots.ID_BASE), "ID_BASE is a bot id")
   ok(not Bots.isBot(1), "a room id is not a bot")
   ok(not Bots.isBot(nil), "nil is not a bot")
@@ -95,7 +104,26 @@ do
   local id = Bots.idFor(1)
   eq(Bots.name(4242, id), Bots.name(4242, id), "the name is stable for a seed")
   ok(#Bots.name(4242, id) <= 7, "the name fits the Gen 1 name box")
-  ok(Bots.name(1, id) ~= Bots.name(2, id) or true, "a different seed may differ")
+
+  -- a full roster must be all-distinct: the winner banner names one trainer
+  local usedNames, dupes = {}, {}
+  for i = 1, Bots.MAX do
+    local nm = Bots.name(4242, Bots.idFor(i))
+    if usedNames[nm] then dupes[#dupes + 1] = nm end
+    usedNames[nm] = true
+    ok(#nm <= 7, "bot " .. i .. " name fits the box (" .. nm .. ")")
+  end
+  eq(#dupes, 0, "a full roster has no duplicate names ("
+     .. table.concat(dupes, ",") .. ")")
+
+  -- and past the end of the name list too
+  local wideNames, wideDupes = {}, 0
+  for i = 1, 40 do
+    local nm = Bots.name(7, Bots.idFor(i))
+    if wideNames[nm] then wideDupes = wideDupes + 1 end
+    wideNames[nm] = true
+  end
+  eq(wideDupes, 0, "40 bots (past the name list) stay distinct")
 
   local a = Bots.party(4242, id, nil)
   local b = Bots.party(4242, id, nil)

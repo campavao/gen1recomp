@@ -138,6 +138,7 @@ return function(mod)
 
   function BR:playerName() return myName() end
   function BR:maxBots() return Bots.MAX end
+  function BR:nextBotCount() return Bots.nextCount(self.botCount) end
 
   function BR:setName(name)
     self.myName = Wire.cleanName(name)

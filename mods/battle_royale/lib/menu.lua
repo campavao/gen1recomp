@@ -45,12 +45,12 @@ function Menu.build(mod, BR)
                                 keepOpen = true, onSelect = function() end }
         end
         if relay:isHost() then
-          -- cycles 0..MAX; the menu closes on select, so reopening it is
-          -- what shows the new count
+          -- steps up the ladder (0,1,2,3,5,8,...,30) and wraps; the menu
+          -- closes on select, so reopening it is what shows the new count
           items[#items + 1] = {
             label = "BOTS: " .. tostring(BR.botCount),
             onSelect = function()
-              BR.botCount = (BR.botCount + 1) % (BR.maxBots() + 1)
+              BR.botCount = BR:nextBotCount()
               mod.ui.push(game, "BattleRoyaleMenu")
             end,
           }
