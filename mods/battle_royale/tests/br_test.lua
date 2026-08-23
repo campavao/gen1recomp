@@ -155,6 +155,26 @@ do
   end
   ok(allRattata, "species the build lacks are filtered out of the pool")
 
+  -- roaming: the seams a map opens onto, which is how bots ever meet
+  eq(#Bots.exits(nil), 0, "no map, no exits")
+  eq(#Bots.exits({}), 0, "a map with no connections is a dead end")
+  local exits = Bots.exits({ connections = { north = "VIRIDIAN_CITY",
+                                             south = "PALLET_TOWN" } })
+  eq(#exits, 2, "both seams are exits")
+  eq(exits[1], "PALLET_TOWN", "and they come back sorted")
+  eq(#Bots.exits({ connections = { north = { map = "VIRIDIAN_CITY" } } }), 1,
+     "a table-shaped connection resolves too")
+
+  -- noticing each other
+  local p1 = { map = "R", x = 5, y = 5 }
+  local p2 = { map = "R", x = 7, y = 5 }
+  ok(Bots.near(p1, p2), "two bots a few cells apart notice each other")
+  ok(not Bots.near(p1, { map = "R", x = 20, y = 5 }), "across the map they do not")
+  ok(not Bots.near(p1, { map = "OTHER", x = 5, y = 5 }),
+     "and never through a different map")
+  ok(not Bots.near(p1, nil), "a missing bot notices nobody")
+  ok(Bots.near(p1, { map = "R", x = 5, y = 6 }, 1), "the range is adjustable")
+
   -- wander: walled in on every side means stand still
   local bot = { map = "M", x = 5, y = 5, facing = "up" }
   local never = function() return false end
@@ -164,6 +184,22 @@ do
     if Bots.wander(bot, rng, never) then moved = true end
   end
   ok(not moved, "a bot with nowhere to go never steps")
+
+  -- hunting: given somewhere to be, it closes rather than strolls
+  local always = function() return true end
+  local hunter = { map = "M", x = 5, y = 5, facing = "up" }
+  local rngH = Bots.rng(3, id)
+  local closed = 0
+  for _ = 1, 40 do
+    local dir = Bots.wander(hunter, rngH, always, { x = 12, y = 5 })
+    if dir == "right" then closed = closed + 1 end
+  end
+  ok(closed > 20, "a hunting bot mostly steps toward its target (" .. closed .. "/40)")
+  -- and it will not walk into a wall to do it
+  local wall = function(_, x) return x <= 5 end
+  local blocked = Bots.wander({ map = "M", x = 5, y = 5, facing = "up" },
+                              Bots.rng(4, id), wall, { x = 12, y = 5 })
+  ok(blocked ~= "right", "but not through a wall")
 
   -- open field: it does move, and only ever one of the four grid directions
   local always = function() return true end

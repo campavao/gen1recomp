@@ -587,11 +587,43 @@ return function(mod)
     return nil
   end
 
+  local cellCache = {}
+  local function walkableCells(mapId)
+    if cellCache[mapId] then return cellCache[mapId] end
+    local data = BR.game and BR.game.data
+    local def = data and data.maps[mapId]
+    if not def then return {} end
+    local cells = Spawn.cellsOf(def, data.tilesets[def.tileset])
+    cellCache[mapId] = cells
+    return cells
+  end
+
+  local function roamBot(id, p, now)
+    local data = BR.game and BR.game.data
+    local exits = Bots.exits(data and data.maps[p.map])
+    if #exits == 0 then return end
+    p.rng = p.rng or Bots.rng(BR.matchSeed, id)
+    local dest = exits[p.rng(1, #exits)]
+    local cells = walkableCells(dest)
+    if #cells == 0 then return end
+    local c = cells[p.rng(1, #cells)]
+    p.map, p.x, p.y = dest, c.x, c.y
+    p.lastRoam = now
+    p.fogTicks = nil -- a new map is a fresh verdict from the fog
+    BR.ghosts:despawn(id)
+    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
+                                  p.status, p.sprite, id))
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
     local now = clock()
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map then
+        -- every so often, walk a seam into a connected map
+        if now and (now - (p.lastRoam or 0)) >= Bots.ROAM_SECONDS then
+          roamBot(id, p, now)
+        end
         local due = now == nil or (now - (p.lastStep or 0)) >= BOT_STEP_SECONDS
         if due then
           p.lastStep = now or 0
@@ -599,7 +631,19 @@ return function(mod)
           -- on how many other bots are in the table or what order pairs()
           -- happens to hand them back
           p.rng = p.rng or Bots.rng(self.matchSeed, id)
-          local dir = Bots.wander(p, p.rng, canWalk)
+          -- hunt the nearest trainer sharing this map, bot or human, so a
+          -- crowded route resolves itself instead of two strangers pacing
+          -- opposite ends of it forever
+          local prey
+          for otherId, o in pairs(self.players) do
+            if otherId ~= id and o.status == "alive" and o.map == p.map then
+              if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
+                 < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
+                prey = o
+              end
+            end
+          end
+          local dir = Bots.wander(p, p.rng, canWalk, prey)
           if dir then
             local d = Bots.DELTA[dir]
             p.facing = dir
@@ -700,10 +744,9 @@ return function(mod)
             p.lastFogTick = now
             p.fogTicks = (p.fogTicks or 0) + 1
             if p.fogTicks >= Fog.TICKS_TO_KILL then
-              p.status = "out"
-              self.relay:broadcast(Wire.botout(id))
-              self.ghosts:despawn(id)
-              self:checkWinner()
+              -- same exit as losing a fight, so the fog leaves a team on the
+              -- ground too rather than quietly deleting one
+              self:eliminateBot(id, p, nil)
             end
           end
         end
@@ -922,6 +965,69 @@ return function(mod)
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
     return true
+  end
+
+  -- ------- bots roaming, and bots fighting each other
+  --
+  -- A bot that can only pace its spawn map never meets anybody: with thirty
+  -- of them across thirty-four maps they would each die alone to the fog.
+  -- Walking a connection is the same move a player makes at a route seam,
+  -- so it costs nothing in fiction and it is what makes the roster interact.
+
+  -- Resolve one meeting per tick, host-side and abstractly.  There is no
+  -- lockstep to run because neither side is a client, and nobody is owed a
+  -- battle screen for a fight they are not in -- a player watching the map
+  -- sees one trainer walk off and the other's team hit the ground, which is
+  -- what a fight between two strangers looks like from across a route.
+  function BR:tickBotFights()
+    if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
+    local now = clock()
+    if not now then return end
+    local live = {}
+    for id, p in pairs(self.players) do
+      if p.bot and p.status == "alive" and p.map
+         and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
+        live[#live + 1] = { id = id, p = p }
+      end
+    end
+    table.sort(live, function(a, b) return a.id < b.id end)
+    for i = 1, #live do
+      for j = i + 1, #live do
+        local a, b = live[i], live[j]
+        if Bots.near(a.p, b.p) then
+          a.p.lastFight, b.p.lastFight = now, now
+          -- a coin flip: both sides are one mon at the same rung, so there
+          -- is nothing to weigh.  When bots carry real teams this is where
+          -- the comparison goes.
+          local loser = (love.math.random() < 0.5) and a or b
+          local winner = (loser == a) and b or a
+          self:eliminateBot(loser.id, loser.p, winner.p.name)
+          return
+        end
+      end
+    end
+  end
+
+  -- A bot is out: its team spills where it fell, exactly as a player's does.
+  function BR:eliminateBot(id, p, killerName)
+    local data = BR.game and BR.game.data
+    p.status = "out"
+    if self.relay then self.relay:broadcast(Wire.botout(id)) end
+    self.ghosts:despawn(id)
+    if data and p.map then
+      local party = Bots.party(self.matchSeed, id, data, self:level())
+      local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
+        return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
+      end)
+      if spill and self.relay then
+        self.relay:broadcast(Wire.spill(spill.map, spill.mons))
+        self.spills:add(spill)
+      end
+    end
+    if killerName then
+      mod.log:info("%s beat %s", tostring(killerName), tostring(p.name))
+    end
+    self:checkWinner()
   end
 
   -- Beating a bot is worth a small authored drop rather than a transfer:
@@ -1168,6 +1274,7 @@ return function(mod)
       -- bots keep walking while we are in a battle or a menu: their world
       -- does not pause because ours did
       BR:tickBots()
+      BR:tickBotFights()
       BR:tickRing()
       BR:tickBotFog()
       -- the fog does not reach into a battle: taking the last of your party

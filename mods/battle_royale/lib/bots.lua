@@ -57,8 +57,41 @@ local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 
 
 Bots.DELTA = DELTA
 
+-- How often a bot wanders off the edge of its map into a connected one.
+-- Real seconds, like their steps: this is host-side traffic too, and it is
+-- what lets bots meet each other (and you) instead of pacing one route for
+-- the whole match.  Movement along the SAME connections a player walks --
+-- not a jump to somewhere convenient.
+Bots.ROAM_SECONDS = 25
+
+-- After a fight, both sides get a breather before another one, so a crowded
+-- map does not resolve its whole roster in a couple of ticks.
+Bots.FIGHT_COOLDOWN = 12
+
+-- Two bots notice each other about as far off as a player would.
+Bots.NOTICE = 3
+
 function Bots.isBot(id)
   return type(id) == "number" and id >= Bots.ID_BASE
+end
+
+-- The maps this one opens onto (north/south/east/west seams), sorted so the
+-- choice never depends on pairs() order.
+function Bots.exits(mapDef)
+  local out = {}
+  for _, dest in pairs((mapDef and mapDef.connections) or {}) do
+    local id = type(dest) == "table" and (dest.map or dest.to or dest[1]) or dest
+    if type(id) == "string" then out[#out + 1] = id end
+  end
+  table.sort(out)
+  return out
+end
+
+-- Are these two close enough to have noticed each other?
+function Bots.near(a, b, range)
+  if not (a and b) or a.map ~= b.map then return false end
+  local dx, dy = math.abs(a.x - b.x), math.abs(a.y - b.y)
+  return math.max(dx, dy) <= (range or Bots.NOTICE)
 end
 
 function Bots.idFor(index) return Bots.ID_BASE + index end
@@ -116,12 +149,34 @@ end
 --
 -- Bots keep their heading until it stops working, which reads as walking
 -- somewhere rather than twitching in place.
-function Bots.wander(bot, rng, canWalk)
+--
+-- `toward` (a cell) makes them hunt.  Without it two bots sharing a map
+-- would each random-walk a fifty-cell route and essentially never meet, so
+-- bot-versus-bot fights would be a feature that exists and never happens.
+-- With it they close on each other, which is both what makes the roster
+-- thin itself and the same predatory behaviour the players are under.
+function Bots.wander(bot, rng, canWalk, toward)
   if rng() < 0.2 then return nil end -- a pause, so they are not machines
 
   local function ok(dir)
     local d = DELTA[dir]
     return d and canWalk(bot.map, bot.x + d[1], bot.y + d[2])
+  end
+
+  if toward then
+    -- close the bigger gap first; fall through to a stroll if boxed in
+    local dx, dy = toward.x - bot.x, toward.y - bot.y
+    local wants = {}
+    if math.abs(dx) >= math.abs(dy) then
+      wants[1] = dx > 0 and "right" or (dx < 0 and "left" or nil)
+      wants[2] = dy > 0 and "down" or (dy < 0 and "up" or nil)
+    else
+      wants[1] = dy > 0 and "down" or (dy < 0 and "up" or nil)
+      wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
+    end
+    for _, dir in ipairs(wants) do
+      if ok(dir) then return dir end
+    end
   end
 
   if bot.facing and ok(bot.facing) and rng() < 0.7 then return bot.facing end
