@@ -34,7 +34,7 @@ immunity becomes resistance, or the final all-fog phase ignores immunity.
 
 **Done when:** a match with survivors who refuse to fight still ends.
 
-### BR-2 · A Poison lead is absolutely fog-proof, which removes the ring `[dx]`
+### BR-2 · Poison fog immunity — DONE (removed), revisit as POK-6 `[dx]`
 
 **Seen:** "The fog does not harm your POKeMON." around Fuchsia; no damage ever.
 
@@ -43,6 +43,10 @@ lead and `tickFog` then returns before doing damage. DESIGN D11 wanted Poison
 to be at home in the fog, but *total* immunity means a Poison lead ignores the
 ring for the whole match. Kanto is full of Zubat/Nidoran/Koffing/Grimer, so
 this is the common case, not a corner.
+
+**Resolved 2026-08-23:** immunity removed for players and bots (`99812bc0`).
+`Fog.immune` stays in lib/fog.lua, unused and documented as parked. POK-6 is
+now the revisit ticket, to be taken alongside POK-28.
 
 **Status:** Poison is the ONLY lead-type ability that exists today — there is
 no wider system, just this one check. Adding more is parked deliberately to
