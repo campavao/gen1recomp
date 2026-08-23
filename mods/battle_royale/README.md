@@ -30,6 +30,16 @@ through NAT, with no port-forwarding.
 
 You can run a match entirely on your own: host, set some bots, start.
 
+You start with **all eight badges and all five HMs**, because a match is
+twenty minutes and Kanto is gated for a campaign. The badges are what Gen 1
+checks before a field move will run at all, and they open the Route 22 gate
+and Victory Road. The HMs are still items you have to *teach* to something
+compatible — so catch a water type and you can Surf, catch a Machop and you
+can move boulders. Where you travel is still what team you can build; the
+gyms are just no longer in the way.
+
+Meanwhile the **fog** closes in. See below.
+
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
 last Pokémon. **Knock someone out and you take their bag and their money**
@@ -88,6 +98,38 @@ every link mode the game already has. Reimplementing a lockstep battle here
 would be a second, worse copy of it. Because the channel is separate from
 the room socket, a battle no longer ends your session — the old co-op
 limitation is gone.
+
+**The fog** (`lib/fog.lua`) is what turns this from a deathmatch into a
+battle royale: a ring that tightens on a shared clock until everyone left is
+in the same few squares.
+
+Drawing it took one decision worth knowing about. Kanto here is not a single
+canvas the way Hoenn was in the sibling project — it is 222 separate maps
+stitched by warps, with no global coordinate space to put a circle in. But
+the game already ships Kanto's real geography: `field.townMap.locations`
+gives **every** map a cell on the 16×16 Town Map grid, interiors included (a
+building sits on its town's square). So the ring is a circle in *Town Map
+space*, and a map is safe when its square falls inside it. The fog therefore
+follows the Kanto you know — it closes on a named place, the routes around
+it go first, and hiding in a building doesn't help because the building is
+on the same square as the town.
+
+Outside the ring, every Pokémon in your party loses 1 HP every four seconds
+— Gen 1's overworld poison rate, on a clock rather than a step counter,
+because a battle royale has to punish camping and not just walking. A level
+5 starter dies to about a careless minute in it, and a dash across a corner
+is survivable. A **Poison-type lead is immune**: the fog is its element
+(DESIGN D11), and it gives an unloved type a real reason to be on your team.
+Losing your last Pokémon to the fog eliminates you exactly like a whiteout.
+
+The host owns the clock and announces each shrink; nobody derives it from
+their own wall clock, which would drift. Bots caught outside walk out of it
+off-screen — real pathing across Kanto's warp graph is a much bigger
+feature, and relocating them keeps the match converging instead of quietly
+wiping the roster on the first shrink.
+
+`FOG SECONDS` (a mod option, default 120) is how long each ring lasts, so a
+default match runs about ten minutes and a quick one can be far shorter.
 
 **Party as health.** A whiteout is elimination, however it happened — a bot,
 a route trainer, a wild Pokémon — which the mod picks up from the engine's
@@ -152,19 +194,21 @@ transport, or its own new-game flow wants them.
 
 ## What's here / what's next
 
-**Here (v0):** rooms + lobby over a relay with name entry, bots (0–8, so a
-match is playable solo), random Kanto drop, the shared loadout, real-time
-presence, forced face-to-face battles, party-as-health elimination from any
-whiteout, victor-takes-the-bag loot, a save-slot guard (matches can't
-overwrite a real save), last-trainer-standing. Route/gym trainers stay live
-as PvE.
+**Here (v0):** rooms + lobby over a relay with name entry, bots (up to 30,
+so a match is playable solo), random Kanto drop, the shared loadout plus all
+badges and HMs, real-time presence, forced face-to-face battles, the
+shrinking fog on a shared clock with Poison immunity, party-as-health
+elimination from any whiteout, victor-takes-the-bag loot, a save-slot guard
+(matches can't overwrite a real save), last-trainer-standing. Route/gym
+trainers stay live as PvE.
 
 **Next, in rough order** (from the design in the sibling
 `pokemon-battle-royale` project's `docs/DESIGN.md`): the rest of the loot
-spill — the fallen team as 1-HP catchables (D8), a shrinking-ring / fog
-killer on a shared clock (D11), level-scaling + evolution on that clock
-(D12), bots to fill a match, and six-tile "eyeline" initiation instead of
-one (change `Engage.inFront`).
+spill — the fallen team as 1-HP catchables (D8), level-scaling + evolution
+on the same clock the fog uses (D12), six-tile "eyeline" initiation instead
+of one (change `Engage.inFront`), bots that fight each other rather than
+only the player, and drawing the ring on the Town Map item so you can see
+where to run.
 
 ## Tests
 

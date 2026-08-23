@@ -30,6 +30,7 @@ local Engage = require("mods.battle_royale.lib.engage")
 local Ghosts = require("mods.battle_royale.lib.ghosts")
 local Channel = require("mods.battle_royale.lib.channel")
 local Bots = require("mods.battle_royale.lib.bots")
+local Fog = require("mods.battle_royale.lib.fog")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -68,6 +69,25 @@ local START_LEVEL = 5
 local START_ITEMS = { POKE_BALL = 6, POTION = 1 }
 local START_MONEY = 3000
 
+-- Every badge and every HM, from the drop.
+--
+-- Kanto is gated for a story campaign, and a battle royale has no campaign:
+-- a match is twenty minutes long, so a player who catches a water type
+-- should be able to SURF on it now, not after beating Koga.  The badges are
+-- what Gen 1 checks before letting a field move run at all
+-- (Cut/CASCADE, Fly/THUNDER, Surf/SOUL, Strength/RAINBOW, Flash/BOULDER),
+-- and they also open the Route 22 gate and Victory Road (field.badgeGates).
+--
+-- The HMs are still ITEMS you have to teach to something compatible, so the
+-- traversal is earned by catching the right Pokemon -- which is exactly the
+-- "where you travel is what team you can build" loop the design wants
+-- (DESIGN D13), just without the gyms in the way.
+local START_BADGES = {
+  "BOULDERBADGE", "CASCADEBADGE", "THUNDERBADGE", "RAINBOWBADGE",
+  "SOULBADGE", "MARSHBADGE", "VOLCANOBADGE", "EARTHBADGE",
+}
+local START_HMS = { "HM_CUT", "HM_FLY", "HM_SURF", "HM_STRENGTH", "HM_FLASH" }
+
 -- Story flags a fresh Kanto save normally earns in Pallet/Oak's lab.  Set
 -- at match start so the intro scripts never fire and the towns are free to
 -- walk, while every route/gym trainer stays live as PvE.
@@ -80,6 +100,9 @@ local STORY_FLAGS = {
 return function(mod)
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
+    -- seconds per ring, not minutes: a short game wants 30, a long one 300
+    { key = "fog", label = "FOG SECONDS", type = "number",
+      default = Fog.DEFAULT_PHASE_SECONDS, min = 5, max = 600 },
   })
 
   local BR = {
@@ -111,6 +134,10 @@ return function(mod)
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
     botParty = nil,       -- handed to the trainer.party hook for one battle
+    ring = nil,           -- { phase, center = {x,y,id,name}, radius }
+    matchStartedAt = nil, -- host only: when the shared clock started
+    lastFogTick = nil,    -- when the fog last took its bite out of us
+    wasInFog = false,     -- so entering the fog is announced once
   }
 
   local function say(text) BRMenu.say(mod, text) end
@@ -251,6 +278,11 @@ return function(mod)
     self.matchSeed = nil
     self.botFight = nil
     self.botParty = nil
+    self.ring = nil
+    self.ringCenter = nil
+    self.matchStartedAt = nil
+    self.lastFogTick = nil
+    self.wasInFog = false
   end
 
   function BR:teardown(message)
@@ -341,6 +373,14 @@ return function(mod)
     save.party = { Pokemon.new(Data, START_SPECIES, START_LEVEL) }
     save.inventory = {}
     for id, n in pairs(START_ITEMS) do save.inventory[id] = n end
+    -- a badge or an HM this build does not carry is skipped rather than
+    -- written as a phantom id the bag would have to quarantine later
+    for _, id in ipairs(START_BADGES) do
+      if Data.items[id] then save.inventory[id] = 1 end
+    end
+    for _, id in ipairs(START_HMS) do
+      if Data.items[id] then save.inventory[id] = 1 end
+    end
     save.bagOrder = nil            -- rebuilt from inventory on next open
     save.pcItems = {}
     save.money = START_MONEY
@@ -443,6 +483,12 @@ return function(mod)
         self.pendingLoot[fromId] = msg
       end
 
+    elseif msg.t == "ring" then
+      -- the fog is the host's to declare, like the winner
+      if fromId == self.relay.hostId then
+        self:applyRing(msg.phase, msg.cx, msg.cy, msg.r, msg.place)
+      end
+
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
     end
@@ -542,6 +588,156 @@ return function(mod)
         end
       end
     end
+  end
+
+  -- ------- the fog
+  --
+  -- A circle in Town Map space (see lib/fog.lua).  The host owns the clock
+  -- and announces each shrink; nobody derives it from their own wall clock,
+  -- which would drift.  Everything after that is local: whether YOUR map is
+  -- inside, and what the fog does to you if it is not.
+
+  local function townLocations()
+    local field = BR.game and BR.game.data and BR.game.data.field
+    return field and field.townMap and field.townMap.locations
+  end
+
+  -- the named places worth closing the ring on
+  local function townList()
+    local locations = townLocations()
+    local maps = BR.game and BR.game.data and BR.game.data.maps
+    if not (locations and maps) then return {} end
+    local Map = require("src.world.Map")
+    local out = {}
+    for id, def in pairs(maps) do
+      if Map.isOutdoor(def) and Map.isFlyTown(def) and locations[id] then
+        out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
+                          name = locations[id].name or id }
+      end
+    end
+    return out
+  end
+
+  function BR:fogSeconds()
+    return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
+  end
+
+  function BR:applyRing(phase, cx, cy, radius, place)
+    local was = self.ring and self.ring.phase
+    self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
+                  radius = radius }
+    if was ~= phase and phase > 1 then
+      say(("The fog closes in\non %s!"):format(place or "KANTO"))
+    end
+  end
+
+  -- host only: advance the shared clock and tell the room
+  function BR:tickRing()
+    if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
+    local now = clock()
+    if not now then return end
+    self.matchStartedAt = self.matchStartedAt or now
+    local phase = Fog.phaseAt(now - self.matchStartedAt, self:fogSeconds())
+    if self.ring and self.ring.phase == phase then return end
+
+    local center = self.ringCenter or Fog.center(self.matchSeed, townList())
+    self.ringCenter = center
+    if not center then return end
+    local radius = Fog.radius(phase)
+    self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius, center.name))
+    self:applyRing(phase, center.x, center.y, radius, center.name)
+    self:sweepBotsIntoRing()
+  end
+
+  -- A bot caught outside walks out of the fog off-screen.  Real pathing
+  -- across Kanto's warp graph is a much bigger feature; relocating them is
+  -- invisible (nobody is watching an empty route) and it keeps the match
+  -- converging instead of quietly wiping the roster on the first shrink.
+  function BR:sweepBotsIntoRing()
+    local locations = townLocations()
+    local data = BR.game and BR.game.data
+    if not (locations and data and self.ring) then return end
+    local outdoor = Spawn.outdoorMaps(data.maps)
+    local safe = Fog.safeMaps(locations, outdoor, self.ring.center, self.ring.radius)
+    if #safe == 0 then return end
+    for id, p in pairs(self.players) do
+      if p.bot and p.status == "alive" and p.map
+         and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
+        local rng = Bots.rng(self.matchSeed, id + self.ring.phase)
+        local mapId = safe[rng(1, #safe)]
+        local cells = Spawn.cellsOf(data.maps[mapId], data.tilesets[data.maps[mapId].tileset])
+        if #cells > 0 then
+          local c = cells[rng(1, #cells)]
+          p.map, p.x, p.y = mapId, c.x, c.y
+          self.ghosts:despawn(id)
+          self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
+                                          p.status, p.sprite, id))
+        end
+      end
+    end
+  end
+
+  -- Are we standing in it, and what it costs.
+  function BR:tickFog()
+    if not (self.phase == "match" and self.status == "alive" and self.ring) then return end
+    local game, now = self.game, clock()
+    if not (game and now) then return end
+    local here = mod.world:current()
+    if not here then return end
+
+    local locations = townLocations()
+    if Fog.isSafe(locations, here.mapId, self.ring.center, self.ring.radius) then
+      self.wasInFog = false
+      return
+    end
+
+    -- a Poison lead is at home in it (DESIGN D11)
+    local lead = game.save.party and game.save.party[1]
+    if Fog.immune(lead, game.data) then
+      if not self.wasInFog then
+        self.wasInFog = true
+        say("The fog does not\nharm your POKeMON.")
+      end
+      return
+    end
+
+    if not self.wasInFog then
+      self.wasInFog = true
+      self.lastFogTick = now
+      say(("You are in the fog!\nGet to %s!")
+        :format((self.ring.center and self.ring.center.name) or "safety"))
+      return
+    end
+
+    if (now - (self.lastFogTick or now)) < Fog.TICK_SECONDS then return end
+    self.lastFogTick = now
+    local anyLeft = false
+    for _, mon in ipairs(game.save.party or {}) do
+      if mon.hp > 0 then
+        mon.hp = math.max(0, mon.hp - Fog.DAMAGE)
+      end
+      if mon.hp > 0 then anyLeft = true end
+    end
+    if not anyLeft then
+      self:eliminate("The fog took your\nlast POKeMON!")
+    end
+  end
+
+  -- One way out of a match, however it happened: a battle whiteout, or the
+  -- fog finishing the job outside one.
+  function BR:eliminate(message)
+    if self.status == "out" or self.phase ~= "match" then return end
+    self.status = "out"
+    local save = self.game and self.game.save
+    if save then
+      save.inventory = {}
+      save.bagOrder = nil
+      save.money = 0
+    end
+    if self.relay then self.relay:broadcast(Wire.out()) end
+    say(message or "You are out of\nthe match.")
+    self:checkWinner()
+    broadcastPlace()
   end
 
   -- Beating a bot is worth a small authored drop rather than a transfer:
@@ -783,6 +979,11 @@ return function(mod)
       -- bots keep walking while we are in a battle or a menu: their world
       -- does not pause because ours did
       BR:tickBots()
+      BR:tickRing()
+      -- the fog does not reach into a battle: taking the last of your party
+      -- while the battle screen is up would leave the engine holding a
+      -- fainted lead it never saw faint
+      if BR.status ~= "battle" then BR:tickFog() end
     end
     return next(game, dt)
   end)
@@ -792,18 +993,7 @@ return function(mod)
   -- never blacks anyone out: cable rules leave the real party untouched,
   -- which is why link.battle_ended handles that case separately.)
   mod.events:on("world.blacked_out", function()
-    if not (BR.phase == "match" and BR.status ~= "out") then return end
-    BR.status = "out"
-    local save = BR.game and BR.game.save
-    if save then
-      save.inventory = {}
-      save.bagOrder = nil
-      save.money = 0
-    end
-    if BR.relay then BR.relay:broadcast(Wire.out()) end
-    say("You whited out!\nYou are out of\nthe match.")
-    BR:checkWinner()
-    broadcastPlace()
+    BR:eliminate("You whited out!\nYou are out of\nthe match.")
   end)
 
   -- Leaving a map takes our copy of every ghost with it: they are runtime
@@ -905,6 +1095,30 @@ return function(mod)
   mod.exports.setBots = function(n)
     BR.botCount = math.max(0, math.min(Bots.MAX, math.floor(tonumber(n) or 0)))
     return BR.botCount
+  end
+  mod.exports.setFog = function(seconds)
+    mod.options:define({
+      { key = "relay", label = "RELAY", type = "text",
+        default = BR:relayAddress() },
+      { key = "fog", label = "FOG SECONDS", type = "number",
+        default = math.max(1, math.floor(tonumber(seconds) or 0)),
+        min = 1, max = 600 },
+    })
+    return BR:fogSeconds()
+  end
+  mod.exports.ring = function()
+    local r = BR.ring
+    if not r then return nil end
+    return { phase = r.phase, radius = r.radius,
+             place = r.center and r.center.name,
+             x = r.center and r.center.x, y = r.center and r.center.y }
+  end
+  mod.exports.inFog = function()
+    local here = BR.game and mod.world:current()
+    if not (here and BR.ring) then return false end
+    local field = BR.game.data and BR.game.data.field
+    local locations = field and field.townMap and field.townMap.locations
+    return not Fog.isSafe(locations, here.mapId, BR.ring.center, BR.ring.radius)
   end
   mod.exports.bots = function()
     local out = {}

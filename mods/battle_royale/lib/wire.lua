@@ -24,6 +24,7 @@
 --   {t="out"}                                     I have been eliminated
 --   {t="loot", items={{id=,n=}}, money=}          my bag, to my killer
 --   {t="botout", id=}                             I beat that bot
+--   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
 --   {t="winner", id=}                             host: the match is over
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
@@ -100,6 +101,12 @@ function Wire.loot(items, money)
 end
 
 function Wire.botout(id) return { t = "botout", id = id } end
+
+-- the host's word on where the fog is now; `place` is the centre's name,
+-- carried so every client can announce it without a location table lookup
+function Wire.ring(phase, cx, cy, r, place)
+  return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place }
+end
 function Wire.winner(id) return { t = "winner", id = id } end
 
 -- ------- decoding
@@ -215,6 +222,23 @@ end
 decoders.botout = function(m)
   if not isId(m.id) then return nil, "bad id" end
   return { t = "botout", id = m.id }
+end
+
+local function isCoord(v)
+  return type(v) == "number" and v == v and v >= -64 and v <= 64
+end
+
+decoders.ring = function(m)
+  if type(m.phase) ~= "number" or m.phase < 1 or m.phase > 64 then
+    return nil, "bad phase"
+  end
+  if not (isCoord(m.cx) and isCoord(m.cy)) then return nil, "bad centre" end
+  if type(m.r) ~= "number" or m.r ~= m.r or m.r < 0 or m.r > 64 then
+    return nil, "bad radius"
+  end
+  return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,
+           r = m.r,
+           place = type(m.place) == "string" and m.place:sub(1, MAX_ID) or nil }
 end
 
 decoders.winner = function(m)

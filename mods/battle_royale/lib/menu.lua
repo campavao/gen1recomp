@@ -30,6 +30,15 @@ function Menu.build(mod, BR)
           label = BR.status == "out" and "SPECTATING" or ("ALIVE: " .. alive),
           keepOpen = true, onSelect = function() end,
         }
+        -- where the fog is, and whether you are standing in it
+        local ring = BR.ring
+        if ring and ring.phase and ring.phase > 1 then
+          items[#items + 1] = {
+            label = "FOG: " .. tostring((ring.center and ring.center.name)
+                                        or "CLOSING"),
+            keepOpen = true, onSelect = function() end,
+          }
+        end
         items[#items + 1] = {
           label = "LEAVE MATCH",
           onSelect = function() BR:teardown("You left the match.") end,

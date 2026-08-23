@@ -69,6 +69,18 @@ do
   eq(Wire.decode(Wire.botout(1001)).id, 1001, "botout carries the bot id")
   ok(Wire.decode({ t = "botout" }) == nil, "botout without an id is refused")
 
+  local ring = Wire.decode(Wire.ring(3, 8, 9, 5.5, "CELADON CITY"))
+  ok(ring ~= nil, "ring round-trips")
+  eq(ring and ring.phase, 3, "ring carries the phase")
+  eq(ring and ring.r, 5.5, "ring carries a fractional radius")
+  eq(ring and ring.place, "CELADON CITY", "ring carries the place name")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1 }) == nil,
+     "a ring with no radius is refused")
+  ok(Wire.decode({ t = "ring", phase = 0, cx = 1, cy = 1, r = 2 }) == nil,
+     "phase 0 is refused")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = "x", cy = 1, r = 2 }) == nil,
+     "a malformed centre is refused")
+
   -- `as`: the host relaying a bot's movement
   eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
      "step carries the relayed actor")
@@ -167,6 +179,72 @@ do
   end
   ok(steps > 0, "a bot in the open walks (" .. steps .. "/200 beats)")
   ok(steps < 200, "and sometimes pauses")
+end
+
+-- ------- fog
+
+do
+  local Fog = require("mods.battle_royale.lib.fog")
+
+  -- the schedule: phase 1 covers everything, and it only ever tightens
+  eq(Fog.phaseAt(0, 60), 1, "a fresh match is in phase 1")
+  eq(Fog.phaseAt(59, 60), 1, "still phase 1 just before the first shrink")
+  eq(Fog.phaseAt(60, 60), 2, "phase 2 on the first shrink")
+  eq(Fog.phaseAt(10e6, 60), Fog.phaseCount(), "the clock stops at the last ring")
+  eq(Fog.phaseAt(0, 0), Fog.phaseCount(), "a zero-length phase means final ring")
+  local prev = math.huge
+  for p = 1, Fog.phaseCount() do
+    local r = Fog.radius(p)
+    ok(r < prev, "ring " .. p .. " is tighter than the last (" .. r .. ")")
+    prev = r
+  end
+  ok(Fog.isFinalPhase(Fog.phaseCount()), "the last phase is final")
+  ok(not Fog.isFinalPhase(1), "the first phase is not")
+
+  -- geometry on a town-map grid
+  local locations = {
+    HOME      = { x = 8, y = 8, name = "HOME" },
+    NEXTDOOR  = { x = 9, y = 8, name = "NEXTDOOR" },
+    FARAWAY   = { x = 15, y = 15, name = "FARAWAY" },
+    INDOORS   = { x = 8, y = 8, name = "HOME SHOP" }, -- shares HOME's square
+  }
+  local center = { x = 8, y = 8, id = "HOME", name = "HOME" }
+  ok(Fog.isSafe(locations, "HOME", center, 1.5), "the centre is inside")
+  ok(Fog.isSafe(locations, "NEXTDOOR", center, 1.5), "one square out is inside")
+  ok(not Fog.isSafe(locations, "FARAWAY", center, 1.5), "the far corner is out")
+  ok(Fog.isSafe(locations, "INDOORS", center, 1.5),
+     "a building is as safe as the town it stands in")
+  ok(not Fog.isSafe(locations, "FARAWAY", center, 3), "still out at radius 3")
+  ok(Fog.isSafe(locations, "FARAWAY", center, 15), "everything is in at phase 1")
+  ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
+     "a map with no square is never punished")
+
+  ok(Fog.distanceOutside(locations, "FARAWAY", center, 1.5) > 0, "outside is positive")
+  ok(Fog.distanceOutside(locations, "HOME", center, 1.5) < 0, "inside is negative")
+
+  local safe = Fog.safeMaps(locations, { "HOME", "NEXTDOOR", "FARAWAY" }, center, 1.5)
+  eq(#safe, 2, "safeMaps lists what is inside")
+  eq(safe[1], "HOME", "and returns them sorted")
+  eq(#Fog.safeMaps(locations, { "FARAWAY" }, center, 1.5), 1,
+     "an empty result falls back to the centre")
+
+  -- the centre is stable for a seed and is a named place
+  local towns = {
+    { id = "A", x = 1, y = 1, name = "ATOWN" },
+    { id = "B", x = 5, y = 5, name = "BTOWN" },
+    { id = "C", x = 9, y = 9, name = "CTOWN" },
+  }
+  local c1 = Fog.center(4242, towns)
+  eq(c1.id, Fog.center(4242, towns).id, "the centre is stable for a seed")
+  ok(c1.name ~= nil, "the centre is somewhere with a name")
+  ok(Fog.center(1, {}) == nil, "no towns means no centre")
+
+  -- a Poison lead walks the fog unharmed
+  local data = { pokemon = { ZUBAT = { types = { "POISON", "FLYING" } },
+                             RATTATA = { types = { "NORMAL" } } } }
+  ok(Fog.immune({ species = "ZUBAT" }, data), "a Poison type is immune")
+  ok(not Fog.immune({ species = "RATTATA" }, data), "a Normal type is not")
+  ok(not Fog.immune(nil, data), "no lead is not immune")
 end
 
 -- ------- engage
