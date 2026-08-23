@@ -1,7 +1,7 @@
 # Kanto Battle Royale — backlog
 
-**These are now Linear issues** — PLA-63 to PLA-86, in the
-[Kanto Battle Royale](https://linear.app/planning-friend/project/kanto-battle-royale-de6d9da09a87)
+**These are now Linear issues** — POK-5 to POK-28, in the
+[Kanto Battle Royale](https://linear.app/pokemon-battle-royale/project/kanto-battle-royale-8f9066b10315)
 project. Linear is the source of truth from here; this file is kept as the
 long-form version, since the diagnoses in it are longer than a ticket wants to
 be and were expensive to find.
