@@ -304,6 +304,41 @@ do
   local a = { id = 5, map = "R", x = 6, y = 5, facing = "left", moving = false, status = "alive" }
   eq(Engage.target(me, { a }), 5, "faces adjacent alive trainer -> target")
 
+  -- the eyeline reaches (DESIGN D10), and stops where it should
+  eq(Engage.RANGE, 6, "the eyeline is six cells")
+  for step = 1, Engage.RANGE do
+    a.x = 5 + step
+    eq(Engage.target(me, { a }), 5, "spotted " .. step .. " cells down the line")
+  end
+  a.x = 5 + Engage.RANGE + 1
+  ok(Engage.target(me, { a }) == nil, "one cell past the range is not spotted")
+
+  -- sight does not bend: off the facing axis is invisible at any distance
+  a.x, a.y = 8, 6
+  ok(Engage.target(me, { a }) == nil, "a trainer off the axis is not spotted")
+  a.y = 5
+
+  -- terrain stops it
+  local wallAt7 = function(x) return x == 7 end
+  a.x = 6
+  eq(Engage.target(me, { a }, { blocked = wallAt7 }), 5,
+     "someone in front of the wall is still spotted")
+  a.x = 9
+  ok(Engage.target(me, { a }, { blocked = wallAt7 }) == nil,
+     "someone behind a wall is not")
+  eq(#Engage.sightLine(me, 6, wallAt7), 2,
+     "the line stops on the blocking cell itself")
+  eq(#Engage.sightLine(me, 6), 6, "an unobstructed line runs the full range")
+
+  -- the nearest body on the line is the one engaged
+  local near = { id = 9, map = "R", x = 6, y = 5, facing = "left",
+                 moving = false, status = "alive" }
+  local far = { id = 3, map = "R", x = 9, y = 5, facing = "left",
+                moving = false, status = "alive" }
+  eq(Engage.target(me, { far, near }), 9,
+     "the closer trainer is engaged even with a lower id further off")
+  a.x = 6
+
   a.status = "out"
   ok(Engage.target(me, { a }) == nil, "eliminated player is not a target")
   a.status = "alive"; a.moving = true

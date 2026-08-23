@@ -538,7 +538,15 @@ return function(mod)
                               status = p.status,
                               busy = p.status == "battle" }
     end
-    local target = Engage.target(me, others)
+    -- terrain stops the eyeline; the other trainers on it do not, since they
+    -- are entities rather than map tiles (a body in the way is exactly the
+    -- nearest-first case Engage.target already resolves)
+    local map = ow.map
+    local target = Engage.target(me, others, {
+      blocked = function(x, y)
+        return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
+      end,
+    })
     if not target then return end
     -- A bot has no client to lockstep with, so its fight is a local trainer
     -- battle against the party every client derives from the seed.  No
