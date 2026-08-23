@@ -70,8 +70,21 @@ Meanwhile the **fog** closes in. See below.
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
 last Pokémon. **Knock someone out and you take their bag and their money**
-(the first slice of the loot spill). Reopen `ROYALE` any time to see how
-many trainers are left, or to leave.
+(the first slice of the loot spill). Reopen `ROYALE` any time to leave.
+
+**The HUD.** Two small boxes in the top corners of the overworld, drawn in
+the game's own font: `7 LEFT` on the right is how many trainers are still
+in it, and `FOG!` pulses on the left while you are standing outside the
+ring. Each bite of the fog is the overworld-poison beat you already know —
+the screen flickers dark and the poison chime plays — so you can feel it
+without opening a menu.
+
+**Once you are out, you watch.** `LEFT` / `RIGHT` hop between the trainers
+still in the match; the box on the left names who you are watching, and
+the view follows them — when they leave the map, or get five cells away,
+you are warped back to their side. You cannot walk, catch, or fight; you
+can turn on the spot and open your (empty) menus, and nothing you do
+reaches the match.
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can

@@ -64,7 +64,11 @@ keep the first version simple.
 whole map, an immune lead wins by doing nothing. Make it resistance (half
 damage) or have the all-fog phase bite through immunity.
 
-### BR-3 · No indication you are standing in the fog
+### BR-3 · No indication you are standing in the fog — DONE (POK-7)
+
+**Resolved 2026-08-23:** each fog tick sets the overworld's own
+`poisonFlash` and plays the `Poisoned` SFX (so it looks exactly like
+walking poisoned), and a `FOG!` box pulses top-left while `wasInFog`.
 
 **Seen:** one text box on entry and nothing after; easy to miss, and easy to
 read as "the fog is broken".
@@ -165,7 +169,19 @@ Leave means the ball stays on the ground for someone else.
 
 ## P3 — spectating
 
-### BR-12 · Spectator hopping + alive indicator `[next up]`
+### BR-12 · Spectator hopping + alive indicator — DONE (POK-17)
+
+**Resolved 2026-08-23:** `N LEFT` box top-right during a match. While out,
+LEFT/RIGHT are taken off the engine's press queue in `input.step` (before
+`Input:step` promotes them) and hop to a free cell beside the next living
+trainer; `tickWatch` re-warps when they change map or get > 5 cells away,
+at most every 2 s; `movement.collision` refuses the spectator's own steps.
+The watched name is shown top-left.
+
+**Found on the way — a real P0:** `roamBot` reset a bot's `fogTicks` on
+every map change, and bots roam every 25 s against a 40 s kill, so a bot
+that kept walking could never die in the fog. That alone could keep a match
+from ending. Fixed; the ticks now persist like a player's lost HP.
 
 LEFT/RIGHT cycles between living trainers while you are out; an on-screen
 counter shows how many are left. No bumpers exist — the engine has only

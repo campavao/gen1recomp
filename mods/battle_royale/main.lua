@@ -406,6 +406,8 @@ return function(mod)
     self.wasInFog = false
     self.lastLevelTick = nil
     self.announcedLevel = nil
+    self.watching = nil
+    self.lastHopAt = nil
   end
 
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
@@ -740,7 +742,12 @@ return function(mod)
     local c = cells[p.rng(1, #cells)]
     p.map, p.x, p.y = dest, c.x, c.y
     p.lastRoam = now
-    p.fogTicks = nil -- a new map is a fresh verdict from the fog
+    -- fogTicks deliberately survive the move.  They used to reset here ("a
+    -- new map is a fresh verdict"), and with a roam every 25 seconds against
+    -- a 40-second kill, a bot that kept walking could never die in the fog
+    -- -- which is exactly the match-never-ends that POK-5 was about.  The
+    -- ticks are the damage a player would still be carrying; whether the NEW
+    -- map is inside the ring is re-asked every tick anyway.
     BR.ghosts:despawn(id)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
                                   p.status, p.sprite, id))
@@ -924,10 +931,128 @@ return function(mod)
       end
       if mon.hp > 0 then anyLeft = true end
     end
+    -- the bite has to be FELT: one text box on entry and then silence read
+    -- as "the fog is broken" in play.  So each tick is the overworld-poison
+    -- beat Gen 1 players already know -- the screen flickers dark and the
+    -- poison chime plays -- on the engine's own flash so it looks exactly
+    -- like walking poisoned does.
+    local ow = mod.world:overworld()
+    if ow then ow.poisonFlash = 12 end
+    pcall(function() require("src.core.Sound").play(game.data, "Poisoned") end)
     if not anyLeft then
       self:eliminate("The fog took your\nlast POKeMON!")
     end
   end
+
+  -- ------- spectating (after elimination)
+  --
+  -- Being out used to mean standing where you fell with nothing to do.  Now
+  -- LEFT / RIGHT hop between the trainers still in it, and the view follows
+  -- whoever you picked: the spectator's own sprite is warped to a free cell
+  -- beside them, again whenever they get away, so the camera -- which only
+  -- ever follows the player -- keeps them in frame.  Nothing the spectator
+  -- does reaches the match: steps are refused (movement.collision below),
+  -- encounters and trainers already are, and a hop is a warp, which the
+  -- wire never carries.
+
+  local FOLLOW_CELLS = 5        -- re-warp when the watched trainer is this far
+  local FOLLOW_SECONDS = 2      -- and no more often than this
+
+  -- the trainers still in it, in a stable order so LEFT/RIGHT mean something
+  function BR:watchable()
+    local ids = {}
+    for id, p in pairs(self.players) do
+      if p.status ~= "out" and p.map and p.x and p.y then ids[#ids + 1] = id end
+    end
+    table.sort(ids, function(a, b) return tostring(a) < tostring(b) end)
+    return ids
+  end
+
+  -- warp beside them, on a cell nobody is standing on
+  function BR:warpBeside(p)
+    local data = self.game and self.game.data
+    if not (data and p and p.map) then return false end
+    local cells = Spills.placeAround(p.x, p.y, 1, function(x, y)
+      if x == p.x and y == p.y then return false end
+      return Spawn.walkable(data.maps, data.tilesets, p.map, x, y)
+    end)
+    local c = cells[1] or { x = p.x, y = p.y }
+    -- face them, so the hop reads as "looking at" rather than "standing by"
+    local facing = "down"
+    if c.x < p.x then facing = "right" elseif c.x > p.x then facing = "left"
+    elseif c.y > p.y then facing = "up" end
+    local ok = mod.world:warpTo(p.map, c.x, c.y, facing, { arrive = "teleport" })
+    self.lastHopAt = clock()
+    return ok
+  end
+
+  function BR:hop(dir)
+    local ids = self:watchable()
+    if #ids == 0 then return false end
+    local idx = 0
+    for i, id in ipairs(ids) do if id == self.watching then idx = i break end end
+    if idx == 0 then
+      idx = (dir or 1) > 0 and 1 or #ids
+    else
+      idx = ((idx - 1 + (dir or 1)) % #ids) + 1
+    end
+    self.watching = ids[idx]
+    self.fellAt = nil              -- a deliberate move, nothing to undo
+    return self:warpBeside(self.players[self.watching])
+  end
+
+  -- keep the watched trainer in frame
+  function BR:tickWatch()
+    if not (self.phase == "match" and self.status == "out" and self.watching) then return end
+    local p = self.players[self.watching]
+    if not p or p.status == "out" then
+      self.watching = nil           -- they fell; the next LEFT/RIGHT picks anew
+      return
+    end
+    local now = clock()
+    if not now or (now - (self.lastHopAt or 0)) < FOLLOW_SECONDS then return end
+    local here = mod.world:current()
+    if not here then return end
+    local ow = mod.world:overworld()
+    if ow and ow.transitioning then return end
+    local far = here.mapId ~= p.map
+      or math.abs(here.x - p.x) + math.abs(here.y - p.y) > FOLLOW_CELLS
+    if far then self:warpBeside(p) end
+  end
+
+  -- LEFT / RIGHT while out: a hop, not a turn.  input.step runs before the
+  -- engine promotes this tick's presses, so the queue is where they can
+  -- still be taken back.
+  function BR:spectatorInput(game)
+    if not (self.phase == "match" and self.status == "out") then return end
+    local input = game and game.input
+    local ow = mod.world:overworld()
+    if not (input and input.pressQueue and ow and game.stack:top() == ow) then return end
+    local queue, kept, hop = input.pressQueue, {}, nil
+    for _, btn in ipairs(queue) do
+      if btn == "left" then hop = -1
+      elseif btn == "right" then hop = 1
+      else kept[#kept + 1] = btn end
+    end
+    if hop then
+      input.pressQueue = kept
+      input.state.left, input.state.right = false, false
+      self:hop(hop)
+    end
+  end
+
+  -- a spectator does not walk.  They may turn on the spot (harmless, and
+  -- refusing it would fight the engine's turn-in-place), but no step of
+  -- theirs ever lands.
+  mod.hooks:wrap("movement.collision", function(next, allowed, ctx)
+    local ow = mod.world:overworld()
+    if BR.phase == "match" and BR.status == "out" and ow and ctx
+       and ctx.mover == ow.player then
+      ctx.reason = "spectating"
+      return false
+    end
+    return next(allowed, ctx)
+  end)
 
   -- ------- level scaling (DESIGN D12)
   --
@@ -1560,6 +1685,8 @@ return function(mod)
         BR:tickFog()
         BR:tickLevels()
       end
+      BR:spectatorInput(game)
+      BR:tickWatch()
     end
     return next(game, dt)
   end)
@@ -1655,8 +1782,13 @@ return function(mod)
     -- shading it once per map would stack the alpha into a solid black blot.
     local all = Fog.coversAll(radius)
     g.setColor(0.25, 0.15, 0.35, 0.55)
-    for gy = 0, 15 do
-      for gx = 0, 15 do
+    -- the LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
+    -- and the art runs to its edges -- shading only the location grid left
+    -- a bright strip down the right and along the bottom, glaring once the
+    -- fog covered everything.  A cell past the grid can never be inside the
+    -- ring, so walking the whole screen is correct in every phase.
+    for gy = 0, 17 do
+      for gx = 0, 19 do
         local dx, dy = gx - center.x, gy - center.y
         if all or (dx * dx + dy * dy) > (radius * radius) then
           g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
@@ -1672,6 +1804,57 @@ return function(mod)
       g.setLineWidth(math.max(1, sx))
       g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
                   GRID * sx, GRID * sy)
+    end
+    g.pop()
+    return out
+  end)
+
+  -- ------- the overworld HUD
+  --
+  -- Three things a match needs on screen without a menu: how many trainers
+  -- are left, that you are standing in the fog, and -- once you are out --
+  -- whose match you are watching.  Drawn as the small bordered boxes Gen 1
+  -- draws everything in, on the font the game is already using, in the top
+  -- corners where no text box ever goes.  Only over the overworld itself:
+  -- a battle, a menu or the town map has its own screen.
+
+  local function hudBox(text, tx, ty)
+    local Font = require("src.render.Font")
+    local w = #text + 2
+    Font.drawBox(tx, ty, w, 3)
+    Font.draw(text, (tx + 1) * 8, (ty + 1) * 8)
+    return w
+  end
+
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR.phase == "match" and viewport and game.stack) then return out end
+    local ow = mod.world:overworld()
+    if not ow or game.stack:top() ~= ow then return out end
+    local okFont, Font = pcall(require, "src.render.Font")
+    if not okFont or not Font.drawBox then return out end
+
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale(sx, sy)
+    g.setColor(1, 1, 1, 1)
+
+    -- top-right: the count
+    local left = ("%d LEFT"):format(BR:aliveCount())
+    hudBox(left, 20 - (#left + 2), 0)
+
+    -- top-left: the fog, or who you are watching
+    if BR.status == "out" then
+      local p = BR.watching and BR.players[BR.watching]
+      local who = p and p.name or "<  >"
+      hudBox(("<%s>"):format(who), 0, 0)
+    elseif BR.wasInFog then
+      -- blink on the fog's own beat, so the box pulses with the bite
+      local t = clock() or 0
+      if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
     end
     g.pop()
     return out
@@ -1785,6 +1968,9 @@ return function(mod)
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
   mod.exports.level = function() return BR:level() end
+  mod.exports.inFog = function() return BR.wasInFog == true end
+  mod.exports.watching = function() return BR.watching end
+  mod.exports.hop = function(dir) return BR:hop(dir) end
   mod.exports.spills = function()
     local out = {}
     for key, b in pairs(BR.spills.balls) do
