@@ -7,8 +7,9 @@ starts on its own — no menu, no consent, like a trainer's line of sight.
 Your party is your health, so when your last Pokémon faints you're out. The
 match ends when one trainer is left.
 
-This is the first, deliberately-minimal milestone: plain Kanto, no fog, no
-level scaling, no loot spill yet. See "What's here / what's next" below.
+The fog shrinks the world on a shared clock, everyone's level rides the
+same clock, and a fallen team spills onto the ground as Poké Balls anyone
+can claim. See "What's here / what's next" below.
 
 ## Playing it
 
@@ -70,7 +71,16 @@ Meanwhile the **fog** closes in. See below.
 Walk into another trainer — be on the tile facing them — and the battle
 begins. Win, lose or run; a lost battle only ends your match if it was your
 last Pokémon. **Knock someone out and you take their bag and their money**
-(the first slice of the loot spill). Reopen `ROYALE` any time to leave.
+(the first slice of the loot spill), and their team hits the ground as
+Poké Balls where they fell. **Opening a ball is a gift, not a fight**: it
+shows the prompt Oak's lab uses —
+
+> This contains a NIDORINO.
+> Do you want it?
+
+— take or leave. The Pokémon joins your party at 1 HP, exactly as it fell;
+leaving puts the ball back for the next trainer, and a full party leaves it
+too. Reopen `ROYALE` any time to leave the match.
 
 **The HUD.** Two small boxes in the top corners of the overworld, drawn in
 the game's own font: `7 LEFT` on the right is how many trainers are still

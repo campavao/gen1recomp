@@ -134,7 +134,6 @@ return function(mod)
     relay = nil,
     ghosts = Ghosts.new(mod),
     spills = Spills.new(mod),
-    spillFight = nil,     -- the ball we are currently fighting out of
     game = nil,
     phase = "off",        -- off | lobby | match | over
     status = "lobby",     -- my status: lobby | alive | battle | out
@@ -376,7 +375,6 @@ return function(mod)
   function BR:reset()
     self.ghosts:despawnAll()
     self.spills:clear()
-    self.spillFight = nil
     if self.battle then
       self.battle.channel:peerGone()
       self.battle = nil
@@ -1186,11 +1184,15 @@ return function(mod)
     say("Your POKeMON\nscattered!")
   end
 
-  -- Open one: a wild battle against that Pokemon at 1 HP, which is what
-  -- makes a spill "trivially catchable" rather than another fight.  The ball
-  -- is claimed the moment it is opened rather than when the battle ends --
-  -- otherwise two players who engaged the same ball would both expect it,
-  -- and one of them would be told no after spending a ball on it.
+  -- Open one: the prompt Oak's lab uses for the starters, take or leave.
+  -- It used to start a catch battle against the fallen Pokemon at 1 HP; the
+  -- hard part was the battle its owner already lost, and fighting it again
+  -- to earn it was ceremony -- and slow, under fog pressure.  A beaten team
+  -- is yours if you reach it first.
+  --
+  -- The ball is claimed for everyone only on YES.  NO -- or a full party --
+  -- leaves it on the ground for the next trainer, and a claim that lands
+  -- while the box is still open is answered by the ball being gone.
   function BR:openSpill(key)
     local ball = self.spills:get(key)
     local game = self.game
@@ -1199,36 +1201,41 @@ return function(mod)
     local ow = mod.world:overworld()
     if not ow then return nil, "no overworld" end
     if ow.transitioning then return nil, "mid-warp" end
-    local BattleTransition = require("src.render.BattleTransition")
-    for _, state in ipairs(game.stack and game.stack.states or {}) do
-      if state.awardExp or getmetatable(state) == BattleTransition then
-        return nil, "a battle is already running"
-      end
-    end
-    local Party = require("src.pokemon.Party")
-    if not Party.firstHealthy(game.save.party or {}) then
-      return nil, "no healthy party"
-    end
-
-    -- claimed now, everywhere
-    self.spills:take(key)
-    if self.relay then self.relay:broadcast(Wire.took(key)) end
-
-    local ok, battle = pcall(function()
-      return require("src.battle.BattleState")
-        .newWild(game, ball.species, ball.level)
-    end)
-    if not ok or not battle then
-      mod.log:warn("couldn't open a spilled ball: %s", tostring(battle))
-      return nil, "battle build failed: " .. tostring(battle)
-    end
-    -- on its last legs, exactly as D8 describes
-    if battle.enemy and battle.enemy.mon then
-      battle.enemy.mon.hp = 1
-    end
-    self.spillFight = key
-    battle.onFinish = function(result) ow:afterBattle(result, battle) end
-    ow:pushBattle(battle)
+    local data = game.data
+    local def = data.pokemon and data.pokemon[ball.species]
+    local name = (def and def.name) or tostring(ball.species)
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game,
+      ("This contains a\n%s.\nDo you want it?"):format(name), nil, {
+      choice = function(yes)
+        if not yes then return end
+        if not self.spills:get(key) then
+          say("It's gone --\nsomeone was\nquicker.")
+          return
+        end
+        local save = game.save
+        if #(save.party or {}) >= 6 then
+          say("Your party is\nfull!")
+          return
+        end
+        -- claimed now, everywhere
+        self.spills:take(key)
+        if self.relay then self.relay:broadcast(Wire.took(key)) end
+        local Pokemon = require("src.pokemon.Pokemon")
+        local Party = require("src.pokemon.Party")
+        local BattleState = require("src.battle.BattleState")
+        local mon = Pokemon.new(data, ball.species, ball.level)
+        mon.hp = 1                 -- on its last legs, exactly as it fell
+        BattleState.stampOT(save, mon)
+        Party.add(save.party, mon)
+        local dex = save.pokedex
+        if dex then
+          dex.seen[ball.species] = true
+          dex.owned[ball.species] = true
+        end
+        say(("%s joined\nyour party!"):format(name))
+      end,
+    }))
     return true
   end
 
@@ -1452,13 +1459,6 @@ return function(mod)
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
-    if BR.spillFight then
-      -- the ball was claimed when it was opened, so nothing to settle here
-      -- beyond letting the world go again
-      BR.spillFight = nil
-      broadcastPlace()
-      return
-    end
     local botId = BR.botFight
     if not botId then return end
     BR.botFight = nil
@@ -1969,6 +1969,14 @@ return function(mod)
   end
   mod.exports.level = function() return BR:level() end
   mod.exports.inFog = function() return BR.wasInFog == true end
+  mod.exports.spillBalls = function()
+    local out = {}
+    for key, b in pairs(BR.spills.balls) do
+      out[#out + 1] = { key = key, map = b.map, x = b.x, y = b.y,
+                        species = b.species, level = b.level }
+    end
+    return out
+  end
   mod.exports.watching = function() return BR.watching end
   mod.exports.hop = function(dir) return BR:hop(dir) end
   mod.exports.spills = function()

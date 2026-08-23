@@ -153,7 +153,14 @@ Sometimes a beaten player drops a ball, sometimes not. Suspect the spill
 broadcast or the placement search failing silently on a crowded/edge cell —
 `Spills.placeAround` gives up if it finds no walkable ring cell.
 
-### BR-11 · A loot ball should be a gift, not a second battle
+### BR-11 · A loot ball should be a gift, not a second battle — DONE (POK-15)
+
+**Resolved 2026-08-23:** `openSpill` pushes the take-or-leave TextBox
+instead of a 1-HP catch battle. The claim (`Wire.took`) is broadcast only
+on YES, so NO and a full party leave the ball; a claim that lands while
+the box is open answers YES with "It's gone". The Pokémon joins at 1 HP,
+OT-stamped, dex-marked. Live-verified: YES added the fallen mon, NO left
+the ball on the ground.
 
 **Decided:** the hard part was the battle you already won; fighting a 1 HP
 opponent afterwards to earn it again is ceremony. Opening a ball shows the
