@@ -261,6 +261,77 @@ do
   ok(not Fog.immune(nil, data), "no lead is not immune")
 end
 
+-- ------- the loot spill (DESIGN D8)
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+
+  -- an open field: the pile starts where they fell and rings outward
+  local open = function() return true end
+  local cells = Spills.placeAround(10, 10, 4, open)
+  eq(#cells, 4, "a cell per Pokemon")
+  -- never on the faller's own cell: they are still standing there, and two
+  -- objects on one cell makes pressing A a coin toss between them
+  for _, c in ipairs(cells) do
+    ok(not (c.x == 10 and c.y == 10), "no ball on the cell they fell on")
+  end
+  local seen, dup = {}, false
+  for _, c in ipairs(cells) do
+    local k = c.x .. "," .. c.y
+    if seen[k] then dup = true end
+    seen[k] = true
+    ok(math.abs(c.x - 10) <= 4 and math.abs(c.y - 10) <= 4, "and stays nearby")
+  end
+  ok(not dup, "no two Pokemon share a cell")
+
+  -- a wall means fewer places to put them, not a crash
+  local onlyOne = function(x, y) return x == 11 and y == 10 end
+  eq(#Spills.placeAround(10, 10, 4, onlyOne), 1,
+     "a spill with one free cell drops one ball")
+  eq(#Spills.placeAround(10, 10, 4, function(x, y) return x == 10 and y == 10 end), 0,
+     "and the faller's own cell does not count as free")
+  eq(#Spills.placeAround(10, 10, 4, function() return false end), 0,
+     "nowhere to put them is empty, not an error")
+
+  -- the wire payload
+  local party = { { species = "RATTATA", level = 12, hp = 0 },
+                  { species = "PIDGEY", level = 15, hp = 3 } }
+  local spill = Spills.build(7, "ROUTE_1", 5, 5, party, open)
+  ok(spill ~= nil, "a fallen party becomes a spill")
+  eq(spill.map, "ROUTE_1", "on the map they fell on")
+  eq(#spill.mons, 2, "one ball per Pokemon")
+  eq(spill.mons[1].species, "RATTATA", "carrying the species")
+  eq(spill.mons[1].level, 12, "and the level it had grown to")
+  ok(spill.mons[1].key ~= spill.mons[2].key, "keys are distinct")
+  ok(spill.mons[1].key:find("7", 1, true) ~= nil, "and namespaced by owner")
+  ok(Spills.build(7, "ROUTE_1", 5, 5, {}, open) == nil, "an empty party spills nothing")
+
+  -- round-trips, and survives a hostile row
+  local decoded = Wire.decode(Wire.spill(spill.map, spill.mons))
+  ok(decoded ~= nil, "spill round-trips")
+  eq(#decoded.mons, 2, "with both balls")
+  eq(decoded.mons[1].level, 12, "and the level")
+  ok(Wire.decode({ t = "spill", map = "R", mons = { { key = "", x = 1, y = 1,
+     species = "RATTATA" } } }) == nil, "a keyless ball is refused")
+  ok(Wire.decode({ t = "spill", map = "R", mons = {} }) == nil,
+     "an empty spill is refused")
+  eq(Wire.decode(Wire.took("7:1")).key, "7:1", "took carries the key")
+  ok(Wire.decode({ t = "took" }) == nil, "took without a key is refused")
+
+  -- the table: add, claim, gone
+  local fake = { world = { removeNpc = function() return true end,
+                           spawnNpc = function() return "npc1" end } }
+  local s = Spills.new(fake)
+  s:add(spill)
+  eq(s:count(), 2, "both balls are remembered")
+  ok(s:get(spill.mons[1].key) ~= nil, "and findable by key")
+  s:take(spill.mons[1].key)
+  eq(s:count(), 1, "claiming one removes it")
+  ok(s:get(spill.mons[1].key) == nil, "for good")
+  s:clear()
+  eq(s:count(), 0, "and a match end clears the rest")
+end
+
 -- ------- level scaling
 
 do

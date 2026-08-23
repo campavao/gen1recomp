@@ -24,6 +24,8 @@
 --   {t="out"}                                     I have been eliminated
 --   {t="loot", items={{id=,n=}}, money=}          my bag, to my killer
 --   {t="botout", id=}                             I beat that bot
+--   {t="spill", map=, mons={{key,x,y,species,lv}}} my team hit the ground
+--   {t="took", key=}                              that ball is mine
 --   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
 --   {t="winner", id=}                             host: the match is over
 --
@@ -101,6 +103,19 @@ function Wire.loot(items, money)
 end
 
 function Wire.botout(id) return { t = "botout", id = id } end
+
+-- a fallen team on the ground (DESIGN D8); `mons` rows are
+-- { key, x, y, species, lv }
+function Wire.spill(map, mons)
+  local rows = {}
+  for i, m in ipairs(mons or {}) do
+    -- `lv` on the wire, `level` everywhere else: the field name is short
+    -- because a full party ships six of these in one message
+    rows[i] = { key = m.key, x = m.x, y = m.y, species = m.species, lv = m.level }
+  end
+  return { t = "spill", map = map, mons = rows }
+end
+function Wire.took(key) return { t = "took", key = key } end
 
 -- the host's word on where the fog is now; `place` is the centre's name,
 -- carried so every client can announce it without a location table lookup
@@ -222,6 +237,36 @@ end
 decoders.botout = function(m)
   if not isId(m.id) then return nil, "bad id" end
   return { t = "botout", id = m.id }
+end
+
+local MAX_SPILL = 6 -- a party
+
+decoders.spill = function(m)
+  if not isMapId(m.map) then return nil, "bad map" end
+  if type(m.mons) ~= "table" then return nil, "bad mons" end
+  local mons = {}
+  for i, row in ipairs(m.mons) do
+    if i > MAX_SPILL then break end
+    if type(row) ~= "table" or type(row.key) ~= "string" or row.key == ""
+       or #row.key > MAX_ID or type(row.species) ~= "string"
+       or row.species == "" or #row.species > MAX_ID
+       or not (isCell(row.x) and isCell(row.y)) then
+      return nil, "bad spill row"
+    end
+    mons[#mons + 1] = {
+      key = row.key, x = row.x, y = row.y, species = row.species,
+      level = math.max(1, math.min(100, math.floor(tonumber(row.lv) or 5))),
+    }
+  end
+  if #mons == 0 then return nil, "empty spill" end
+  return { t = "spill", map = m.map, mons = mons }
+end
+
+decoders.took = function(m)
+  if type(m.key) ~= "string" or m.key == "" or #m.key > MAX_ID then
+    return nil, "bad key"
+  end
+  return { t = "took", key = m.key }
 end
 
 local function isCoord(v)

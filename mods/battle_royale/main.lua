@@ -32,6 +32,7 @@ local Channel = require("mods.battle_royale.lib.channel")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Levels = require("mods.battle_royale.lib.levels")
+local Spills = require("mods.battle_royale.lib.spills")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -109,6 +110,8 @@ return function(mod)
   local BR = {
     relay = nil,
     ghosts = Ghosts.new(mod),
+    spills = Spills.new(mod),
+    spillFight = nil,     -- the ball we are currently fighting out of
     game = nil,
     phase = "off",        -- off | lobby | match | over
     status = "lobby",     -- my status: lobby | alive | battle | out
@@ -262,6 +265,8 @@ return function(mod)
   -- relay goodbye.
   function BR:reset()
     self.ghosts:despawnAll()
+    self.spills:clear()
+    self.spillFight = nil
     if self.battle then
       self.battle.channel:peerGone()
       self.battle = nil
@@ -485,6 +490,12 @@ return function(mod)
       else
         self.pendingLoot[fromId] = msg
       end
+
+    elseif msg.t == "spill" then
+      self.spills:add(msg)
+
+    elseif msg.t == "took" then
+      self.spills:take(msg.key)
 
     elseif msg.t == "ring" then
       -- the fog is the host's to declare, like the winner
@@ -830,6 +841,9 @@ return function(mod)
     if self.status == "out" or self.phase ~= "match" then return end
     self.status = "out"
     local save = self.game and self.game.save
+    -- the team hits the ground where you fell (DESIGN D8), so an elimination
+    -- is worth converging on rather than only paying whoever landed the hit
+    if save then self:spillParty() end
     if save then
       save.inventory = {}
       save.bagOrder = nil
@@ -839,6 +853,75 @@ return function(mod)
     say(message or "You are out of\nthe match.")
     self:checkWinner()
     broadcastPlace()
+  end
+
+  -- ------- the loot spill (DESIGN D8)
+  --
+  -- Placement is computed by whoever fell and broadcast, because a spill
+  -- lands where they happened to be and nobody else can derive that.  Every
+  -- client lays out the same balls; the first to open one says so.
+
+  function BR:spillParty()
+    local game, relay = self.game, self.relay
+    local here = game and mod.world:current()
+    if not (game and here and relay) then return end
+    local data = game.data
+    local spill = Spills.build(self.myId or 0, here.mapId, here.x, here.y,
+                               game.save.party,
+                               function(x, y)
+                                 return Spawn.walkable(data.maps, data.tilesets,
+                                                       here.mapId, x, y)
+                               end)
+    if not spill then return end
+    relay:broadcast(Wire.spill(spill.map, spill.mons))
+    self.spills:add(spill)
+    say("Your POKeMON\nscattered!")
+  end
+
+  -- Open one: a wild battle against that Pokemon at 1 HP, which is what
+  -- makes a spill "trivially catchable" rather than another fight.  The ball
+  -- is claimed the moment it is opened rather than when the battle ends --
+  -- otherwise two players who engaged the same ball would both expect it,
+  -- and one of them would be told no after spending a ball on it.
+  function BR:openSpill(key)
+    local ball = self.spills:get(key)
+    local game = self.game
+    if not ball then return nil, "no such ball" end
+    if not game then return nil, "no game" end
+    local ow = mod.world:overworld()
+    if not ow then return nil, "no overworld" end
+    if ow.transitioning then return nil, "mid-warp" end
+    local BattleTransition = require("src.render.BattleTransition")
+    for _, state in ipairs(game.stack and game.stack.states or {}) do
+      if state.awardExp or getmetatable(state) == BattleTransition then
+        return nil, "a battle is already running"
+      end
+    end
+    local Party = require("src.pokemon.Party")
+    if not Party.firstHealthy(game.save.party or {}) then
+      return nil, "no healthy party"
+    end
+
+    -- claimed now, everywhere
+    self.spills:take(key)
+    if self.relay then self.relay:broadcast(Wire.took(key)) end
+
+    local ok, battle = pcall(function()
+      return require("src.battle.BattleState")
+        .newWild(game, ball.species, ball.level)
+    end)
+    if not ok or not battle then
+      mod.log:warn("couldn't open a spilled ball: %s", tostring(battle))
+      return nil, "battle build failed: " .. tostring(battle)
+    end
+    -- on its last legs, exactly as D8 describes
+    if battle.enemy and battle.enemy.mon then
+      battle.enemy.mon.hp = 1
+    end
+    self.spillFight = key
+    battle.onFinish = function(result) ow:afterBattle(result, battle) end
+    ow:pushBattle(battle)
+    return true
   end
 
   -- Beating a bot is worth a small authored drop rather than a transfer:
@@ -902,6 +985,13 @@ return function(mod)
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
+    if BR.spillFight then
+      -- the ball was claimed when it was opened, so nothing to settle here
+      -- beyond letting the world go again
+      BR.spillFight = nil
+      broadcastPlace()
+      return
+    end
     local botId = BR.botFight
     if not botId then return end
     BR.botFight = nil
@@ -956,8 +1046,8 @@ return function(mod)
       end
     end
     if ev.result == "lose" then
-      BR.status = "out"
-      -- the victor takes your bag and your money
+      -- the victor takes the bag, so it has to go out while it still has
+      -- anything in it: eliminate() empties it (and spills the team) below
       if opponent and BR.relay then
         local items = {}
         for id, n in pairs(save.inventory) do
@@ -965,12 +1055,9 @@ return function(mod)
         end
         BR.relay:send(opponent, Wire.loot(items, save.money))
       end
-      save.inventory = {}
-      save.bagOrder = nil
-      save.money = 0
-      if BR.relay then BR.relay:broadcast(Wire.out()) end
-      say("You whited out!\nYou are out of\nthe match.")
-      BR:checkWinner()
+      -- one elimination path for every way of losing, so a PvP defeat
+      -- spills the team exactly as a whiteout or the fog does
+      BR:eliminate("You whited out!\nYou are out of\nthe match.")
     else
       BR.status = "alive"
       if ev.result == "win" and opponent then
@@ -1074,6 +1161,7 @@ return function(mod)
             broadcastPlace()
           end
           BR.ghosts:sync(game, h.mapId, BR.players)
+          BR.spills:sync(h.mapId)
           BR:tryEngage()
         end
       end
@@ -1107,6 +1195,7 @@ return function(mod)
   -- arrival.  sync() re-places them next tick.
   mod.events:on("map.entered", function()
     BR.ghosts:despawnAll()
+    BR.spills:despawnAll()
     if BR.relay and BR.relay:isOpen() and BR.phase == "match" then broadcastPlace() end
   end)
 
@@ -1118,6 +1207,14 @@ return function(mod)
   -- adjacent and facing, is a second way to start the fight).
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
+    -- a spilled ball: press A to open it, like every item ball in Kanto
+    local spillKey = BR.spills:keyOf(npc)
+    if spillKey then
+      if BR.status == "alive" and not BR.battle and not BR.botFight then
+        BR:openSpill(spillKey)
+      end
+      return
+    end
     local id = BR.ghosts:ownerOf(npc)
     if not id then return next(ow, npc) end
     if not (BR.game and BR.relay and BR.relay:isOpen()) then return end
@@ -1220,6 +1317,15 @@ return function(mod)
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
   mod.exports.level = function() return BR:level() end
+  mod.exports.spills = function()
+    local out = {}
+    for key, b in pairs(BR.spills.balls) do
+      out[#out + 1] = { key = key, map = b.map, x = b.x, y = b.y,
+                        species = b.species, level = b.level }
+    end
+    return out
+  end
+  mod.exports.openSpill = function(key) return BR:openSpill(key) end
   mod.exports.inFog = function()
     local here = BR.game and mod.world:current()
     if not (here and BR.ring) then return false end
