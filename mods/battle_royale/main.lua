@@ -669,6 +669,15 @@ return function(mod)
     for _, id in ipairs(START_HMS) do
       if Data.items[id] then save.inventory[id] = 1 end
     end
+    -- The dex owns everything from frame one, so no in-match catch is ever
+    -- "new" -- the dex-page fanfare and entry screen, a beat that stops an
+    -- online match, never fire (POK-57).  This skeleton is the match's
+    -- throwaway world; real saves never see it.
+    save.pokedex = { seen = {}, owned = {} }
+    for id in pairs(Data.pokemon) do
+      save.pokedex.seen[id] = true
+      save.pokedex.owned[id] = true
+    end
     save.bagOrder = nil            -- rebuilt from inventory on next open
     save.pcItems = {}
     save.money = START_MONEY
