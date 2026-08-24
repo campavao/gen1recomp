@@ -346,7 +346,29 @@ until then, consider filtering spawn cells to ones with a land route out.
 
 ## Carried over from `docs/DESIGN.md`, never built
 
-### BR-19 · D9 — fleeing a PvP battle is free
+### BR-19 · D9 — fleeing a PvP battle is free — DONE (POK-24)
+
+**Resolved 2026-08-24:** `lib/flee.lua`. A lockstep battle ends as a draw
+the moment either side submits a `run` action and the engine's escape
+roll (`battle.run`) never runs for it — `LinkBattle` submits straight from
+its own `tryRun`. That `tryRun` is an instance field, so the mod wraps it
+on `battle.started` for `kind == "link"` and only the RUNNER's machine
+decides whether a run is submitted at all — deterministic by construction,
+no engine change, works on stock. The roll: one in four at equal speed,
+half at twice the pursuer's speed, capped at five in eight, +8% per retry
+in the battle (never certain), halved per earlier escape from the same
+pursuer (`fledFrom[opponent]`, kept per match). A failed attempt says
+"Can't escape!" and hands the menu back — the turn is fought, not lost as
+in Gen 1, because the lockstep needs an action from us and a pass would
+need a seam. A POKé DOLL is spent for a guaranteed bail. After a flee the
+pair gets a 4 s grace (both `tryEngage` and inbound challenges skip each
+other) and the runner a 30 s lockout from initiating on that pursuer.
+NOT done from D9: Teleport/Roar as escape moves (engine turn logic) and
+Repel shrinking the eyeline others see you at (needs a wire flag).
+Verified headlessly on the real lockstep (a loopback host/guest pair with
+the guest's RUN wrapped: a failed roll leaves the battle running and the
+host sees nothing; a passing roll ends it as a draw on both sides).
+
 
 RUN ends a link battle as a draw with no consequence. Damage carries, but
 nobody can ever be cornered, which blunts the forced-eyeline premise. D9 wants
