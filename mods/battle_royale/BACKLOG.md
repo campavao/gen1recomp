@@ -284,7 +284,19 @@ Replace the move-tutor ceremony: from the party summary, swap any of a
 Pokémon's moves for any move it can learn, including HMs, at any time outside
 battle. (Carried over from the original battle royale design.)
 
-### BR-15 · "Play again" after a match ends
+### BR-15 · "Play again" after a match ends — DONE (POK-20)
+
+**Resolved 2026-08-24:** the host's match report gains PLAY AGAIN once the
+match is over (`Menu.items`, host only). `BR:playAgain()` broadcasts a new
+`again` message (wire PROTOCOL 4), unlocks the room (`relay:lock(false)`
+-- the relay's `lock_room` always took a boolean; the solo room ignores
+it) and runs `onAgain` locally; guests run it on the message. `onAgain`
+clears everything one match owns (`BR:resetMatch()`, split out of
+`reset()` so the room -- relay, code, roster, BOTS/FILL/OPEN -- survives),
+leaves the finished world the way `teardown` does (pop to the title) and
+pushes the lobby screen on top, so the roster and START MATCH are right
+there. An open room re-arms its quick-play countdown. The next START MATCH
+rolls a new seed and spawns like the first.
 
 Today the room locks at start and the only way to a second match is everyone
 leaving and the host re-hosting.
