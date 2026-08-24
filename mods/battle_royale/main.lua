@@ -37,6 +37,7 @@ local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
 local MoveKit = require("mods.battle_royale.lib.moves")
+local Fame = require("mods.battle_royale.lib.fame")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 
@@ -193,6 +194,8 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    stats = nil,          -- the run's record: catches, beats, steps (POK-47)
+    pendingParade = nil,  -- when the champion's ending should start (POK-47)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
@@ -464,6 +467,8 @@ return function(mod)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
+    self.stats = nil
+    self.pendingParade = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -630,6 +635,9 @@ return function(mod)
     self.status = "alive"
     self.started = true
     self.matchWorld = true
+    self.stats = { catches = 0, beats = 0, steps = 0,
+                   startedAt = (love.timer and love.timer.getTime
+                                and love.timer.getTime()) or 0 }
     if safari > 0 then
       -- the host's beats correct this; until the first lands it is the
       -- announced length from now, which is close enough for a clock
@@ -2490,6 +2498,13 @@ return function(mod)
     BR:offerDropForCatch(ev.battle, ev.mon)
   end)
 
+  -- the record keeps count (POK-47)
+  mod.events:on("pokemon.caught", function()
+    if BR:inRound() and BR.stats then
+      BR.stats.catches = BR.stats.catches + 1
+    end
+  end)
+
   -- A bot battle is an ordinary engine battle, so its outcome arrives on
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
@@ -2520,6 +2535,7 @@ return function(mod)
         BR:spillBot(botId, bot)
       end
       if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
+      if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
       BR:checkWinner()
     end
@@ -2584,6 +2600,9 @@ return function(mod)
       -- (POK-25) -- exactly as a whiteout or the fog does
       BR:eliminate("You whited out!\nYou are out of\nthe match.")
     else
+      if ev.result == "win" and BR.stats then
+        BR.stats.beats = BR.stats.beats + 1
+      end
       BR.status = "alive"
     end
     broadcastPlace()
@@ -2619,6 +2638,20 @@ return function(mod)
     end
   end
 
+  -- the numbers of the run, for the record card (POK-47)
+  function BR:matchStats()
+    local st = self.stats or {}
+    local now = clock() or 0
+    return {
+      catches = st.catches or 0,
+      beats = st.beats or 0,
+      steps = st.steps or 0,
+      rings = (self.ring and self.ring.phase) or 1,
+      seconds = math.max(0, math.floor(now - (st.startedAt or now))),
+      money = (self.game and self.game.save and self.game.save.money) or 0,
+    }
+  end
+
   function BR:onWinner(id)
     if self.phase == "over" then return end
     self.phase = "over"
@@ -2630,6 +2663,8 @@ return function(mod)
     -- banner said directly (POK-49)
     if id == self.myId then
       sayLater("You are the last\ntrainer standing!\nYou win!", 0.5)
+      -- and the Champion gets the Champion's ending (POK-47)
+      self.pendingParade = (clock() or 0) + 2.5
     elseif id then
       -- prefer the roster name: the relay has never heard of a bot (POK-41)
       local p = self.players and self.players[id]
@@ -2647,6 +2682,9 @@ return function(mod)
 
   mod.hooks:wrap("movement.speed", function(next, frames, ctx)
     local player = ctx and ctx.player
+    if player and player.targetX and BR.stats and BR:inRound() then
+      BR.stats.steps = BR.stats.steps + 1   -- the record keeps count (POK-47)
+    end
     if player and player.targetX and BR.relay and BR.relay:isOpen()
        and BR.status ~= "battle" then
       local h = here()
@@ -2709,6 +2747,16 @@ return function(mod)
 
     -- pending says deliver in every live phase -- the OVER banner included
     if BR.phase ~= "off" then BR:tickSays() end
+    -- the Champion's parade starts once the screen is quiet (POK-47)
+    if BR.pendingParade and BR.phase == "over" then
+      local nowP = clock()
+      local owP = mod.world:overworld()
+      if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
+         and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
+        BR.pendingParade = nil
+        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats()))
+      end
+    end
     -- and neither they nor the engine's own lines may hold the match:
     -- five silent seconds presses any dialog through (POK-54)
     BR:tickAutoResolve(game)
@@ -3118,6 +3166,7 @@ return function(mod)
              x = r.center and r.center.x, y = r.center and r.center.y }
   end
   mod.exports.level = function() return BR:level() end
+  mod.exports.matchStats = function() return BR:matchStats() end
   mod.exports.inFog = function() return BR.wasInFog == true end
   mod.exports.spillBalls = function()
     local out = {}

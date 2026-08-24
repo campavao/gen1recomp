@@ -951,6 +951,29 @@ do
      "TACKLE alone remains: forgetting is not forever, and no bag means no machines")
 end
 
+-- ------- the Hall of Fame (POK-47)
+
+do
+  local Fame = require("mods.battle_royale.lib.fame")
+  eq(Fame.timeString(754), "12:34", "time reads minutes:seconds")
+  eq(Fame.timeString(nil), "0:00", "no time is zero")
+  local party = { { species = "PIDGEY", level = 20 },
+                  { species = "NIDORINO", nickname = "NIDO", level = 30 },
+                  { level = 5 } }
+  local pages = Fame.pages(party, { catches = 4, beats = 2, steps = 812,
+                                    rings = 5, seconds = 754, money = 3210 })
+  eq(#pages, 3, "two mons and the card (a specieless row is skipped)")
+  eq(pages[1].kind .. ":" .. pages[1].name, "mon:PIDGEY", "the lead leads the parade")
+  eq(pages[2].name, "NIDO", "a nickname is the shown name")
+  eq(pages[3].kind, "card", "the record closes the parade")
+  local lines = pages[3].lines
+  eq(#lines, 6, "six rows on the card")
+  eq(lines[1][1] .. "=" .. lines[1][2], "CAUGHT=4", "catches counted")
+  eq(lines[4][2], "5", "rings survived")
+  eq(lines[5][2], "12:34", "time alive")
+  eq(lines[6][2], "3210", "the money came along")
+end
+
 -- ------- main.lua: a local helper is only in scope below its own line
 --
 -- `local function clock()` at line 873 is a nil global at line 810, and the
