@@ -305,6 +305,7 @@ function PartyMenu.new(game, opts)
   self.onSwitch = opts.onSwitch
   self.onCancel = opts.onCancel
   self.pickOnly = opts.pickOnly
+  self.pickText = opts.pickText -- optional bottom line for pickOnly callers
   -- Medicine keeps the picker on screen: item_effects.asm .doneHealing
   -- animates the party HP bar and then prints the message through
   -- RedrawPartyMenu with the menu STILL up, so BagMenu asks for keepOpen and
@@ -731,7 +732,7 @@ function PartyMenu:bottomMessage()
   if self.swapFrom then
     return "Move to where?"
   elseif self.softboiledFrom or self.pickOnly then
-    return "Use on which one?"
+    return self.pickText or "Use on which one?"
   elseif self.tmhm then
     return self.game.data.text._PartyMenuUseTMText
       or Strings("Use TM on which\nPOKéMON?")

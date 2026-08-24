@@ -1704,12 +1704,22 @@ return function(mod)
     local data = game.data
     local state = self.peeked
     local name = watchedName()
-    local rows = (state and state.id == self.watching) and Peek.partyRows(data, state.party)
-                 or { { label = ("(no word from\n%s yet)"):format(name) } }
-    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s TEAM", rows, {
-      onChoose = function(item)
-        local mon = state and state.party and item.value and state.party[item.value]
-        if not mon then return end
+    if not (state and state.id == self.watching) then
+      game.stack:push(mod.ui.ListMenu.new(game, name .. "'s TEAM",
+        { { label = ("(no word from\n%s yet)"):format(name) } },
+        { onChoose = function() end }))
+      return
+    end
+    -- the engine's own Party screen over the synced view (POK-53).
+    -- pickOnly + keepOpen make it read-only: A opens the mon's moves on
+    -- top of the list, B backs out -- no SWITCH, no STATS, no field moves
+    local PartyMenu = require("src.ui.PartyMenu")
+    game.stack:push(PartyMenu.new(game, {
+      party = Peek.saveView(data, state.party),
+      pickOnly = true,
+      keepOpen = true,
+      pickText = name .. "'s POKeMON.",
+      onSwitch = function(mon)
         game.stack:push(mod.ui.ListMenu.new(game,
           (data.pokemon[mon.species] and data.pokemon[mon.species].name) or tostring(mon.species),
           Peek.moveRows(data, mon), { onChoose = function() end }))
@@ -1720,12 +1730,18 @@ return function(mod)
   function BR:openWatchedBag(game)
     local state = self.peeked
     local name = watchedName()
-    local rows = (state and state.id == self.watching)
-                 and Peek.bagRows(game.data, state.items, state.money)
-                 or { { label = ("(no word from\n%s yet)"):format(name) } }
-    game.stack:push(mod.ui.ListMenu.new(game, name .. "'s BAG", rows, {
-      onChoose = function() end,
-    }))
+    if not (state and state.id == self.watching) then
+      game.stack:push(mod.ui.ListMenu.new(game, name .. "'s BAG",
+        { { label = ("(no word from\n%s yet)"):format(name) } },
+        { onChoose = function() end }))
+      return
+    end
+    -- the vanilla floating item box (POK-53), read-only: BagMenu's row
+    -- shape through ListMenu's itemBox geometry, and an empty bag prints
+    -- the engine's own "Nothing here."
+    game.stack:push(mod.ui.ListMenu.new(game, "ITEMS",
+      Peek.itemRows(game.data, state.items, state.money),
+      { kind = "bag", itemBox = true, onChoose = function() end }))
   end
 
   -- keep the watched trainer in frame
