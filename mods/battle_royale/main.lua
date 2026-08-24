@@ -3354,7 +3354,7 @@ return function(mod)
   -- The match's two clocks, cycled from the lobby (POK-44) -- the MODS
   -- manager still works, but nobody should need four screens to find the
   -- knobs that shape a match.  Defined here so redefineOptions is above.
-  local FOG_LADDER = { 60, 90, 120, 180, 240 }
+  local FOG_LADDER = { 60, 90, 120, 180, 240, 360, 480 }
   local SAFARI_LADDER = { 0, 60, 120, 180, 240 }
   local function nextRung(ladder, current)
     for i, v in ipairs(ladder) do
