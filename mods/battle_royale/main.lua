@@ -682,6 +682,14 @@ return function(mod)
       save.pokedex.seen[id] = true
       save.pokedex.owned[id] = true
     end
+    -- Every town is a FLY destination from frame one (POK-52): the map is
+    -- the arena, and travel is strategy, not a diary of where you have
+    -- been.  The same trick as the dex above.
+    local WMap = require("src.world.Map")
+    save.visited = save.visited or {}
+    for id, mdef in pairs(Data.maps) do
+      if WMap.isFlyTown(mdef) then save.visited[id] = true end
+    end
     save.bagOrder = nil            -- rebuilt from inventory on next open
     save.pcItems = {}
     save.money = START_MONEY
