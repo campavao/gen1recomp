@@ -121,6 +121,7 @@ local SAFARI_BALLS = 30
 local SAFARI_STEPS = 502          -- what the gate script writes (data/scripts/safari.lua)
 local DEFAULT_SAFARI_SECONDS = 120
 local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
+local PVP_TURN_SECONDS = 30       -- the PvP shot clock: pick or forfeit (POK-59)
 -- the two south warps out of the centre, to the gate: there is no leaving
 -- early -- the buzzer is the only way out
 local SAFARI_EXIT_WARPS = { { x = 14, y = 25 }, { x = 15, y = 25 } }
@@ -693,6 +694,28 @@ return function(mod)
     save.lastOutdoor = { id = BR.arming.map, x = BR.arming.x, y = BR.arming.y }
     return save
   end)
+
+  -- ------- the PvP shot clock (POK-59)
+  --
+  -- The engine's tournament clock (opts.turnLimit) is exactly the rule a
+  -- battle royale needs: a visible countdown while the menu is yours, and
+  -- a forfeit on the wire -- with a definite winner -- when it runs out.
+  -- Nobody drags an opponent into the fog by sitting in a menu.  Wrapped
+  -- rather than passed because the opts are built inside the engine's own
+  -- LinkState; a pre-clock engine simply ignores the extra field.
+  do
+    local LinkBattle = require("src.link.LinkBattle")
+    local function withClock(base)
+      return function(game, net, opts)
+        if opts and not opts.turnLimit and BR:inRound() then
+          opts.turnLimit = PVP_TURN_SECONDS
+        end
+        return base(game, net, opts)
+      end
+    end
+    LinkBattle.newHost = withClock(LinkBattle.newHost)
+    LinkBattle.newGuest = withClock(LinkBattle.newGuest)
+  end
 
   -- ------- inbound room messages
 

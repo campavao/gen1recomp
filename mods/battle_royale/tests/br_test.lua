@@ -782,13 +782,16 @@ do
       function stack:update(dt) local t = self:top() if t and t.update then t:update(dt) end end
       return { data = Data, input = Input, stack = stack, save = save }
     end
-    local function pair(seed)
+    local function pair(seed, extra)
       local gA, gB = makeFakeGame("RATTATA"), makeFakeGame("RATTATA")
       gB.save.player.name = "BLUE"
       local nA, nB = Net.loopbackPair()
       local pA, pB = Protocol.packParty(gA.save.party), Protocol.packParty(gB.save.party)
-      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed })
-      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed })
+      local turnLimit = extra and extra.turnLimit
+      local bA = LinkBattle.newHost(gA, nA, { myParty = pA, theirParty = pB, theirName = "BLUE", seed = seed,
+                                              turnLimit = turnLimit })
+      local bB = LinkBattle.newGuest(gB, nB, { myParty = pB, theirParty = pA, theirName = "RED", seed = seed,
+                                               turnLimit = turnLimit })
       local rA, rB
       bA.onFinish = function(r) rA = r end
       bB.onFinish = function(r) rB = r end
@@ -849,6 +852,24 @@ do
     local r2A, r2B = results2()
     eq(r2A, "draw", "host: the doll's draw")
     eq(r2B, "draw", "guest: the doll's draw")
+
+    -- POK-59: the engine's shot clock, which the mod arms for match PvP.
+    -- The host picks at once; the guest never does -- the guest's own
+    -- clock forfeits it, and the host holds a definite WIN, not a draw.
+    local gA3, gB3, bA3, bB3, results3 = pair(31337, { turnLimit = 30 })
+    pump(gA3, gB3, bA3, bB3, 600)
+    eq(bA3.phase, "menu", "shot clock: the host reaches its menu")
+    eq(bB3.phase, "menu", "shot clock: the guest reaches its menu")
+    bA3:resolveTurn(bA3.player.curMoves[1])
+    for _ = 1, 31 * 60 do            -- the guest stalls past the clock
+      Input.pressed = {}
+      gA3.stack:update(1 / 60)
+      gB3.stack:update(1 / 60)
+    end
+    settle(gA3, gB3, bA3, bB3, 2000)
+    local r3A, r3B = results3()
+    eq(r3B, "lose", "the staller forfeits when the clock runs out")
+    eq(r3A, "win", "and the opponent wins outright")
   end)
   if not hadLove then _G.love = nil end
   if not okAll then
