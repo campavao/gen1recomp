@@ -2797,8 +2797,10 @@ return function(mod)
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
       local p = BR.watching and BR.players[BR.watching]
-      local who = p and p.name or "<  >"
-      hudBox(("<%s>"):format(who), 0, 0)
+      -- the bare name: the Gen 1 font has no angle brackets, and the box
+      -- position already says "watching" (POK-45)
+      local who = p and p.name or "---"
+      hudBox(who, 0, 0)
     elseif BR.phase == "safari" then
       -- the Safari clock, blinking through its last ten seconds
       local left = BR:safariLeft()
