@@ -87,7 +87,9 @@ local BOT_LOOT = { items = { { id = "POKE_BALL", n = 2 }, { id = "POTION", n = 1
 -- The starting loadout, all in one place (docs/DESIGN.md D7).
 local START_SPECIES = "RATTATA"
 local START_LEVEL = 5
-local START_ITEMS = { POKE_BALL = 6, POTION = 1 }
+-- TOWN_MAP: the fog ring draws on the TownMap screen, so the map is match
+-- equipment, not a collectible (POK-39)
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -1266,11 +1268,17 @@ return function(mod)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
-    if was ~= phase and phase > 1 then
+    if was == nil then
+      -- the eye is public from the landing (POK-39): the ring itself stays
+      -- quiet until it first shrinks, but where it will shrink TO is not a
+      -- secret -- and the TOWN MAP in the bag can show it
+      sayLater(("The fog will close\non %s.\fCheck your\nTOWN MAP."):format(
+        place or "KANTO"))
+    elseif was ~= phase and phase > 1 then
       if Fog.coversAll(radius) then
-        say("The fog covers\nall of KANTO!")
+        sayLater("The fog covers\nall of KANTO!")
       else
-        say(("The fog closes in\non %s!"):format(place or "KANTO"))
+        sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
       end
     end
   end
