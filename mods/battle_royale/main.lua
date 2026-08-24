@@ -2138,6 +2138,13 @@ return function(mod)
       self.botFight = nil
       return
     end
+    -- the intro line reads trainer.name -- overlay the bot's own name on
+    -- the class chassis, the engine's own rival-name pattern (POK-61)
+    local bp = self.players[botId]
+    if bp and bp.name then
+      battle.trainer = setmetatable({ name = bp.name },
+                                    { __index = battle.trainer })
+    end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end
