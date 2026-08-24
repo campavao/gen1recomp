@@ -1770,6 +1770,21 @@ return function(mod)
             return false
           end
         end
+      elseif BR:inRound() and mapId == "SAFARI_ZONE_GATE" and ctx.toY <= 2
+             and not (BR.game and BR.game.save and BR.game.save.safari) then
+        -- no admission, no north half: the join trigger (y=2) and the
+        -- warps back into the zone (y=0) are both behind this line (POK-40)
+        ctx.reason = "closed"
+        local now = clock() or 0
+        if now - (BR.lastClosedSay or -10) > 3 then
+          BR.lastClosedSay = now
+          if BR.phase == "safari" then
+            say("The PA called\ntime on you!\fWait for the\nbuzzer.")
+          else
+            say("The SAFARI ZONE\nis closed for\nthe match.")
+          end
+        end
+        return false
       elseif (BR.phase == "drop" or BR.phase == "match") and mapId == SAFARI_DOOR.map
              and ctx.toX == SAFARI_DOOR.x and ctx.toY == SAFARI_DOOR.y then
         ctx.reason = "closed"
@@ -2913,6 +2928,13 @@ return function(mod)
   -- adjacent and facing, is a second way to start the fight).
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
+    -- the gate worker sells no admission during a round (POK-40): the
+    -- talk path could otherwise charge a second 500 and re-open the zone
+    if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
+       and not (BR.game and BR.game.save and BR.game.save.safari) then
+      say("The SAFARI ZONE\nis closed for\nthe match.")
+      return
+    end
     -- a spilled ball: press A to open it, like every item ball in Kanto
     local spillKey = BR.spills:keyOf(npc)
     if spillKey then
