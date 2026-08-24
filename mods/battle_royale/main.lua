@@ -142,6 +142,14 @@ local STORY_FLAGS = {
   "EVENT_FOLLOWED_OAK_INTO_LAB", "EVENT_GOT_STARTER", "EVENT_GOT_POKEDEX",
   "EVENT_GOT_POKEBALLS_FROM_OAK", "EVENT_PALLET_AFTER_GETTING_POKEBALLS",
   "EVENT_GOT_OAKS_PARCEL", "EVENT_OAK_GOT_PARCEL",
+  -- the rival's story ambushes never fire in a match (POK-67): every one
+  -- of his scripted fights gates on its own beaten-flag, so the loadout
+  -- says they all already happened.  The names are the engine scripts'
+  -- own set_flag/check_flag strings (data/scripts/story*.lua).
+  "EVENT_BATTLED_RIVAL_IN_OAKS_LAB",
+  "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE", "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
+  "EVENT_BEAT_CERULEAN_RIVAL", "EVENT_BEAT_SS_ANNE_RIVAL",
+  "EVENT_BEAT_POKEMON_TOWER_RIVAL", "EVENT_BEAT_SILPH_CO_RIVAL",
 }
 
 return function(mod)

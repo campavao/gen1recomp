@@ -981,6 +981,28 @@ do
   end
 end
 
+-- ------- the rival's ambushes never fire in a match (POK-67)
+
+do
+  local src = io.open("mods/battle_royale/main.lua"):read("*a")
+  for _, n in ipairs({
+    "EVENT_BATTLED_RIVAL_IN_OAKS_LAB",
+    "EVENT_BEAT_ROUTE22_RIVAL_1ST_BATTLE", "EVENT_BEAT_ROUTE22_RIVAL_2ND_BATTLE",
+    "EVENT_BEAT_CERULEAN_RIVAL", "EVENT_BEAT_SS_ANNE_RIVAL",
+    "EVENT_BEAT_POKEMON_TOWER_RIVAL", "EVENT_BEAT_SILPH_CO_RIVAL",
+  }) do
+    ok(src:find(n, 1, true) ~= nil, n .. " rides the loadout")
+    local story = io.open("data/scripts/story.lua"):read("*a")
+      .. io.open("data/scripts/story5.lua"):read("*a")
+    if n ~= "EVENT_BATTLED_RIVAL_IN_OAKS_LAB"
+       and n ~= "EVENT_BEAT_POKEMON_TOWER_RIVAL"
+       and n ~= "EVENT_BEAT_SILPH_CO_RIVAL" then
+      ok(story:find(n, 1, true) ~= nil,
+         n .. " is the engine script's own gate")
+    end
+  end
+end
+
 -- ------- escapable, not merely walkable (POK-23)
 
 do
