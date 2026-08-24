@@ -254,7 +254,19 @@ attempted under a menu used to fail silently). The first living trainer
 is picked automatically on elimination. A spectator's A press no longer
 turns a ghost to face an invisible body.
 
-### BR-13 · See the spectated player's party and items
+### BR-13 · See the spectated player's party and items — DONE (POK-18)
+
+**Resolved 2026-08-24:** pull, not push. A spectator unicasts `peek` to
+the trainer they watch (on each hop, then every 3 s) and gets `state`
+back -- party rows `{ sp, lv, hp, mhp, st, mv }` plus the bag and money
+(wire PROTOCOL 6). Only two clients pay for it at a time, so sizing and
+rate stop being a relay concern. `lib/peek.lua` builds the summary
+(nothing that rebuilds the record: no DVs, no EXP) and the rows; a bot's
+state is derived from the seed like its team (`Peek.botParty`) with
+BOT_LOOT as its bag. While out, the START menu's POKeMON and ITEM rows
+open "<name>'s TEAM" (a row per Pokemon: name, level, HP/max, status;
+choose one for its moves) and "<name>'s BAG" as ListMenus -- read-only by
+construction. No engine change.
 
 Needs new wire messages: only position, facing and status are broadcast today.
 Sizing and rate need a decision before this is safe on the relay.
