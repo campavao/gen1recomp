@@ -2311,20 +2311,30 @@ return function(mod)
     local function tell(text)
       game.stack:push(mod.ui.TextBox.new(game, text))
     end
-    local learnable = MoveKit.learnable(data, mon)
+    -- a TM is spent by teaching; an HM is a tool, not a consumable (POK-58)
+    local function spendMachine(row)
+      if not row.spend then return end
+      local inv = game.save.inventory or {}
+      local n = (inv[row.spend] or 0) - 1
+      inv[row.spend] = n > 0 and n or nil
+      game.save.bagOrder = nil   -- rebuilt from what is left on next open
+    end
+    local learnable = MoveKit.learnable(data, mon, { bag = game.save.inventory })
     if #learnable == 0 then
-      tell(("%s can't learn\nanything else."):format(name))
+      tell(("%s has nothing\nto learn right now."):format(name))
       return
     end
     local items = {}
     for _, m in ipairs(learnable) do
-      items[#items + 1] = { label = m.name, right = m.how, value = m.id }
+      items[#items + 1] = { label = m.name, right = m.how, value = m.id,
+                            spend = (m.how == "TM") and m.item or nil }
     end
     game.stack:push(mod.ui.ListMenu.new(game, "LEARN WHICH?", items, {
       onChoose = function(item, list)
         local moveName = data.moves[item.value].name
         if #(mon.moves or {}) < 4 then
-          MoveKit.teach(data, mon, item.value)
+          local _, why = MoveKit.teach(data, mon, item.value)
+          if not why then spendMachine(item) end
           list:close()
           tell(("%s learned\n%s!"):format(name, moveName))
           return
@@ -2336,7 +2346,8 @@ return function(mod)
         end
         game.stack:push(mod.ui.ListMenu.new(game, "FORGET WHICH?", slots, {
           onChoose = function(slot, forget)
-            local old = MoveKit.teach(data, mon, item.value, slot.value)
+            local old, why = MoveKit.teach(data, mon, item.value, slot.value)
+            if not why then spendMachine(item) end
             forget:close()
             list:close()
             local oldName = (old and data.moves[old] and data.moves[old].name) or tostring(old)
