@@ -469,6 +469,7 @@ return function(mod)
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
     self.pendingParade = nil
+    self.ringDistOf = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -975,7 +976,25 @@ return function(mod)
     local exits = Bots.exits(data and data.maps[p.map])
     if #exits == 0 then return end
     p.rng = p.rng or Bots.rng(BR.matchSeed, id)
-    local dest = exits[p.rng(1, #exits)]
+    -- homeward, not aimless (POK-42): prefer the seam that closes on the
+    -- ring's eye, so the mid-game drifts everyone toward the same
+    -- shrinking ground.  The distances are cached on BR by applyRing --
+    -- this helper sits above townLocations and must not call it (the
+    -- POK-24 lesson).
+    local dist = BR.ringDistOf
+    local dest
+    if dist then
+      -- holding still is only wisdom INSIDE the ring; outside it, the
+      -- least-bad seam beats waiting for the fog
+      local r = BR.ring and BR.ring.radius
+      local hereD = dist[p.map]
+      local safeHere = r and hereD and hereD <= r * r
+      dest = Bots.homeward(exits, function(m) return dist[m] end,
+                           safeHere and hereD or nil, p.rng)
+      if not dest then p.lastRoam = now return end -- nearest already: hold
+    else
+      dest = exits[p.rng(1, #exits)]
+    end
     local cells = walkableCells(dest)
     if #cells == 0 then return end
     local c = cells[p.rng(1, #cells)]
@@ -1162,24 +1181,32 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer every bot picks a town like everyone else
+  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
+  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
     local towns = self:dropTowns()
     if #towns == 0 then return end
     local now = clock() or 0
+    local ids = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" then
-        p.rng = p.rng or Bots.rng(self.matchSeed, id)
-        local town = towns[p.rng(1, #towns)]
-        local cells = walkableCells(town.id)
-        if #cells > 0 then
-          local c = cells[p.rng(1, #cells)]
-          p.map, p.x, p.y, p.facing = town.id, c.x, c.y, "down"
-          p.lastRoam = now
-          self.ghosts:despawn(id)
-          self.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
-        end
+      if p.bot and p.status == "alive" then ids[#ids + 1] = id end
+    end
+    table.sort(ids)
+    local deal = Bots.dealTowns(#towns, #ids,
+                                Spawn.rng((self.matchSeed or 1) + 4242))
+    for k, id in ipairs(ids) do
+      local p = self.players[id]
+      p.rng = p.rng or Bots.rng(self.matchSeed, id)
+      local town = towns[deal[k]]
+      local cells = walkableCells(town.id)
+      if #cells > 0 then
+        local c = cells[p.rng(1, #cells)]
+        p.map, p.x, p.y, p.facing = town.id, c.x, c.y, "down"
+        p.lastRoam = now
+        self.ghosts:despawn(id)
+        self.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
       end
     end
   end
@@ -1276,6 +1303,17 @@ return function(mod)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
+    -- every placed map's squared distance to the eye, for the bots'
+    -- homeward roams (POK-42); cached here because roamBot is defined
+    -- above townLocations
+    local dists = {}
+    for id, loc in pairs(townLocations() or {}) do
+      if loc.x and loc.y then
+        local dx, dy = loc.x - cx, loc.y - cy
+        dists[id] = dx * dx + dy * dy
+      end
+    end
+    self.ringDistOf = dists
     if was == nil then
       -- the eye is public from the landing (POK-39): the ring itself stays
       -- quiet until it first shrinks, but where it will shrink TO is not a

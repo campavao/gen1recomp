@@ -951,6 +951,36 @@ do
      "TACKLE alone remains: forgetting is not forever, and no bag means no machines")
 end
 
+-- ------- bots that hunt (POK-42, POK-43)
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local low = function(a) return a end
+
+  local D = { A = 25, B = 4, C = 100 }
+  local dOf = function(id) return D[id] end
+  eq(Bots.homeward({ "A", "B", "C" }, dOf, 50, low), "B",
+     "the seam nearest the eye wins")
+  eq(Bots.homeward({ "A", "C" }, dOf, 9, low), nil,
+     "already nearer than every seam: stay put")
+  eq(Bots.homeward({ "A", "C" }, dOf, nil, low), "A",
+     "an unplaced map still walks toward the eye")
+  local blind = Bots.homeward({ "A", "B" }, function() return nil end, nil, low)
+  ok(blind == "A" or blind == "B", "no distances anywhere: the old stroll")
+  eq(Bots.homeward({}, dOf, 1, low), nil, "no seams, no roam")
+
+  local dealt = Bots.dealTowns(11, 8, Spawn.rng(4242))
+  eq(#dealt, 8, "every bot gets a town")
+  local seen, dup = {}, false
+  for _, t in ipairs(dealt) do
+    if seen[t] then dup = true end
+    seen[t] = true
+  end
+  ok(not dup, "no two bots share a town while towns remain")
+  eq(#Bots.dealTowns(3, 7, Spawn.rng(7)), 7, "more bots than towns still all land")
+end
+
 -- ------- the Hall of Fame (POK-47)
 
 do
