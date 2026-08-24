@@ -632,7 +632,8 @@ return function(mod)
     end
     -- arm the loadout hook, then start a fresh game straight into the world
     local safari = tonumber(msg.safari) or 0
-    self.arming = { map = mine.map, x = mine.x, y = mine.y, safari = safari > 0 }
+    self.arming = { map = mine.map, x = mine.x, y = mine.y,
+                    safari = safari > 0, safariSeconds = safari }
     self.phase = safari > 0 and "safari" or "match"
     self.status = "alive"
     self.started = true
@@ -671,7 +672,13 @@ return function(mod)
       -- is the gate's own -- thirty balls and the step budget -- so the
       -- start menu's steps/500 and BALL counter read true.
       save.party = {}
-      save.safari = { balls = SAFARI_BALLS, steps = SAFARI_STEPS }
+      -- the step budget rides the round's clock (POK-46): 502 steps at
+      -- walking speed is ~125 s, hand-tuned to the default 120 s round --
+      -- so a longer round deserves a longer leash
+      local secs = BR.arming.safariSeconds or DEFAULT_SAFARI_SECONDS
+      save.safari = { balls = SAFARI_BALLS,
+                      steps = math.max(1, math.floor(
+                        SAFARI_STEPS * secs / DEFAULT_SAFARI_SECONDS)) }
     else
       save.party = { Pokemon.new(Data, START_SPECIES, START_LEVEL) }
     end
@@ -1943,8 +1950,11 @@ return function(mod)
     end
     local save = self.game and self.game.save
     -- the team hits the ground where you fell (DESIGN D8), so an elimination
-    -- is worth converging on rather than only paying whoever landed the hit
-    if save then self:spillParty() end
+    -- is worth converging on rather than only paying whoever landed the hit.
+    -- Except before the match proper (the Safari buzzer, POK-46): the zone
+    -- closes over anything dropped there, and unreachable loot reads as a
+    -- bug, not a bounty.
+    if save and self.phase == "match" then self:spillParty() end
     if save then
       save.inventory = {}
       save.bagOrder = nil
