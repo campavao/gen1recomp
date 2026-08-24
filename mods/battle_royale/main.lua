@@ -2499,7 +2499,9 @@ return function(mod)
     if id == self.myId then
       say("You are the last\ntrainer standing!\nYou win!")
     elseif id then
-      say((self.relay:nameOf(id)) .. " wins\nthe match!")
+      -- prefer the roster name: the relay has never heard of a bot (POK-41)
+      local p = self.players and self.players[id]
+      say(((p and p.name) or self.relay:nameOf(id)) .. " wins\nthe match!")
     else
       say("The match is\nover.")
     end
