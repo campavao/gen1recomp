@@ -278,7 +278,19 @@ connect). The match face gained the Safari clock. Same pattern the
 engine's StartMenu uses to overlay its Safari counter (override the
 instance's method, call the base).
 
-### BR-14 · Free move management out of battle
+### BR-14 · Free move management out of battle — DONE (POK-19)
+
+**Resolved 2026-08-24:** `lib/moves.lua` + a `ui.party.submenu` wrap. The
+engine's party submenu already accepts hook-injected rows with an
+`onSelect(mon, game)` callback, so in a round (and out of battle) a MOVES
+row sits above STATS. `Moves.learnable(data, mon)` is the species'
+`level1Moves` + `learnset` at any level + `tmhm` (already move ids, HMs
+included), minus what it knows, each once; `Moves.teach` fills a free slot
+or replaces a chosen one at full PP. UI: a ListMenu "LEARN WHICH?" (the
+`right` column says L<n>/TM/HM), then "FORGET WHICH?" only when all four
+slots are taken, then a text box. No MoveLearnMenu ceremony and no HM
+lock — the mode says any move, any time. Pre-evolution learnsets are not
+included (a RAICHU only lists RAICHU's); worth adding if it bites.
 
 Replace the move-tutor ceremony: from the party summary, swap any of a
 Pokémon's moves for any move it can learn, including HMs, at any time outside
