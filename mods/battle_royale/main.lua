@@ -458,6 +458,7 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.claimedCatch = nil  -- custody taken on a shimmed engine, unconsumed
     self.pendingSays = {}
+    self.runnerBusySince, self.lastAutoA = nil, nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -1745,6 +1746,25 @@ return function(mod)
     if BRMenu.say(mod, q[1].text) then table.remove(q, 1) end
   end
 
+  -- An online match never waits on a read (POK-54).  Any dialog left open
+  -- five continuous seconds gets pressed through -- one A a second until
+  -- the runner is quiet.  Plain-text says are the common case; the rare
+  -- prompt resolves to its default rather than holding the match hostage.
+  function BR:tickAutoResolve(game)
+    if not self.matchWorld then self.runnerBusySince = nil return end
+    local ow = mod.world:overworld()
+    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
+    local now = clock()
+    if not (busy and now) then self.runnerBusySince = nil return end
+    self.runnerBusySince = self.runnerBusySince or now
+    if (now - self.runnerBusySince) < 5 then return end
+    if self.lastAutoA and (now - self.lastAutoA) < 1 then return end
+    self.lastAutoA = now
+    if game and game.input and game.input.pressQueue then
+      table.insert(game.input.pressQueue, "a")
+    end
+  end
+
   function BR:tickLevels()
     if not (self.phase == "match" and self.game) then return end
     -- an OUT player's party is a record of the fall, not a combatant --
@@ -2622,6 +2642,9 @@ return function(mod)
 
     -- pending says deliver in every live phase -- the OVER banner included
     if BR.phase ~= "off" then BR:tickSays() end
+    -- and neither they nor the engine's own lines may hold the match:
+    -- five silent seconds presses any dialog through (POK-54)
+    BR:tickAutoResolve(game)
 
     if relay and relay:isOpen() and BR:inRound() then
       local h = here()
