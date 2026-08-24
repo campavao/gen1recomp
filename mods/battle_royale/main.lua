@@ -1952,12 +1952,22 @@ return function(mod)
          and not (self.lastAutoA and (now - self.lastAutoA) < 1) then
         self.lastAutoA = now
         if game.input and game.input.pressQueue then
-          table.insert(game.input.pressQueue, "a")
+          -- B, never A (POK-66): B advances text exactly like A, but in
+          -- any menu it BACKS OUT instead of choosing -- the watchdog can
+          -- keep a stalled duel moving yet can never pick a move.  Full
+          -- silence still drifts to the action menu, where the POK-59
+          -- clock forfeits it.
+          table.insert(game.input.pressQueue, "b")
         end
       end
     else
       self.linkWaitSince = nil
     end
+    -- a battle on the stack silences the runner watchdog (POK-66): a
+    -- script-started trainer fight keeps the runner busy for the whole
+    -- battle, and pressing A into it picks moves nobody chose.  Battle
+    -- text paces like vanilla; only the overworld's own dialogs resolve.
+    if self.localBattle then self.runnerBusySince = nil return end
     local ow = mod.world:overworld()
     local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
     if not (busy and now) then self.runnerBusySince = nil return end
