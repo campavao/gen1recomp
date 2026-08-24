@@ -235,6 +235,25 @@ counter shows how many are left. No bumpers exist — the engine has only
 `up/down/left/right/a/b/start/select` — and a spectator has no other use for
 left/right.
 
+### BR-26 · Spectator: a camera, not a body — DONE (POK-30)
+
+**Resolved 2026-08-23:** no engine change. While out, the tick asserts the
+engine's own `ow.playerHidden` (the flag the fly/warp fades use, cleared by
+the engine on every arrival, so it is re-set each frame) and
+`ow.player.passable = true` (`Collision.occupied` lets NPCs and ghosts
+through). The view is the engine's camera follow plus a `cameraPan`
+offset — the pan_camera script's mechanism, a plain `{ ox, oy }` with no
+ramp — pointing from the invisible body to the watched trainer's ghost,
+recomputed every tick off the ghost NPC's pixel position (`Ghosts:npcOf`),
+so it walks when they walk; while the ghost is not yet placed the wire's
+cell stands in. A different map is the one case that still warps
+(`tickWatch`, cross-map only, no more "five cells away" re-warps). `hop`
+no longer warps directly — it just changes `watching` and lets the tick
+catch up, which is what makes hopping survive a menu round-trip (a warp
+attempted under a menu used to fail silently). The first living trainer
+is picked automatically on elimination. A spectator's A press no longer
+turns a ghost to face an invisible body.
+
 ### BR-13 · See the spectated player's party and items
 
 Needs new wire messages: only position, facing and status are broadcast today.
@@ -243,6 +262,21 @@ Sizing and rate need a decision before this is safe on the relay.
 ---
 
 ## P4 — quality of life
+
+### BR-27 · One lobby screen, not a menu round-trip — DONE (POK-32)
+
+**Resolved 2026-08-23:** `lib/menu.lua` is now a Menu whose rows are
+rebuilt from BR every frame (`Menu.items(mod, BR, game)` is a pure
+function of state; `Menu.view` names the face: menu / connecting / lobby /
+match). The rows that start a room — QUICK PLAY, SOLO VS BOTS, HOST GAME,
+JOIN BY CODE — keep the screen open, so the same screen becomes the lobby
+on the next frame; the box re-sizes to its rows the way `Menu.new` sized
+it at birth; the cursor resets only when the face changes. START MATCH,
+LEAVE and LEAVE MATCH close it. NAME and SERVER... stay on the first face
+(a name is sent when you join, an address only matters before you
+connect). The match face gained the Safari clock. Same pattern the
+engine's StartMenu uses to overlay its Safari counter (override the
+instance's method, call the base).
 
 ### BR-14 · Free move management out of battle
 
