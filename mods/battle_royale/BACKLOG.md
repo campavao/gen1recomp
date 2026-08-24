@@ -398,7 +398,23 @@ RUN ends a link battle as a draw with no consequence. Damage carries, but
 nobody can ever be cornered, which blunts the forced-eyeline premise. D9 wants
 a re-engage cooldown, escalating pursuit, and escape items.
 
-### BR-20 · D8 — loose item and money pickups
+### BR-20 · D8 — loose item and money pickups — DONE (POK-25)
+
+**Resolved 2026-08-24:** one BAG per fallen trainer, on the cell they fell
+on, the team's balls around it — position is the tell, and it has its own
+sprite: `assets/bag.png`, a 16x16 sheet drawn in the item ball's four
+shades (Gen 1 has no bag), registered with `mod.content.sprites:register`
+exactly like SPRITE_POKE_BALL (`frames = 1, walker = false`); the POKeDEX
+prop stands in if the registry refuses. The `spill` message carries the
+bag (`{ key, x, y, items, money, name }`, wire PROTOCOL 5) and `loot` --
+the unicast that put the loser's bag straight in the victor's pocket -- is
+gone: a PvP loss, a whiteout, the fog and a bot all go through the same
+`Spills.build(..., bag)`. Badges and HMs stay out of the bag (they are the
+drop's grant). Opening one pages the contents ("RED's BAG: POTION x3 ...
+¥500 / Take it?"); YES claims it for everyone (`took`) and the contents
+land in ours. Bots: BOT_LOOT becomes their bag, and a player-beaten bot
+now spills its team too (`spillBot`, shared with the host's
+`eliminateBot`) -- the winner finds it on the ground beside them.
 
 The victor takes the bag directly. D8 wants items and money on the ground as
 pickups, like the team already is.
