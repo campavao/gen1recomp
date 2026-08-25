@@ -204,7 +204,7 @@ the team you have — a cancelled catch is released, a passed-over ball stays
 on the ground. The released Pokémon spills as a ball at your feet — the same
 `Spills`/`Wire.spill` path as an elimination, under its own `<id>:drop:<n>`
 key namespace — so trading up leaves a trace anyone can claim. Nothing ever
-reaches a box: the engine asks the new `catch.party_full` hook (RFC 0016,
+reaches a box: the engine asks the new `catch.party_full` hook (RFC 0018,
 `BattleState:partyFullDestination`) before `Boxes.deposit`; on a stock
 engine the shim wraps `deposit` itself, at the cost of the vanilla "But
 every BOX is full!" line showing before the picker. The battle picker rides

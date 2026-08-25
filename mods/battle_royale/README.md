@@ -449,7 +449,7 @@ All of them are generic — any mod with a self-driven actor, an adopted link
 transport, its own new-game flow, or a rule it wants to hold for a while
 wants them. The first four are proposed upstream as **RFC 0014**, the two
 battle-rule hooks as **RFC 0015**, and the full-party catch hook as
-**RFC 0016**.
+**RFC 0018**.
 
 ### ...and running without them
 
