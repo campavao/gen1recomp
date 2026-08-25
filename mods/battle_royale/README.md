@@ -67,8 +67,13 @@ the 500-step budget — and no Pokémon at all. You have `SAFARI SECONDS`
 and nobody can fight anybody until it runs out. Run out of balls or steps
 and the PA sends you to the gate early, exactly as it always did, to wait
 for the buzzer. When it sounds — "PA: Ding-dong! Time's up!" — everyone
-walks to the gate and **picks the town they drop into**, landing on a
-random cell of it so a popular choice doesn't stack everyone on one square.
+walks to the gate and **picks the town they drop into on the TOWN MAP** —
+a cursor over Kanto, the way FLY asks, rather than a list of names, because
+where you drop is a geography decision — landing on a random cell of it so
+a popular choice doesn't stack everyone on one square. **Still in a battle
+when the buzzer goes? It closes itself.** A ball already in the air gets a
+couple of seconds to land and then the PA is done waiting; the zone is not
+somewhere you can hide to keep catching.
 **Caught nothing? You're out** at the buzzer: you brought no team to a mode
 where the team is your health. The Safari is closed for the rest of the
 match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
@@ -85,8 +90,11 @@ gyms are just no longer in the way.
 Meanwhile the **fog** closes in. See below.
 
 Walk into another trainer — be on the tile facing them — and the battle
-begins. Win, lose or run; a lost battle only ends your match if it was your
-last Pokémon. **Knock someone out and their BAG hits the ground where they
+begins. **You only ever fight somebody you can see**: the eyeline is capped
+by what is actually on screen, and a trainer is engaged on the cell your
+screen has *drawn* them on rather than the cell the wire says they reached,
+so a fight never opens against a sprite that was never there. Win, lose or
+run; a lost battle only ends your match if it was your last Pokémon. **Knock someone out and their BAG hits the ground where they
 fell** — items and money, one bag with its own sprite, walk over and take
 it — and their team lands around it as Poké Balls. **Opening a ball is a gift, not a fight**: it
 shows the prompt Oak's lab uses —
@@ -137,6 +145,11 @@ never overwrite your actual playthrough.
 - Every battle is at the current rung — trainers, bots, wild grass and
   water, the Safari, a bite on a rod. A Lv5 drop never meets a Lv22 Safari
   mon, and a route's PIDGEY is worth catching in the last ring.
+- **The rung you start a fight at is the rung you fight at.** A shrink
+  during a battle still moves the ring and still bites, but your team does
+  not grow mid-turn — the level-up waits for the battle to close and lands
+  on the overworld. Levelling into a fight you had already committed to
+  rewrote the stats of the Pokémon standing on the field.
 - Battles are **SET** style whatever your OPTION row says: no "will you
   change POKéMON?" when the foe faints. SHIFT is free information and a free
   swap, and party-as-health is meant to bite.
@@ -167,6 +180,16 @@ never overwrite your actual playthrough.
   impossible, but the row still ran the whole vanilla ceremony — the
   confirmation, the jingle, "...saved the game!" — and wrote nothing. A
   menu row that lies gets removed; the veto stays as the guarantee.
+- **OPTION and MODS are off it as well.** Both are doors out of a live
+  match: the manager can disable this very mod with a room open, and the
+  options screen can flip BATTLE STYLE or TEXT SPEED underneath a lockstep
+  duel. Neither is worth surfacing for twenty minutes, and both come back
+  with the throwaway world.
+- **MAP is ON it.** The fog ring draws on the TOWN MAP, which makes the map
+  match information rather than a keepsake — and reaching it through the
+  bag meant *owning* a TOWN MAP. A spectator reads the watched trainer's
+  bag, so watching somebody who never picked one up left you with no way to
+  see the fog at all. It is a row of its own now, alive, out or watching.
 - **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
   where the party IS your health — deposit fresh Pokémon, fight with one,
   withdraw and repeat — so storage, Pokémon and items both, is unreachable
@@ -564,6 +587,38 @@ drops a bot down the block with `debugPlaceBot`, and checks that the bot
 wears a face of its own rather than the viewer's skin, **walks over**
 before the fight, and carries its own name from the battle intro on.
 `BOT OK` passes it.
+
+### The playtest probes
+
+Three more solo drivers, one per half of the 2026-08-25 playtest batch.
+Same shape as the two above — one client, a `LocalRoom`, no relay server:
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-playtest-drop \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/playtest_drop.lua lovec .
+```
+
+`playtest_drop.lua` opens a battle in the SAFARI and then sounds the buzzer
+with no further input, so the only thing that can close it is the PA
+itself; checks the drop picker is the TOWN MAP with a cursor rather than a
+list; flies to whichever town is furthest from the announced eye and holds
+there to prove phase 1 really is a grace period; and reads the START menu
+back to see OPTION and MODS gone and MAP present, then opens the map with
+an emptied bag. `DROP OK` passes it.
+
+`playtest_match.lua` is the in-match half: it proves a warp-blind spill
+would land on a VIRIDIAN door and that the shipped one does not, that a
+ghost is given the player's 16-frame step rather than an NPC's 32, that a
+ghost keeps walking with the START menu open, that the eyeline stops
+inside the frame — and finally that a fog shrink landing mid-battle does
+not level the team until the battle closes. That last probe runs the ring
+to the all-fog endgame, so it is deliberately last. `MATCH OK` passes it.
+
+`playtest_hunt.lua` is the endgame: a three-trainer roster with the bots
+exiled to opposite corners of Kanto and the fog turned off long enough
+that it cannot be what herds them. It watches them cross seams and logs
+each move with the distance it closed. `HUNT OK` passes it.
 
 ### Reading the logs
 
