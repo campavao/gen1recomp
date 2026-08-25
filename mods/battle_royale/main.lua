@@ -65,6 +65,7 @@ local RESYNC_TICKS = 300
 -- rightly drops the connection as a flood.  Seconds keep bots walking at a
 -- human pace and the traffic bounded, whatever the host's clock is doing.
 local BOT_STEP_SECONDS = 0.45
+local GOAL_SECONDS = 30           -- a bot's in-map destination goes stale (POK-71)
 local FOG_SHELTER_SECONDS = 30    -- a bot fight blocks the fog this long (POK-63)
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
@@ -1102,7 +1103,34 @@ return function(mod)
               end
             end
           end
-          local dir = Bots.wander(p, p.rng, canWalk, prey)
+          -- no prey on the map: walk somewhere, visibly (POK-71).  A far
+          -- goal cell, re-rolled on arrival or gone stale, turns the old
+          -- orbit-a-cell shuffle into legible marches with pauses.
+          local target = prey
+          if not target and self.phase == "match" then
+            local g = p.goal
+            local stale = not g or g.map ~= p.map
+              or (math.abs(g.x - p.x) + math.abs(g.y - p.y)) <= 1
+              or (now and (now - (g.at or 0)) > GOAL_SECONDS)
+            if stale then
+              local cells = walkableCells(p.map)
+              local pick = nil
+              if #cells > 0 then
+                for _ = 1, 8 do
+                  local c = cells[p.rng(1, #cells)]
+                  pick = pick or c
+                  if c and (math.abs(c.x - p.x) + math.abs(c.y - p.y)) >= 8 then
+                    pick = c
+                    break
+                  end
+                end
+              end
+              p.goal = pick and { map = p.map, x = pick.x, y = pick.y,
+                                  at = now or 0 } or nil
+            end
+            target = p.goal
+          end
+          local dir = Bots.wander(p, p.rng, canWalk, target)
           if dir then
             local d = Bots.DELTA[dir]
             p.facing = dir
