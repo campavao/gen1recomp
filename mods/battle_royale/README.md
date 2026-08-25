@@ -566,3 +566,18 @@ until they move, so the win must come from the shot clock forfeiting them.
 It needs a `gen1recomp` checkout, an imported ROM (`POKEPORT_IMPORT_ROM`),
 `node`, and LOVE (`LOVEC` overrides the default path). A run takes a few
 minutes — real matches on real wall-clocks, twice.
+
+### The champion's exit
+
+One client and no relay server -- a solo room is a `LocalRoom`:
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_IDENTITY=br-fame \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/fame_smoke.lua lovec .
+```
+
+`fame_smoke.lua` hosts a solo match, declares the win (`debugWin` -- a
+driver cannot play one down to a single survivor in the time it has), sits
+through the Hall of Fame, and asserts the champion ends up **off** the
+finished world with the room still standing, so PLAY AGAIN can run it
+back. `FAME OK` passes it; any `PVP FAIL` line fails it.
