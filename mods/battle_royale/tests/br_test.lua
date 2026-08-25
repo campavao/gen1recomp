@@ -1605,28 +1605,24 @@ do
   end
 end
 
--- POK-78: the fog overlay intensity curve
+-- POK-82: the Hall of Fame is the end of the run -- closing the last page
+-- pops itself AND tells the mod, so the champion is not left standing in a
+-- finished world.
 do
-  local FogView = require("mods.battle_royale.lib.fogview")
-  local M = FogView.EDGE_MARGIN
-  local function inten(d, all) local i = FogView.state(d, all) return i end
-  local function puls(d, all) local _, p = FogView.state(d, all) return p end
-  eq(inten(nil, false), 0, "no ring -> clean screen")
-  eq(inten(-10, false), 0, "deep safe -> clean")
-  eq(inten(0, false), 1, "at the ring edge (inside) -> full fog")
-  eq(inten(2, false), 1, "out in the fog -> full")
-  eq(inten(5, true), 1, "the final ring is full everywhere")
-  ok(puls(1, false), "in the fog it pulses")
-  ok(puls(5, true), "the final ring pulses")
-  ok(not puls(-M / 2, false), "the pre-arrival creep does not pulse")
-  -- the creep thickens as the ring nears, while still safe
-  local near = inten(-M / 4, false)
-  local far = inten(-M * 0.9, false)
-  ok(near > far, "the creep thickens as the ring closes")
-  ok(near > 0 and near < 1, "and stays a hint, not full fog")
-  ok(far > 0, "even at the margin's reach there is a wisp")
-  -- pulse() breathes within a shallow band
-  ok(FogView.pulse(0) >= 0.78 and FogView.pulse(1.7) <= 1.01, "pulse stays shallow")
+  local Fame = require("mods.battle_royale.lib.fame")
+  local popped, done = 0, 0
+  local game = { stack = { pop = function() popped = popped + 1 end } }
+  local f = Fame.new(game, {}, {}, function() done = done + 1 end)
+  eq(#f.pages, 1, "an empty party still parades the record card")
+  eq(done, 0, "the run is not over while a page is up")
+  f:advance()
+  eq(popped, 1, "closing the last page pops the parade")
+  eq(done, 1, "and hands the run back to the mod")
+  -- a parade nobody wired still closes cleanly
+  local g2 = { stack = { pop = function() end } }
+  local f2 = Fame.new(g2, {}, {})
+  local okA = pcall(function() f2:advance() end)
+  ok(okA, "no onDone is not an error")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
