@@ -2911,7 +2911,7 @@ return function(mod)
 
   -- ------- the tick
 
-  mod.hooks:wrap("input.step", function(next, game, dt)
+  local function brInputTick(game, dt)
     BR.game = game
     local relay = BR.relay
     if relay then
@@ -3034,6 +3034,22 @@ return function(mod)
       end
     end
     BR:tickCamera()
+  end
+
+  -- Everything the mod does per tick sits behind ONE pcall (POK-72): an
+  -- error in any subsystem must never eat the ENGINE's input step -- that
+  -- is the difference between a logged traceback and a client frozen
+  -- solid until force-close.  Logged once per distinct message, so a
+  -- per-tick repeat cannot flood the console either.
+  mod.hooks:wrap("input.step", function(next, game, dt)
+    local ok, err = pcall(brInputTick, game, dt)
+    if not ok then
+      err = tostring(err)
+      if err ~= BR.lastTickError then
+        BR.lastTickError = err
+        mod.log:warn("battle royale tick failed: %s", err)
+      end
+    end
     return next(game, dt)
   end)
 
