@@ -1,4 +1,4 @@
-# RFC 0016: `catch.party_full` — custody of a catch the party cannot hold
+# RFC 0018: `catch.party_full` — custody of a catch the party cannot hold
 
 ## Status
 
