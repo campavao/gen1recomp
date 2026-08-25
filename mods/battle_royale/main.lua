@@ -2211,7 +2211,16 @@ return function(mod)
         end
         save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
         save.money = math.min(999999, (save.money or 0) + (bag.money or 0))
-        say(("You took %s's\nBAG!"):format(who))
+        -- straight to using it (POK-73): the moment you loot is the moment
+        -- you want the POTION -- offer the PACK without the START round-trip
+        game.stack:push(TextBox.new(game,
+          ("You took %s's\nBAG!\fOpen the PACK\nnow?"):format(who), nil, {
+          choice = function(open)
+            if not open then return end
+            local BagMenu = require("src.ui.BagMenu")
+            game.stack:push(BagMenu.new(game, {}))
+          end,
+        }))
       end,
     }))
     return true
