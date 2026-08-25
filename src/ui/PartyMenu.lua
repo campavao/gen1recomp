@@ -877,7 +877,7 @@ function PartyMenu:draw()
       ly = ly + 16
     end
   elseif self.pickOnly then
-    Font.draw(Strings("Use on which one?"), 8, 136)
+    Font.draw(self.pickText or Strings("Use on which one?"), 8, 136)
   else
     -- default field party menu (StartMenu) and the battle voluntary-switch
     -- (BattleState:openParty): Gen1 prints PartyMenuNormalText / PartyMenuBattleText
