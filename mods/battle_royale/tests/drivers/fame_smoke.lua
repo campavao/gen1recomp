@@ -59,15 +59,98 @@ return function(game)
   for _ = 1, 8 do U.tap(game, "a") U.wait(20) end
   U.wait(30)
   local ow = game.overworld
+  local base = game.speedOverride
+
+  -- POK-84: what the START menu offers right now, as one string.
+  local function startRows()
+    -- START is gated on the player standing still and the overworld owning
+    -- the screen, so this presses until the menu is actually up
+    local its
+    for _ = 1, 20 do
+      U.tap(game, "start")
+      U.wait(20)
+      local top = game.stack:top()
+      its = type(top) == "table" and top.items or nil
+      if type(its) == "table" then break end
+      if top ~= game.overworld then U.tap(game, "b") U.wait(10) end
+    end
+    if type(its) ~= "table" then return nil end
+    local out = {}
+    for _, it in ipairs(its) do out[#out + 1] = tostring(it.label or "") end
+    U.tap(game, "b")
+    U.wait(20)
+    return "|" .. table.concat(out, "|") .. "|"
+  end
+
+  -- POK-83: the touch skin's hold, straight at the engine.  The mod cannot
+  -- veto it through core.logic_speed (checked after speedOverride), so the
+  -- test is whether it gets taken back.
+  local function heldSpeed()
+    if not game.touchSkinHotkey then return nil end
+    game:touchSkinHotkey("fast_forward_hold", true)
+    U.wait(8)
+    local during = game.speedOverride
+    game:touchSkinHotkey("fast_forward_hold", false)
+    U.wait(8)
+    return during, game.speedOverride
+  end
+
+  -- ...checked in a live round, and again once it is over: the guards used
+  -- to stop at inRound(), so a win handed both back.
+  local function rulesHold(when)
+    local rows = startRows()
+    if not rows then return C.fail("no START menu " .. when) end
+    if rows:find("|LINK|", 1, true) then
+      return C.fail("LINK is reachable " .. when .. ": " .. rows)
+    end
+    if rows:find("|SAVE|", 1, true) then
+      return C.fail("SAVE is reachable " .. when .. ": " .. rows)
+    end
+    local during, after = heldSpeed()
+    if during ~= nil then
+      if during ~= base then
+        return C.fail(("fast-forward took %s -> %s"):format(
+          when, tostring(during)))
+      end
+      if after ~= base then
+        return C.fail(("fast-forward lingered %s -> %s"):format(
+          when, tostring(after)))
+      end
+    end
+    U.log(("FAME: rules hold %s (%s)"):format(when, rows))
+  end
   U.log(("FAME: in the match on %s, %s alive"):format(
     tostring(C.map()), tostring(E.aliveCount())))
   shot("in-match")
+  rulesHold("in a round")
+
+  -- POK-84: the Cable Club desk, checked where it can be checked cheaply.
+  -- Walking into a Centre is a whole journey; what actually decides the
+  -- guard is whether data:textEntry(map.def.label, npc.def.text) still finds
+  -- the cableClub marker, and that is the same call OverworldState makes to
+  -- pick the receptionist out in the first place.  So exercise the lookup
+  -- with a real Centre's key, and confirm the label the guard passes it is
+  -- the same kind of key the map carries.
+  do
+    local entry = game.data.textEntry and game.data:textEntry(
+      "ViridianPokecenter", "TEXT_VIRIDIANPOKECENTER_LINK_RECEPTIONIST")
+    if not (entry and entry.cableClub) then
+      return C.fail("the Cable Club marker the guard reads is gone")
+    end
+    local here = ow and ow.map and ow.map.def and ow.map.def.label
+    if type(here) ~= "string" then
+      return C.fail("map.def.label is not the key the guard passes: "
+        .. tostring(here))
+    end
+    U.log("FAME: the Cable Club marker resolves; map key is " .. here)
+  end
 
   E.debugWin()
   if not L.mashUntil(C, function() return E.phase() == "over" end, 600) then
     return C.fail("the declared win never took")
   end
   U.log("FAME: phase over; waiting on the parade")
+  rulesHold("after the win")
 
   -- Spotting the parade: `.pages` alone is NOT enough -- a Gen 1 text box
   -- has text pages too, and the win banner is on screen first.  showPage is

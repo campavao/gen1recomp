@@ -1613,6 +1613,28 @@ do
   end
 end
 
+-- POK-84: the marker the Cable Club guard reads.  The world.talk wrap asks
+-- data:textEntry(map.def.label, npc.def.text) and refuses on entry.cableClub
+-- -- the same flag OverworldState uses to find the receptionist.  If the
+-- extractor ever stops emitting it the desk quietly re-opens mid-match, and
+-- nothing else would notice, so pin it.
+do
+  local okT, tp = pcall(require, "data.generated.text_pointers")
+  if okT and type(tp) == "table" then
+    local desks, viridian = 0, false
+    for map, entries in pairs(tp) do
+      for _, e in pairs(entries) do
+        if type(e) == "table" and e.cableClub then
+          desks = desks + 1
+          if map == "ViridianPokecenter" then viridian = true end
+        end
+      end
+    end
+    ok(desks >= 10, "every POKeMON CENTER link desk is marked (" .. desks .. ")")
+    ok(viridian, "VIRIDIAN's among them, keyed by the map's own label")
+  end
+end
+
 -- POK-82: the Hall of Fame is the end of the run -- closing the last page
 -- pops itself AND tells the mod, so the champion is not left standing in a
 -- finished world.

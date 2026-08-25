@@ -364,6 +364,22 @@ return function(mod)
     if ps and self.stockWalk then ps.walk = self.stockWalk end
   end
 
+  -- Fast-forward is the engine's, not ours (POK-83).  Game:logicSpeed
+  -- reads speedOverride BEFORE the core.logic_speed hook -- deliberately,
+  -- so no mod can defeat it -- which is also why the mod's speed veto
+  -- (POK-10) cannot see the touch skin's hold-to-fast-forward.  What we
+  -- CAN do is put it back: baseSpeed remembers what the session started
+  -- with, which is --speed / POKEPORT_SPEED on a driver run and nil for a
+  -- player, so restoring it never steals a run argument.
+  function BR:restoreSpeed()
+    local game = self.game
+    if game and self.baseSpeed ~= nil then
+      game.speedOverride = self.baseSpeed or nil
+      game.skinSpeedSaved = nil
+    end
+    self.baseSpeed = nil
+  end
+
   function BR:recordWin()
     local Skins = require("mods.battle_royale.lib.skins")
     local before = self:winCount()
@@ -531,6 +547,7 @@ return function(mod)
   -- Everything one match owns, cleared for the next: a leave (reset) or
   -- PLAY AGAIN (onAgain), which keeps the room.
   function BR:resetMatch()
+    self:restoreSpeed()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -715,6 +732,8 @@ return function(mod)
   end
 
   function BR:onStart(msg)
+    -- what this session runs at normally, before anyone holds a bumper
+    self.baseSpeed = (self.game and self.game.speedOverride) or false
     -- find my drop
     local mine
     for _, s in ipairs(msg.spawns) do
@@ -1311,6 +1330,15 @@ return function(mod)
 
   function BR:inRound()
     return self.phase == "safari" or self.phase == "drop" or self.phase == "match"
+  end
+
+  -- inRound() is the RULES window -- levels, bag, encounters.  This is the
+  -- wider one: the throwaway world is still under our feet, "over"
+  -- included.  A match that has just ended is still not somewhere the
+  -- engine's own link play or a fast-forward belongs (POK-83/84), and
+  -- until POK-82's exit runs there is a real window to stand in.
+  function BR:inSession()
+    return self:inRound() or self.phase == "over"
   end
 
   function BR:safariLeft()
@@ -3109,6 +3137,18 @@ return function(mod)
       relay = BR.relay -- update() may have closed and reset it
     end
 
+    -- A held or toggled fast-forward would outrun the shared clock and
+    -- everyone racing it, so it is taken back the frame it lands -- and,
+    -- because this covers "over" too, a press that arrives late cannot
+    -- surface on the win screen either (POK-83).
+    if BR.baseSpeed ~= nil and BR:inSession() then
+      local want = BR.baseSpeed or nil
+      if game.speedOverride ~= want then
+        game.speedOverride = want
+        game.skinSpeedSaved = nil
+      end
+    end
+
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
        and BR.autoStartAt and relay:isHost()
@@ -3269,6 +3309,21 @@ return function(mod)
   -- adjacent and facing, is a second way to start the fight).
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
+    -- The Cable Club receptionist is the other door to the engine's link
+    -- play (POK-84).  Same reason as the START row, so the same window:
+    -- refused for as long as the match world exists.  The cableClub flag
+    -- is the map's own TX_SCRIPT marker, which is how OverworldState
+    -- picks the receptionist out of a Centre's NPCs in the first place.
+    local def = npc and npc.def
+    local data = BR.game and BR.game.data
+    if BR:inSession() and def and def.text and data and data.textEntry
+       and ow and ow.map and ow.map.def then
+      local entry = data:textEntry(ow.map.def.label, def.text)
+      if entry and entry.cableClub then
+        say("The CABLE CLUB is\nclosed for\nthe match.")
+        return
+      end
+    end
     -- the gate worker sells no admission during a round (POK-40): the
     -- talk path could otherwise charge a second 500 and re-open the zone
     if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
@@ -3458,12 +3513,13 @@ return function(mod)
   mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     local out = next(game, items)
     if type(out) ~= "table" then return out end
-    local label = (BR:inRound() or BR.phase == "over") and "ROYALE*"
+    local label = BR:inSession() and "ROYALE*"
       or (BR.relay and "ROYALE." or "ROYALE")
     -- the engine's own link play has no business in a match: the mod owns
     -- the transport for PvP, and a second session from inside one is
-    -- undefined at best.  Back the moment the match is over.
-    if BR:inRound() then
+    -- undefined at best.  Gone until the match world is (POK-84) -- the
+    -- guard used to stop at inRound(), so a win handed LINK straight back.
+    if BR:inSession() then
       mod.ui.removeLabel(out, "LINK")
       -- SAVE would run the whole vanilla ceremony -- confirmation, jingle,
       -- "...saved the game!" -- and write nothing (save.write is vetoed
