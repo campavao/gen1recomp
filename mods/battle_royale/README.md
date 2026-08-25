@@ -581,3 +581,9 @@ driver cannot play one down to a single survivor in the time it has), sits
 through the Hall of Fame, and asserts the champion ends up **off** the
 finished world with the room still standing, so PLAY AGAIN can run it
 back. `FAME OK` passes it; any `PVP FAIL` line fails it.
+
+`bot_smoke.lua` is the other half of that: it posts on Pewter's street,
+drops a bot down the block with `debugPlaceBot`, and checks that the bot
+wears a face of its own rather than the viewer's skin, **walks over**
+before the fight, and carries its own name from the battle intro on.
+`BOT OK` passes it.

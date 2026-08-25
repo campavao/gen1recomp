@@ -1613,6 +1613,86 @@ do
   end
 end
 
+-- POK-89: bots have faces of their own.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Skins = require("mods.battle_royale.lib.skins")
+
+  -- the invariant the ticket is really about: a bot must never turn up
+  -- wearing something the player unlocks, or its face claims a rank
+  local worn = {}
+  for _, e in ipairs(Skins.LADDER) do worn[e.walk] = true end
+  local clash = nil
+  for _, e in ipairs(Bots.LOOKS) do
+    if worn[e.walk] then clash = e.walk end
+  end
+  eq(clash, nil, "no bot look is a player wardrobe skin")
+  ok(#Bots.LOOKS >= 6, "and there are enough of them to vary (" .. #Bots.LOOKS .. ")")
+
+  -- every pair has to exist in the extracted data: a missing sheet asserts
+  -- inside NPC.new and a missing class inside BattleState
+  local okS, sprites = pcall(require, "data.generated.sprites")
+  local okT, trainers = pcall(require, "data.generated.trainers")
+  if okS and okT then
+    for _, e in ipairs(Bots.LOOKS) do
+      ok(sprites[e.walk] ~= nil, "bot walk sheet exists: " .. e.walk)
+      ok(trainers[e.class] ~= nil, "bot trainer class exists: " .. e.class)
+    end
+  end
+
+  -- seeded: the same bot looks the same on every client, all match
+  local a1 = Bots.look(4242, Bots.idFor(1))
+  local a2 = Bots.look(4242, Bots.idFor(1))
+  ok(a1 ~= nil, "a bot gets a look")
+  eq(a1.walk, a2.walk, "and the same one every time it is asked")
+  -- ...and a roster is not all one face
+  local seen, n = {}, 0
+  for i = 1, 12 do
+    local e = Bots.look(4242, Bots.idFor(i))
+    if e and not seen[e.walk] then seen[e.walk] = true n = n + 1 end
+  end
+  ok(n >= 3, "a roster of twelve wears more than a couple of faces (" .. n .. ")")
+
+  -- a build missing the art degrades instead of asserting
+  local only = Bots.LOOKS[2]
+  local thin = Bots.look(7, Bots.idFor(3),
+    { sprites = { [only.walk] = true }, trainers = { [only.class] = true } })
+  eq(thin and thin.walk, only.walk, "a thin build falls back to what it has")
+  eq(Bots.look(7, Bots.idFor(3), { sprites = {}, trainers = {} }), nil,
+     "and a build with none of them says so")
+end
+
+-- POK-85: the walk over.  Bots.wander is a roam; this is a stride.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local open = function() return true end
+  local function bot(x, y) return { map = "M", x = x, y = y } end
+
+  eq(Bots.approach(bot(1, 5), open, { x = 9, y = 5 }), "right", "east closes east")
+  eq(Bots.approach(bot(9, 5), open, { x = 1, y = 5 }), "left", "and west, west")
+  eq(Bots.approach(bot(5, 9), open, { x = 5, y = 1 }), "up", "the bigger gap first")
+  eq(Bots.approach(bot(5, 1), open, { x = 5, y = 9 }), "down", "...either way")
+  -- adjacent is arrival: a trainer stops beside you, never on you
+  eq(Bots.approach(bot(4, 5), open, { x = 5, y = 5 }), nil, "adjacent is arrived")
+  eq(Bots.approach(bot(5, 5), open, { x = 5, y = 5 }), nil, "and so is on the spot")
+  -- walls: the second-choice axis carries it round
+  local noEast = function(_, x) return x <= 5 end
+  eq(Bots.approach(bot(5, 9), noEast, { x = 9, y = 1 }), "up",
+     "boxed in on one axis, it takes the other")
+  -- ...and walled off entirely, it says so rather than strolling away
+  eq(Bots.approach(bot(5, 5), function() return false end, { x = 9, y = 9 }), nil,
+     "walled off is nil, not a wander")
+  -- unlike wander, it never pauses: same answer every time
+  for _ = 1, 20 do
+    if Bots.approach(bot(1, 5), open, { x = 9, y = 5 }) ~= "right" then
+      ok(false, "the stride never dithers")
+      break
+    end
+  end
+  ok(true, "the stride never dithers")
+  ok(Bots.WALKUP_STEPS > 0 and Bots.WALKUP_SECONDS > 0, "the stride is bounded")
+end
+
 -- POK-84: the marker the Cable Club guard reads.  The world.talk wrap asks
 -- data:textEntry(map.def.label, npc.def.text) and refuses on entry.cableClub
 -- -- the same flag OverworldState uses to find the receptionist.  If the

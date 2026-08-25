@@ -78,9 +78,12 @@ local QUICK_START_SECONDS = 30
 -- somebody arriving late deserves a moment to see the lobby before the drop
 local QUICK_START_GRACE = 10
 
--- The trainer class a bot fights as.  The class only supplies the sprite,
--- the name banner and the AI temperament -- the party comes from
--- Bots.party through the trainer.party hook below.
+-- The trainer class a bot fights as when it has no look of its own -- a
+-- build missing every sheet in Bots.LOOKS.  The class supplies the pic
+-- and the AI temperament; the party comes from Bots.party through the
+-- trainer.party hook, and the NAME is overlaid with the bot's own.
+-- Bots.look is what normally decides this now (POK-89): one hardcoded
+-- class meant every bot in Kanto was the same YOUNGSTER.
 local BOT_TRAINER_CLASS = "OPP_YOUNGSTER"
 
 -- What beating a bot is worth.  Bots do not carry a real bag, so this is
@@ -569,6 +572,7 @@ return function(mod)
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
+    self.walkUp = nil
     self.pendingParade = nil
     self.ringDistOf = nil
     self.dropSeq = nil
@@ -751,11 +755,18 @@ return function(mod)
     for _, s in ipairs(msg.spawns) do
       if s.id ~= self.myId then
         local bot = Bots.isBot(s.id)
+        -- a bot's face is seeded like its name and its team (POK-89), so
+        -- it needs no wire field -- though place() carries it anyway, the
+        -- same way a human advertises the skin they picked
+        local look = bot and Bots.look(msg.seed, s.id,
+                                       self.game and self.game.data) or nil
         self.players[s.id] = {
           name = bot and Bots.name(msg.seed, s.id) or self.relay:nameOf(s.id),
           map = bot and s.map or nil,   -- a bot is where the host says at once
           x = s.x, y = s.y, facing = "down",
           status = "alive", bot = bot or nil,
+          sprite = look and look.walk or nil,
+          class = look and look.class or nil,
         }
       end
     end
@@ -1111,10 +1122,14 @@ return function(mod)
       -- you are the aggressor: the ! over your own head, then the fight
       self.pending = { to = target, nonce = -1, host = true }
       engageFlash(ow and ow.player, function()
-        if BR.pending and BR.pending.to == target then BR.pending = nil end
-        if BR.status == "alive" and not BR.battle and not BR.botFight then
-          BR:startBotBattle(target)
-        end
+        -- ...and then it walks over (POK-85).  pending is held until it
+        -- arrives, so nothing else can start in the meantime.
+        BR:walkUpThen(target, function()
+          if BR.pending and BR.pending.to == target then BR.pending = nil end
+          if BR.status == "alive" and not BR.battle and not BR.botFight then
+            BR:startBotBattle(target)
+          end
+        end)
       end)
       return
     end
@@ -1215,11 +1230,62 @@ return function(mod)
                                   p.status, p.sprite, id))
   end
 
+  -- ------- the walk over (POK-85)
+  --
+  -- The "!" said a bot had seen you and then the battle simply happened,
+  -- from wherever it was standing.  A Gen 1 trainer walks over first, so
+  -- this does: after the flash, the bot closes the distance and the fight
+  -- starts when it arrives.
+  --
+  -- Cosmetic on purpose.  A bot fight is entirely local -- every client
+  -- derives the same party from the seed and there is no handoff to keep
+  -- in step -- so the stride needs nobody's agreement.  A host broadcasts
+  -- the steps so other screens see it too; a guest walks only its own copy
+  -- and the host's next step message puts the bot back where it really is.
+  -- BR.pending is held for the whole walk, so tryEngage cannot start a
+  -- second fight while this one is on its way over.
+  function BR:walkUpThen(botId, onDone)
+    local p = self.players[botId]
+    local me = here()
+    if not (p and me and p.map == me.mapId) then return onDone() end
+    self.walkUp = { id = botId, steps = 0, at = 0, onDone = onDone }
+  end
+
+  function BR:tickWalkUp()
+    local w = self.walkUp
+    if not w then return end
+    local function finish()
+      self.walkUp = nil
+      if w.onDone then w.onDone() end
+    end
+    local p = self.players[w.id]
+    local me = here()
+    -- it died on the way, we left the map, or the match moved on
+    if not (p and me and p.map == me.mapId and p.status == "alive"
+            and self.phase == "match") then return finish() end
+    local now = clock() or 0
+    if (now - (w.at or 0)) < Bots.WALKUP_SECONDS then return end
+    w.at = now
+    -- re-aimed every step: you are free to move, and it follows
+    local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
+    if not dir or w.steps >= Bots.WALKUP_STEPS then return finish() end
+    w.steps = w.steps + 1
+    local d = Bots.DELTA[dir]
+    p.facing = dir
+    p.x, p.y = p.x + d[1], p.y + d[2]
+    self.ghosts:pushStep(w.id, dir)
+    if self.relay and self.relay:isHost() then
+      self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, w.id))
+    end
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
+    local striding = self.walkUp and self.walkUp.id
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map then
+      -- a bot on its way over is not also strolling somewhere (POK-85)
+      if p.bot and p.status == "alive" and p.map and id ~= striding then
         -- every so often, walk a seam into a connected map
         if now and (now - (p.lastRoam or 0)) >= Bots.ROAM_SECONDS then
           roamBot(id, p, now)
@@ -2609,9 +2675,11 @@ return function(mod)
     -- the party is handed to BattleState through the trainer.party hook
     -- below, which is the engine's own seam for exactly this
     self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
+    local look = self.players[botId]
+    local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
       return require("src.battle.BattleState")
-        .newTrainer(game, BOT_TRAINER_CLASS, 1)
+        .newTrainer(game, class, 1)
     end)
     self.botParty = nil
     if not ok or not battle then
@@ -2620,12 +2688,24 @@ return function(mod)
       self.botFight = nil
       return
     end
-    -- the intro line reads trainer.name -- overlay the bot's own name on
-    -- the class chassis, the engine's own rival-name pattern (POK-61)
+    -- Overlay the bot's own name on the class chassis, the engine's own
+    -- rival-name pattern (POK-61).  Every line in BattleState reads
+    -- trainer.name live, so this is enough for all of them -- except
+    -- introText, which newTrainer BAKES before we get the battle back
+    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
+    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
+    -- swap the baked-in class for the name rather than reformatting the
+    -- string, which would drop whatever localisation Strings applied.
     local bp = self.players[botId]
     if bp and bp.name then
+      local was = battle.trainer and battle.trainer.name
       battle.trainer = setmetatable({ name = bp.name },
                                     { __index = battle.trainer })
+      if was and was ~= bp.name and type(battle.introText) == "string" then
+        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
+        battle.introText = battle.introText:gsub(pattern,
+                                                 (bp.name:gsub("%%", "%%%%")), 1)
+      end
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -3149,6 +3229,9 @@ return function(mod)
       end
     end
 
+    -- a bot walking over to fight you, one step per beat (POK-85)
+    BR:tickWalkUp()
+
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
        and BR.autoStartAt and relay:isHost()
@@ -3362,10 +3445,14 @@ return function(mod)
       if Bots.isBot(id) then
         BR.pending = { to = id, nonce = -1, host = true }
         engageFlash(owE and owE.player, function()
-          if BR.pending and BR.pending.to == id then BR.pending = nil end
-          if BR.status == "alive" and not BR.battle and not BR.botFight then
-            BR:startBotBattle(id)
-          end
+          -- you walked into THIS one, so its stride is already over and
+          -- Bots.approach returns nil on the first beat (POK-85)
+          BR:walkUpThen(id, function()
+            if BR.pending and BR.pending.to == id then BR.pending = nil end
+            if BR.status == "alive" and not BR.battle and not BR.botFight then
+              BR:startBotBattle(id)
+            end
+          end)
         end)
         return
       end
@@ -3787,6 +3874,13 @@ return function(mod)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
     return true
   end
+  -- ...and one on the walk over (POK-85): a smoke needs to know the
+  -- stride began, not just that a battle eventually happened
+  mod.exports.walkUp = function()
+    local w = BR.walkUp
+    if not w then return nil end
+    return { id = w.id, steps = w.steps }
+  end
   -- a diagnostic window into the fog gate, for the smokes
   mod.exports.fogProbe = function()
     local here = mod.world:current()
@@ -3813,6 +3907,9 @@ return function(mod)
       if p.bot then
         out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
                           status = p.status,
+                          -- the face it was dealt (POK-89): every bot
+                          -- looking the same was invisible from outside
+                          sprite = p.sprite, class = p.class,
                           -- how far through the fog's count this one is, so
                           -- a stalled sweep is diagnosable from outside
                           fogTicks = p.fogTicks or 0 }
