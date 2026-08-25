@@ -2572,6 +2572,19 @@ return function(mod)
     return next(battle)
   end)
 
+  -- No EXP from a trainer battle during a round (POK-74).  The rung is the
+  -- only power curve: D12 scaling never demotes, so paid EXP compounds into
+  -- a party above the fog's beat while every opponent stays at the rung.
+  -- Skipping the award skips the whole payout -- levels, stat exp and the
+  -- "gained EXP" boxes.  Wild battles still pay: a catch snaps to the rung
+  -- anyway, and grinding wilds is time the fog does not give back.
+  mod.hooks:wrap("battle.exp_award", function(next, ctx)
+    if inMatch() and ctx and ctx.battle and ctx.battle.kind == "trainer" then
+      return
+    end
+    return next(ctx)
+  end)
+
   -- No nickname prompt on a catch.  A match team is disposable and you may
   -- catch a dozen under fog pressure; the naming grid is friction with
   -- nothing behind it.  false keeps the species name with no prompt.
