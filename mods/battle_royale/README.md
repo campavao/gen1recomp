@@ -587,3 +587,21 @@ drops a bot down the block with `debugPlaceBot`, and checks that the bot
 wears a face of its own rather than the viewer's skin, **walks over**
 before the fight, and carries its own name from the battle intro on.
 `BOT OK` passes it.
+
+### Reading the logs
+
+A match writes its own story to the client log, one line per beat: the
+room, the start (seed, roster, clocks, where you dropped), each ring, every
+elimination and what caused it, the winner, the teardown. Every line
+carries the room code and the match seed —
+`[A7QK/91823] ring 3: eye CELADON CITY at 8,6, radius 7` — and the relay
+server prints the same room code on its own lines, so a client log and a
+server log for one game can be lined up afterwards.
+
+Set `BR_DEBUG=1` (or call `setDebug(true)` on the mod's exports) for the
+tier below that: per-map detail, and anything else that would otherwise
+bury the story. It is off by default on purpose.
+
+The relay logs connections with their identity, room create/join/leave, a
+census of the message types each connection actually sent when it goes,
+and errors with the message and room that caused them — never payloads.

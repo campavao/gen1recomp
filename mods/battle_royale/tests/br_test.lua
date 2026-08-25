@@ -1613,6 +1613,44 @@ do
   end
 end
 
+-- POK-86: the match log's two tiers and its correlation prefix.
+do
+  local Log = require("mods.battle_royale.lib.log")
+  local said = {}
+  local out = {
+    info = function(_, fmt, ...) said[#said + 1] = fmt:format(...) end,
+    warn = function(_, fmt, ...) said[#said + 1] = "W " .. fmt:format(...) end,
+  }
+  local log = setmetatable({ out = out, deepOn = false }, Log)
+
+  eq(log:prefix(), "", "no room yet means no prefix to read past")
+  log:say("hello %s", "world")
+  eq(said[#said], "hello world", "say goes straight out")
+
+  -- deep is silent until it is asked for: this is the whole point of it
+  log:deep("noise")
+  eq(#said, 1, "deep says nothing while it is off")
+  log:setDeep(true)
+  ok(log:isDeep(), "...and reports itself on")
+  log:deep("noise")
+  eq(#said, 2, "deep speaks once it is on")
+
+  -- correlation: the code and seed the relay's own log also prints
+  log:match("A7QK", nil)
+  eq(log:prefix(), "[A7QK/-] ", "a room before a match shows the code alone")
+  log:match(nil, 91823)
+  eq(log:prefix(), "[A7QK/91823] ", "and the seed joins it when the match starts")
+  log:say("ring 3")
+  eq(said[#said], "[A7QK/91823] ring 3", "every line carries it")
+  log:forget()
+  eq(log:prefix(), "", "leaving the match drops the prefix")
+
+  -- a logger with nowhere to write must not throw
+  local mute = setmetatable({ out = nil, deepOn = true }, Log)
+  ok(pcall(function() mute:say("x") mute:deep("y") mute:warn("z") end),
+     "a logger with no sink is silent, not fatal")
+end
+
 -- POK-89: bots have faces of their own.
 do
   local Bots = require("mods.battle_royale.lib.bots")
