@@ -1315,17 +1315,25 @@ do
     BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
-    -- the match is over: the host can run it back, a guest waits to be sent
+    -- The match is over: the host can run it back, a guest waits to be sent.
+    -- The champion is SENT here once the Hall of Fame closes (POK-82), so
+    -- the report reads as a result -- no live level, no ring that stopped
+    -- closing, no count of who is still standing.
     BR.phase = "over"
     BR.relay = room(true)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|PLAY AGAIN|LEAVE MATCH",
+    eq(labels(items), "MATCH OVER|PLAY AGAIN|LEAVE MATCH",
        "over, as the host: PLAY AGAIN")
     ok(not find(items, "PLAY AGAIN").keepOpen, "which closes the report (the world is about to go)")
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH",
+    eq(labels(items), "MATCH OVER|LEAVE MATCH",
        "over, as a guest: the host decides")
+    -- still standing when it ended means you are the one left standing
+    BR.status = "alive"
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items), "YOU WIN!|LEAVE MATCH", "the champion is told so")
+    BR.status = "out"
   end
 end
 

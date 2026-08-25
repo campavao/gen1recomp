@@ -610,6 +610,41 @@ return function(mod)
     if message then say(message) end
   end
 
+  -- Leaving the finished world WITHOUT leaving the room: the throwaway
+  -- Kanto is dropped and the lobby screen comes back with the roster
+  -- intact.  Shared by PLAY AGAIN (onAgain) and the Champion's exit
+  -- (POK-82) -- the two ways a match stops being somewhere you stand.
+  function BR:toLobbyScreen()
+    local game = self.game
+    if not game then return false end
+    self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
+    local ok, err = pcall(function()
+      while game.stack:top() do game.stack:pop() end
+      game.stack:push(game:makeTitleState())
+      mod.ui.push(game, SCREEN)
+    end)
+    if not ok then
+      mod.log:warn("could not return to the lobby: %s", tostring(err))
+    end
+    return ok
+  end
+
+  -- The Hall of Fame is the end of the run (POK-82).  Standing in the
+  -- match world after it was a dead end -- nothing tore the match down,
+  -- and phase "over" quietly lifts every in-match menu restriction while
+  -- the winner stands there (LINK and SAVE come back).  So the parade
+  -- hands off to here.  The room is KEPT whenever there still is one, so
+  -- PLAY AGAIN can run it back with the same people -- a host who left
+  -- would close the room on everybody (relay `room_closed`).  Only a
+  -- champion with no room left says goodbye to the relay.
+  function BR:endRun()
+    if self.relay and self.relay:isOpen() then
+      self:toLobbyScreen()
+    else
+      self:teardown()
+    end
+  end
+
   -- PLAY AGAIN (POK-20): the host sends the room back to the lobby -- the
   -- roster kept, the code kept, the room unlocked for anyone else who wants
   -- in -- and everyone leaves the finished world for the lobby screen.  The
@@ -634,16 +669,7 @@ return function(mod)
       local now = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
       self.autoStartAt = now + QUICK_START_SECONDS
     end
-    if wasMatchWorld and game then
-      local ok, err = pcall(function()
-        while game.stack:top() do game.stack:pop() end
-        game.stack:push(game:makeTitleState())
-        mod.ui.push(game, SCREEN)
-      end)
-      if not ok then
-        mod.log:warn("could not return to the lobby: %s", tostring(err))
-      end
-    end
+    if wasMatchWorld and game then self:toLobbyScreen() end
   end
 
   -- ------- starting a match
@@ -3131,7 +3157,8 @@ return function(mod)
       if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
          and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
         BR.pendingParade = nil
-        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats()))
+        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats(),
+                                 function() BR:endRun() end))
       end
     end
     -- and neither they nor the engine's own lines may hold the match:
@@ -3634,6 +3661,14 @@ return function(mod)
   end
   mod.exports.level = function() return BR:level() end
   mod.exports.matchStats = function() return BR:matchStats() end
+  -- A driver cannot play a match down to one survivor in the time it has,
+  -- so it can declare the end instead: the same call the host makes when
+  -- checkWinner finds one left, parade and all (POK-47/82).
+  mod.exports.debugWin = function()
+    if not BR:inRound() then return nil, "not in a round" end
+    BR:onWinner(BR.myId)
+    return BR.phase
+  end
   mod.exports.inFog = function() return BR.wasInFog == true end
   mod.exports.spillBalls = function()
     local out = {}
