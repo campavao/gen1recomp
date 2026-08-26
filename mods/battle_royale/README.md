@@ -255,6 +255,29 @@ the lobby with everyone in it — same code, roster kept, unlocked again for
 anyone else who wants in — and START MATCH rolls a fresh drop. Nobody
 exchanges a code twice.
 
+**How much play there has been, and how to say no.** The relay has always
+seen the multiplayer side — it hosts the rooms — but `SOLO VS BOTS` never
+opens a socket, so the mode most likely to be somebody's whole experience of
+this was the one nothing could see. A solo match now increments a counter
+next to the career, and that count rides along the next time the game
+connects to a relay for its own reasons. What goes with it is a random
+install id, the mod version and a date: enough to tell one person playing
+ten matches from ten people playing one, and nothing else. Not your trainer
+name — you chose that, and it may be your handle.
+
+It never opens a connection of its own to report. `Net:connectTCP` is a
+blocking connect with a five-second timeout, and its own comment explains
+why that is fine where it is used: it runs once, from an explicit user
+action. Starting an offline match is exactly the wrong place to break that,
+so nothing here does — a player on a laptop with no wifi is not kept waiting
+by a counter. The cost of that choice, plainly: somebody who only ever plays
+solo is never counted, and their whole history arrives at once the first
+time they touch multiplayer.
+
+`SEND STATS` in the lobby turns it off, and off stops the counting as well
+as the sending, so there is no backlog waiting to be flushed if it goes back
+on.
+
 **Your name, your skin and your wins are yours.** They live beside the mod
 rather than inside a save file, which is what lets them survive closing the
 game: a match is played in a throwaway world that is thrown away on the way
