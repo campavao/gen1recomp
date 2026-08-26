@@ -356,6 +356,18 @@ do
   ok(Fog.radius(Fog.phaseCount() + 50) == Fog.EVERYWHERE,
      "past the schedule the fog stays everywhere -- no clamp back to a ring")
 
+  -- POK-117: is there fog anywhere yet?  The grace phase is the one stretch
+  -- of a match with none, and it is what keeps the Pokemon Centre open.
+  ok(not Fog.isUp(Fog.radius(1)),
+     "the grace phase has no fog on the board at all")
+  for p = 2, Fog.phaseCount() do
+    ok(Fog.isUp(Fog.radius(p)),
+       "phase " .. p .. " has fog somewhere -- the counter is shut")
+  end
+  ok(Fog.isUp(Fog.EVERYWHERE), "the endgame is certainly fog")
+  ok(not Fog.isUp(Fog.NOWHERE), "and NOWHERE is certainly not")
+  ok(not Fog.isUp(nil), "no ring yet is not fog -- the match has not started")
+
   -- geometry on a town-map grid
   local locations = {
     HOME      = { x = 8, y = 8, name = "HOME" },

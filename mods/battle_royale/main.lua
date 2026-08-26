@@ -1642,6 +1642,15 @@ return function(mod)
     return self:inRound() or self.phase == "over"
   end
 
+  -- Has the ring started closing?  Distinct from mod.exports.inFog, which
+  -- asks whether THIS player is standing in it: this is the match-wide
+  -- clock, true for everyone from the first shrink onwards however safe the
+  -- square they are on.  What closes the Pokemon Centre (POK-117) is the
+  -- match reaching attrition, not the player's own map going dark.
+  function BR:fogIsUp()
+    return self.ring ~= nil and Fog.isUp(self.ring.radius)
+  end
+
   function BR:safariLeft()
     local now = clock()
     if not (self.safariEndsAt and now) then return 0 end
@@ -3917,6 +3926,23 @@ return function(mod)
       local entry = data:textEntry(ow.map.def.label, def.text)
       if entry and entry.cableClub then
         say("The CABLE CLUB is\nclosed for\nthe match.")
+        return
+      end
+      -- The nurse closes when the fog rolls in (POK-117).  A free, unlimited,
+      -- full-party heal is fine while everyone is still building a team --
+      -- that is what the grace phase is for, and walking to a Centre costs
+      -- real time.  But once the ring starts closing the match is attrition,
+      -- and a Centre that never runs out undoes it: the fog does a tenth of
+      -- everyone's maximum every four seconds precisely so that damage
+      -- accumulates, and a round trip to the counter erased all of it for
+      -- free.  So the counter shuts at the same moment the ring does.
+      --
+      -- Marked by the map's own TX_SCRIPT `nurse` flag, which is how
+      -- OverworldState picks the nurse out of a Centre's NPCs to begin with
+      -- (OverworldController:_talk) -- so this covers all twelve Centres
+      -- without naming one of them.  The PC beside her is untouched.
+      if entry and entry.nurse and BR:inRound() and BR:fogIsUp() then
+        say("Sorry -- we're\nclosed! The fog\nis coming!")
         return
       end
     end
