@@ -34,6 +34,7 @@ local Seams = require("mods.battle_royale.lib.seams")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
 local Safari = require("mods.battle_royale.lib.safari")
+local Rods = require("mods.battle_royale.lib.rods")
 local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
@@ -101,7 +102,8 @@ local START_LEVEL = 5
 -- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
 -- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
 -- twenty-minute match when the gym is a POK-26 objective.
-local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1 }
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1,
+                      [Rods.FIRST] = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -428,6 +430,9 @@ return function(mod)
   local GRANTED = {}
   for _, id in ipairs(START_BADGES) do GRANTED[id] = true end
   for _, id in ipairs(START_HMS) do GRANTED[id] = true end
+  -- a rod is a grant like a badge: everyone has one, and the one you have
+  -- is decided by the ring rather than by who you beat (POK-119)
+  for _, id in ipairs(Rods.ALL) do GRANTED[id] = true end
   local function bagOf(save, name)
     local items = {}
     for id, n in pairs((save and save.inventory) or {}) do
@@ -1982,6 +1987,33 @@ return function(mod)
         sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
       end
     end
+    -- after the announcement, so the news lands before the gift
+    self:upgradeRod()
+  end
+
+  -- The fog's other gift (POK-119): the rung that makes everyone stronger
+  -- makes the sea better to fish, on the same beat.  A swap rather than a
+  -- stack -- three rods in the bag is three ways to do one thing -- and
+  -- only ever upward, so a re-applied ring cannot take a SUPER ROD back.
+  function BR:upgradeRod()
+    if not self:inRound() then return end
+    local save = self.game and self.game.save
+    local items = self.game and self.game.data and self.game.data.items
+    if not (save and save.inventory and items) then return end
+    local want = Rods.at(self.ring and self.ring.phase or 1)
+    if not (want and items[want]) then return end
+    local have = nil
+    for _, id in ipairs(Rods.ALL) do
+      if (tonumber(save.inventory[id]) or 0) > 0 and Rods.isBetter(id, have) then
+        have = id
+      end
+    end
+    if have == want or not Rods.isBetter(want, have) then return end
+    for _, id in ipairs(Rods.ALL) do save.inventory[id] = nil end
+    save.inventory[want] = 1
+    local line = Rods.upgradeLine(want)
+    if line and have then sayLater(line, 1.0) end
+    log:say("rod: %s -> %s", tostring(have or "none"), tostring(want))
   end
 
   -- The room has been handed to us (POK-116).  Almost nothing needs moving:
@@ -3231,6 +3263,12 @@ return function(mod)
   -- the catch ({ species, level }) from the candidate list; the list itself
   -- is not touched, so Old Rod still hooks its MAGIKARP, just at the rung.
   mod.hooks:wrap("encounter.fishing", function(next, rod, mapId, candidates)
+    -- Not in the zone (POK-119).  The Safari's whole economy is the step
+    -- budget -- 502 steps to find what you can -- and a cast costs none of
+    -- them, so a rod at the water's edge would be an unlimited draft that
+    -- beat walking every time.  The zone's ponds are scenery for two
+    -- minutes; the rod starts working when the match does.
+    if BR.phase == "safari" then return nil end
     local catch = next(rod, mapId, candidates)
     if catch and inMatch() then
       catch.level = BR:level()

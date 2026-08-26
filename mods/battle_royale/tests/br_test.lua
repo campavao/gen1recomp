@@ -1904,6 +1904,44 @@ do
 end
 
 -- ------------------------------------------------------------------
+-- POK-119: the rod grows with the ring
+-- ------------------------------------------------------------------
+do
+  local Rods = require("mods.battle_royale.lib.rods")
+  local Levels = require("mods.battle_royale.lib.levels")
+
+  eq(#Rods.LADDER, #Levels.LADDER,
+     "one rod per rung: the rod and the level ride the same clock")
+  eq(Rods.FIRST, "OLD_ROD", "everyone drops with the OLD ROD")
+  eq(Rods.at(1), "OLD_ROD", "the opening is an OLD ROD")
+  eq(Rods.at(3), "GOOD_ROD", "the middle rings hand up a GOOD ROD")
+  eq(Rods.at(6), "SUPER_ROD", "and the endgame a SUPER ROD")
+
+  -- the ladder only ever climbs
+  local worst = 0
+  for _, id in ipairs(Rods.LADDER) do
+    ok(Rods.rank(id) >= worst, "the ladder never hands back a worse rod")
+    worst = Rods.rank(id)
+  end
+
+  -- out-of-range phases clamp rather than reading nil into the bag
+  eq(Rods.at(0), "OLD_ROD", "a phase below the ladder is the first rung")
+  eq(Rods.at(99), "SUPER_ROD", "and one past the end is the last")
+  eq(Rods.at(nil), "OLD_ROD", "no phase at all is the first rung")
+
+  ok(Rods.isBetter("SUPER_ROD", "GOOD_ROD"), "SUPER beats GOOD")
+  ok(Rods.isBetter("OLD_ROD", nil), "any rod beats no rod")
+  ok(not Rods.isBetter("OLD_ROD", "SUPER_ROD"), "and OLD never beats SUPER")
+  ok(not Rods.isBetter("SUPER_ROD", "SUPER_ROD"), "a rod does not beat itself")
+
+  -- the swap is announced only when something is actually replaced
+  ok(Rods.upgradeLine("GOOD_ROD"), "an upgrade to GOOD has a line")
+  ok(Rods.upgradeLine("SUPER_ROD"), "and so does one to SUPER")
+  ok(Rods.upgradeLine("OLD_ROD") == nil,
+     "the rod you started with is not news")
+end
+
+-- ------------------------------------------------------------------
 -- POK-118: the Safari zone rotates
 -- ------------------------------------------------------------------
 do
