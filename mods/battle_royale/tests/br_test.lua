@@ -93,6 +93,34 @@ do
   eq(Wire.decode(Wire.accept(7)).nonce, 7, "accept nonce")
   eq(Wire.decode(Wire.winner(3)).id, 3, "winner id")
 
+  -- POK-107: the champion's parade, for the whole room to watch
+  local fame = Wire.decode(Wire.fame(
+    { { species = "PIKACHU", nickname = "SPARKY", level = 42 },
+      { species = "ONIX" },
+      { level = 9 } },                       -- no species: not a Pokemon
+    { catches = 4, beats = 2, steps = 812, rings = 5, seconds = 754, money = 3000 }))
+  ok(fame ~= nil, "a parade round-trips")
+  eq(fame and #fame.party, 2, "a row with no species never makes the parade")
+  eq(fame and fame.party[1].species, "PIKACHU", "the species carries")
+  eq(fame and fame.party[1].nickname, "SPARKY", "so does what it was called")
+  eq(fame and fame.party[1].level, 42, "and how far it got")
+  eq(fame and fame.party[2].nickname, "ONIX", "an unnicknamed mon goes by species")
+  eq(fame and fame.stats.seconds, 754, "the record card carries the run")
+  eq(fame and fame.stats.rings, 5, "rings and all")
+
+  -- it is drawn, never trusted
+  local big = {}
+  for i = 1, 40 do big[i] = { sp = "RATTATA", lv = 5 } end
+  eq(#Wire.decode({ t = "fame", party = big }).party, 6,
+     "a parade is capped at a party, however many were sent")
+  eq(Wire.decode({ t = "fame", party = { { sp = "PIKACHU", lv = 9999 } } }).party[1].level,
+     100, "an impossible level is clamped rather than drawn")
+  ok(Wire.decode({ t = "fame", party = { { lv = 5 } } }) == nil,
+     "a party row with no species is refused outright")
+  ok(Wire.decode({ t = "fame" }) == nil, "and a parade with no party at all")
+  eq(Wire.decode({ t = "fame", party = {} }).stats.catches, 0,
+     "a parade with no record card still draws a card")
+
   -- the bag on the ground (POK-25): a spill carries it as one more thing
   local bagged = Wire.decode(Wire.spill("ROUTE_1",
     { { key = "7:1", x = 5, y = 6, species = "PIDGEY", level = 8 } },

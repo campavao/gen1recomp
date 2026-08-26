@@ -35,6 +35,8 @@
 --                                                 guest cannot derive)
 --                                                 (r < 0: over everything)
 --   {t="winner", id=}                             host: the match is over
+--   {t="fame", party=, stats=}                    the champion's parade,
+--                                                 for the whole room to watch
 --
 -- Statuses: "lobby" (not in the world yet), "alive", "battle" (locked in
 -- a fight -- do not engage), "out" (eliminated, spectating on foot).
@@ -61,7 +63,8 @@ local Wire = {}
 --    round's fog length, so the room can be handed to somebody else when
 --    the host drops (POK-116) -- a v6 peer promoted mid-match has no clock
 --    to resume and would restart the fog at phase 1, with the ring
---    springing back open around everyone
+--    springing back open around everyone; and the champion sends their
+--    parade so the whole room watches the same ending (POK-107)
 Wire.PROTOCOL = 7
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
@@ -164,6 +167,22 @@ end
 -- the host's Safari clock (POK-21): seconds left, zero being the buzzer
 function Wire.safari(left) return { t = "safari", left = left } end
 function Wire.winner(id) return { t = "winner", id = id } end
+
+-- The champion's parade, so the ending is the room's rather than one
+-- screen's (POK-107).  Only the winner can author it -- it is their team --
+-- and it carries what the Hall of Fame draws and nothing else: a species,
+-- what it was called, and how far it got.
+function Wire.fame(party, stats)
+  local rows = {}
+  for _, mon in ipairs(party or {}) do
+    if mon.species then
+      rows[#rows + 1] = { sp = mon.species,
+                          nm = mon.nickname or mon.species,
+                          lv = mon.level or 1 }
+    end
+  end
+  return { t = "fame", party = rows, stats = stats }
+end
 -- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
 function Wire.again() return { t = "again" } end
 
@@ -432,6 +451,35 @@ decoders.state = function(m)
   if not items then return nil, "bad items" end
   return { t = "state", party = party, items = items,
            money = clampInt(m.money, 0, 999999, 0) }
+end
+
+-- The parade is drawn, never trusted: every field is clamped to what the
+-- Hall of Fame can put on a screen, so a peer cannot stretch the card or
+-- march a party of two hundred past everyone (POK-107).
+decoders.fame = function(m)
+  if type(m.party) ~= "table" then return nil, "bad party" end
+  local party = {}
+  for i, r in ipairs(m.party) do
+    if i > 6 then break end
+    if type(r) ~= "table" or type(r.sp) ~= "string" or r.sp == "" or #r.sp > MAX_ID then
+      return nil, "bad party row"
+    end
+    party[#party + 1] = {
+      species = r.sp,
+      nickname = type(r.nm) == "string" and r.nm ~= "" and r.nm:sub(1, MAX_ID)
+                 or r.sp,
+      level = clampInt(r.lv, 1, 100, 1),
+    }
+  end
+  local st = type(m.stats) == "table" and m.stats or {}
+  return { t = "fame", party = party, stats = {
+    catches = clampInt(st.catches, 0, 99999, 0),
+    beats   = clampInt(st.beats,   0, 99999, 0),
+    steps   = clampInt(st.steps,   0, 9999999, 0),
+    rings   = clampInt(st.rings,   1, 64, 1),
+    seconds = clampInt(st.seconds, 0, 999999, 0),
+    money   = clampInt(st.money,   0, 999999, 0),
+  } }
 end
 
 function Wire.decode(m)

@@ -239,6 +239,8 @@ return function(mod)
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
+    pendingFame = nil,    -- a parade that belongs to somebody else (POK-107)
+    winnerId = nil,       -- who the host crowned (POK-107)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
@@ -617,6 +619,8 @@ return function(mod)
     self.stats = nil
     self.walkUp = nil
     self.pendingParade = nil
+    self.pendingFame = nil
+    self.winnerId = nil
     self.ringDistOf = nil
     self.ringLocs = nil
     self.matchFog = nil
@@ -1103,6 +1107,20 @@ return function(mod)
 
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
+
+    elseif msg.t == "fame" then
+      -- The champion's own team, and nobody else's to send: a parade from
+      -- anyone but the trainer the host just crowned is not a parade.  One
+      -- only, so a second cannot restart an ending already running.
+      if self.phase == "over" and fromId == self.winnerId
+         and not self.pendingFame then
+        self.pendingFame = { party = msg.party, stats = msg.stats }
+        -- love.timer inline: clock() is defined further down and locals
+        -- capture lexically, so reaching for it here would read nil
+        -- (the POK-24 lesson, and br_test guards it)
+        local nowF = (love.timer and love.timer.getTime and love.timer.getTime()) or 0
+        self.pendingParade = nowF + 2.5
+      end
 
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
@@ -3561,6 +3579,7 @@ return function(mod)
   function BR:onWinner(id)
     if self.phase == "over" then return end
     self:setPhase("over", "a winner")
+    self.winnerId = id
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
     self.buzzed, self.pickingTown = nil, nil
@@ -3574,6 +3593,13 @@ return function(mod)
       self:recordWin()
       -- and the Champion gets the Champion's ending (POK-47)
       self.pendingParade = (clock() or 0) + 2.5
+      -- ...which the rest of the room watches too (POK-107).  An ending
+      -- only the winner sees is the one moment in the match that has
+      -- nothing to say to the people it just happened to.
+      if self.relay then
+        local party = (self.game and self.game.save and self.game.save.party) or {}
+        self.relay:broadcast(Wire.fame(party, self:matchStats()))
+      end
     elseif id then
       -- prefer the roster name: the relay has never heard of a bot (POK-41)
       local p = self.players and self.players[id]
@@ -3678,7 +3704,13 @@ return function(mod)
       if nowP and nowP >= BR.pendingParade and owP and game.stack:top() == owP
          and not (owP.runner and owP.runner.isRunning and owP.runner:isRunning()) then
         BR.pendingParade = nil
-        game.stack:push(Fame.new(game, game.save.party or {}, BR:matchStats(),
+        -- the winner parades their own save; everyone else parades what
+        -- the winner sent, so the room watches one ending (POK-107)
+        local fame = BR.pendingFame
+        BR.pendingFame = nil
+        game.stack:push(Fame.new(game,
+                                 (fame and fame.party) or game.save.party or {},
+                                 (fame and fame.stats) or BR:matchStats(),
                                  function() BR:endRun() end))
       end
     end
