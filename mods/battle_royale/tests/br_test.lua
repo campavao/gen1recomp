@@ -1904,6 +1904,71 @@ do
 end
 
 -- ------------------------------------------------------------------
+-- POK-102: a room of one says nothing
+--
+-- The relay fans `all` out to every OTHER member, so a solo room forwards
+-- every frame to nobody.  Count what actually reaches the transport rather
+-- than what a peer receives -- with no peer there is no other side to look
+-- at, and the whole point is the bytes that never leave.
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local wire = hub:connect()
+  local sent = { all = 0, to = 0 }
+  local rawSend = wire.send
+  wire.send = function(self, msg)
+    local t = type(msg) == "table" and msg.type
+    if t == "all" then sent.all = sent.all + 1
+    elseif t == "to" then sent.to = sent.to + 1 end
+    return rawSend(self, msg)
+  end
+
+  local host = Relay.new({ transport = wire })
+
+  -- Before the room exists there is no roster to trust, so a broadcast goes
+  -- out rather than being swallowed on a guess.
+  host:broadcast(Wire.face("down", "PALLET_TOWN"))
+  eq(sent.all, 1, "with no roster yet, a broadcast still goes out")
+
+  host:host("RED")
+  host:update()
+  eq(#host.members, 1, "a room of one knows it is a room of one")
+
+  for _ = 1, 5 do host:broadcast(Wire.face("down", "PALLET_TOWN")) end
+  eq(sent.all, 1, "a solo room puts no `all` frame on the wire")
+  eq(host.suppressed, 5, "and counts every frame it withheld")
+  ok(host:broadcast(Wire.out()) == true,
+     "a suppressed broadcast still reports success -- nothing failed")
+  eq(host.suppressed, 6, "including that one")
+
+  -- `to` is a different path and is never gated: it names its recipient.
+  host:send(host.id, Wire.challenge(1))
+  eq(sent.to, 1, "a unicast is untouched by the gate")
+
+  -- The moment somebody else is in the room, the fan-out resumes.
+  local guest = Relay.new({ transport = hub:connect() })
+  local guestInbox = {}
+  guest:on("message", function(from, m) guestInbox[#guestInbox + 1] = m end)
+  guest:join("ROOM01", "BLUE")
+  guest:update()
+  host:update()
+  eq(#host.members, 2, "the roster grew")
+  host:broadcast(Wire.place("ROUTE_1", 3, 4, "down", "alive", "SPRITE_RED"))
+  guest:update()
+  eq(sent.all, 2, "with a peer present the frame goes out again")
+  eq(#guestInbox, 1, "and the peer actually receives it")
+  eq(host.suppressed, 6, "nothing further was withheld")
+
+  -- ...and when they leave, the room is quiet again.
+  guest:leave()
+  host:update()
+  eq(#host.members, 1, "the roster shrank back to one")
+  host:broadcast(Wire.out())
+  eq(sent.all, 2, "the last trainer standing talks to nobody")
+  eq(host.suppressed, 7, "which is one more frame withheld")
+end
+
+-- ------------------------------------------------------------------
 -- POK-119: the rod grows with the ring
 -- ------------------------------------------------------------------
 do

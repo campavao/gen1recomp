@@ -472,6 +472,20 @@ return function(mod)
         local floor = love.timer.getTime() + QUICK_START_GRACE
         if BR.autoStartAt < floor then BR.autoStartAt = floor end
       end
+      -- The room stopped being solo, so the `all` fan-out that was being
+      -- suppressed while nobody could hear it (POK-102) starts flowing
+      -- again -- and whoever just arrived has none of the stream they
+      -- missed.  Today this is insurance rather than a fix: the room is
+      -- locked for the length of a round (no late joiners), so a roster can
+      -- only GROW in the lobby, where there is no positional stream yet and
+      -- Wire.start hands out every spawn anyway.  It is here so that a
+      -- future change which lets someone in mid-round cannot quietly
+      -- reintroduce a ghost that never moves.  Clearing sentFacing
+      -- re-announces the facing; arming resync sends a full place next tick
+      -- instead of waiting out the five-second cadence.
+      if #members > 1 and (BR.lastRoster or 0) <= 1 then
+        BR.sentFacing, BR.resync = nil, RESYNC_TICKS
+      end
       BR.lastRoster = #members
       -- forget anyone who left; the host recounts survivors
       local present = {}
