@@ -2113,12 +2113,6 @@ do
   ok(Rods.isBetter("OLD_ROD", nil), "any rod beats no rod")
   ok(not Rods.isBetter("OLD_ROD", "SUPER_ROD"), "and OLD never beats SUPER")
   ok(not Rods.isBetter("SUPER_ROD", "SUPER_ROD"), "a rod does not beat itself")
-
-  -- the swap is announced only when something is actually replaced
-  ok(Rods.upgradeLine("GOOD_ROD"), "an upgrade to GOOD has a line")
-  ok(Rods.upgradeLine("SUPER_ROD"), "and so does one to SUPER")
-  ok(Rods.upgradeLine("OLD_ROD") == nil,
-     "the rod you started with is not news")
 end
 
 -- ------------------------------------------------------------------

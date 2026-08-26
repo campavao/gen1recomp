@@ -2080,10 +2080,19 @@ return function(mod)
       sayLater(("The fog will close\non %s.\fCheck your\nTOWN MAP."):format(
         place or "KANTO"))
     elseif was ~= phase and phase > 1 then
+      -- ONE box per shrink, not three.  The ring, the level rung and the
+      -- rod all move on the same beat by design -- lib/levels.lua and
+      -- lib/rods.lua both index off the fog phase precisely so the match
+      -- keeps one rhythm -- so three messages in a row said one thing
+      -- three times and buried the one that mattered under the two that
+      -- did not.  The level number and the rod's name were the detail
+      -- nobody was reading; that the fog moved and everything got
+      -- stronger is the news.  WHERE it closed stays on the TOWN MAP,
+      -- which the opening message above points at.
       if Fog.coversAll(radius) then
-        sayLater("The fog covers\nall of KANTO!")
+        sayLater("The fog covers\nall of KANTO!\fYour POKeMON and\nitems grew\nstronger!")
       else
-        sayLater(("The fog closes in\non %s!"):format(place or "KANTO"))
+        sayLater("The fog spreads!\fYour POKeMON and\nitems grew\nstronger!")
       end
     end
     -- after the announcement, so the news lands before the gift
@@ -2110,8 +2119,10 @@ return function(mod)
     if have == want or not Rods.isBetter(want, have) then return end
     for _, id in ipairs(Rods.ALL) do save.inventory[id] = nil end
     save.inventory[want] = 1
-    local line = Rods.upgradeLine(want)
-    if line and have then sayLater(line, 1.0) end
+    -- Silent on screen: the ring's own message already said the items
+    -- got better, and this fires on that same beat.  The transition is
+    -- still named in the log, which is where anyone debugging a rung
+    -- goes looking for it.
     log:say("rod: %s -> %s", tostring(have or "none"), tostring(want))
   end
 
@@ -2811,11 +2822,12 @@ return function(mod)
     end
     if raised > 0 and self.announcedLevel ~= target then
       self.announcedLevel = target
-      if evolved then
-        sayLater(("Your POKeMON grew\nto Lv%d, and one\nevolved!"):format(target))
-      else
-        sayLater(("Your POKeMON grew\nto Lv%d!"):format(target))
-      end
+      -- The rung itself is announced by the ring that caused it, in the
+      -- one message that also covers the rod (see applyRing).  An
+      -- evolution is the part of that beat the ring cannot carry -- it is
+      -- per-player and not known until the party is actually scaled --
+      -- and it is rare enough to be news rather than noise.
+      if evolved then sayLater("One of your\nPOKeMON evolved!") end
     end
   end
 
