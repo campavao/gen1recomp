@@ -121,6 +121,21 @@ ring. Each bite of the fog is the overworld-poison beat you already know —
 the screen flickers dark and the poison chime plays — so you can feel it
 without opening a menu.
 
+**One message when the ring moves.** A shrink used to fire three boxes in
+a row — where the fog was closing, what level the party had reached, and
+which rod had replaced which. That is three announcements of one event: the
+ring, the level rung and the rod all move on the same beat by design, so the
+match keeps one rhythm rather than three. Now it says it once — `The fog
+spreads!`, then `Your POKeMON and items grew stronger!` — and where it closed
+is on the TOWN MAP, which is where you were going to look anyway. An
+evolution still speaks for itself.
+
+**And something to look at while they choose.** A link turn is lockstep, so
+once you have picked a move the screen sits still until your opponent has
+picked theirs. Over a relay that can be a few seconds, and it looks exactly
+like a client that has hung. The battle's own message box now says
+`WAITING...` while it waits, dots and all.
+
 **And a bubble over anyone who is busy.** A trainer in a menu wears a `?`
 and one in a fight wears a `!`, in the game's own emote art, visible to
 everyone. It is the difference between walking up to somebody who is about
@@ -205,6 +220,13 @@ never overwrite your actual playthrough.
   the item data rather than a bag-screen tweak, so the loot line, a fallen
   trainer's bag and the shop all say it too. `game.data` is shared with your
   real save, so the numbers come back the moment the match ends.
+- **Pewter's gym guide stays home.** The youngster who stops you leaving
+  Pewter and walks you to BROCK is a scripted lockstep march: fine in a
+  story, a movement lock in a battle royale with the ring closing and other
+  trainers hunting. He keeps his line and loses the escort for the length of
+  a match. Marking BROCK beaten would have silenced him in one line and
+  disarmed the gym in the same breath — his own dialogue gates on that very
+  flag — so the walk is headed off at its triggers instead.
 - **The POKéMON CENTER closes when the fog rolls in.** Free unlimited
   healing is fine while everyone is still building a team — that is what the
   grace period is for, and walking to a Centre costs real time. Once the
@@ -232,6 +254,13 @@ match ends the host's report gains **PLAY AGAIN**: the room goes back to
 the lobby with everyone in it — same code, roster kept, unlocked again for
 anyone else who wants in — and START MATCH rolls a fresh drop. Nobody
 exchanges a code twice.
+
+**Your name, your skin and your wins are yours.** They live beside the mod
+rather than inside a save file, which is what lets them survive closing the
+game: a match is played in a throwaway world that is thrown away on the way
+out, and anything kept in there goes with it. Career wins are what unlock
+the wardrobe, so they are the one number in this mod that is supposed to
+outlast a match.
 
 ## Running the relay
 
