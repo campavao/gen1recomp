@@ -1904,6 +1904,54 @@ do
 end
 
 -- ------------------------------------------------------------------
+-- POK-118: the Safari zone rotates
+-- ------------------------------------------------------------------
+do
+  local Safari = require("mods.battle_royale.lib.safari")
+
+  local a1 = Safari.pool(12345, nil)
+  local a2 = Safari.pool(12345, nil)
+  eq(#a1, Safari.POOL_SIZE, "a match's zone holds POOL_SIZE species")
+  eq(table.concat(a1, ","), table.concat(a2, ","),
+     "the same seed draws the same zone -- everyone drafts from one list")
+
+  local b = Safari.pool(54321, nil)
+  ok(table.concat(a1, ",") ~= table.concat(b, ","),
+     "a different match is a different zone, which is the whole point")
+
+  local seen = {}
+  for _, sp in ipairs(a1) do
+    ok(not seen[sp], "no species is in the zone twice: " .. tostring(sp))
+    seen[sp] = true
+  end
+
+  -- every draw is a real candidate
+  local cand = {}
+  for _, sp in ipairs(Safari.CANDIDATES) do cand[sp] = true end
+  local allKnown = true
+  for _, sp in ipairs(a1) do allKnown = allKnown and cand[sp] end
+  ok(allKnown, "a zone is drawn from the candidate list and nowhere else")
+
+  -- a build missing most of the list degrades instead of asserting
+  local thin = Safari.pool(7, { pokemon = { RATTATA = true, ONIX = true } })
+  eq(#thin, 2, "a zone can only hold species this build actually has")
+  local poor = Safari.pool(7, { pokemon = {} })
+  eq(#poor, 1, "and a build with none of them still yields something catchable")
+  eq(poor[1], "RATTATA", "namely a RATTATA, which Kanto can always find")
+
+  -- picking within a zone
+  local rolled = Safari.pick(a1, function(lo, hi) return lo end)
+  eq(rolled, a1[1], "pick draws through the caller's own roll")
+  ok(Safari.pick({}, function() return 1 end) == nil, "an empty zone yields nobody")
+  ok(Safari.pick(nil, nil) == nil, "and neither does no zone at all")
+
+  -- the pool is a set, so the order it is written in cannot leak through
+  local sorted = true
+  for i = 2, #a1 do sorted = sorted and (a1[i - 1] <= a1[i]) end
+  ok(sorted, "a zone comes back in a stable order")
+end
+
+-- ------------------------------------------------------------------
 -- POK-108: a trainer in a doorway is not a door plug
 -- ------------------------------------------------------------------
 do

@@ -33,6 +33,7 @@ local LocalRoom = require("mods.battle_royale.lib.localroom")
 local Seams = require("mods.battle_royale.lib.seams")
 local Bots = require("mods.battle_royale.lib.bots")
 local Fog = require("mods.battle_royale.lib.fog")
+local Safari = require("mods.battle_royale.lib.safari")
 local Levels = require("mods.battle_royale.lib.levels")
 local Spills = require("mods.battle_royale.lib.spills")
 local Flee = require("mods.battle_royale.lib.flee")
@@ -248,6 +249,7 @@ return function(mod)
     tearingDown = false,  -- an exit is already in flight (POK-115)
     wasHost = false,      -- were we the host as of the last roster (POK-116)
     matchFog = nil,       -- the starting host's fog phase length (POK-116)
+    safariPool = nil,     -- this match's rotating zone (POK-118)
     -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
     -- the channel (and with it self.battle) is torn down by LinkState before
     -- link.battle_ended reaches us, so reading the opponent off self.battle
@@ -624,6 +626,7 @@ return function(mod)
     self.ringDistOf = nil
     self.ringLocs = nil
     self.matchFog = nil
+    self.safariPool = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -831,6 +834,10 @@ return function(mod)
     -- the starting host's phase length, so an heir runs the ring at the pace
     -- the match was started at rather than its own option (POK-116)
     self.matchFog = msg.fog
+    -- ...and this match's zone, drawn from the same seed on every client
+    -- rather than sent, so the draft is the same for everyone (POK-118)
+    self.safariPool = Safari.pool(msg.seed, self.game and self.game.data)
+    log:say("the zone today: %s", Safari.describe(self.safariPool))
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -3202,6 +3209,18 @@ return function(mod)
   mod.hooks:wrap("encounter.species", function(next, enc, ctx)
     local rolled = next(enc, ctx)
     if rolled and inMatch() then
+      -- The Safari opening drafts from THIS match's zone (POK-118).  The
+      -- roll still decides WHETHER something is in the grass -- the zone's
+      -- own rate, untouched -- and this decides which of today's species it
+      -- turns out to be.  Rolled live rather than from the match seed: what
+      -- is in the zone is everyone's business, what walks into your grass
+      -- is nobody's, and seeding it would deal every player the same
+      -- catches in the same order.
+      if BR.phase == "safari" and BR.safariPool then
+        rolled.species = Safari.pick(BR.safariPool, function(a, b)
+          return love.math.random(a, b)
+        end) or rolled.species
+      end
       rolled.level = BR:level()
       BR:lendGhostLead()
     end
