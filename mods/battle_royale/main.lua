@@ -8,6 +8,7 @@
 --   lib/ghosts.lua   the other players as real overworld NPCs
 --   lib/channel.lua  one battle's transport, tunnelled through the room
 --   lib/menu.lua     the BATTLE ROYALE start-menu screen
+--   lib/career.lua   the name/skin/wins that outlive a playthrough
 --   this file        the wiring
 --
 -- The loop, once a match starts: everyone drops onto a random Kanto cell
@@ -44,6 +45,7 @@ local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
 local Machines = require("mods.battle_royale.lib.machines")
+local Career = require("mods.battle_royale.lib.career")
 local Log = require("mods.battle_royale.lib.log")
 
 local SCREEN = "BattleRoyaleMenu"
@@ -225,6 +227,10 @@ return function(mod)
       default = DEFAULT_SAFARI_SECONDS, min = 0, max = 600 },
   })
 
+  -- The career (POK-120) comes off mod.cache, which is keyed by mod id
+  -- alone and so outlives the throwaway NEW GAME a match is played in.
+  local career = Career.load(mod)
+
   local BR = {
     relay = nil,
     ghosts = Ghosts.new(mod),
@@ -247,7 +253,9 @@ return function(mod)
     winnerId = nil,       -- who the host crowned (POK-107)
     arming = nil,         -- { map, x, y } while save.new_game reshapes the skeleton
     started = false,      -- have I dropped into the world yet this match
-    myName = nil,         -- chosen on the NAME row; nil falls back to the save
+    myName = career.name, -- chosen on the NAME row; nil falls back to the save
+    skin = career.skin,   -- the walk sheet every other trainer sees (POK-79)
+    wins = Career.cleanWins(career.wins),  -- career wins: the wardrobe's key
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
     tearingDown = false,  -- an exit is already in flight (POK-115)
     wasHost = false,      -- were we the host as of the last roster (POK-116)
@@ -321,8 +329,7 @@ return function(mod)
 
   function BR:setName(name)
     self.myName = Wire.cleanName(name)
-    -- remembered across sessions where durable storage is available
-    pcall(function() mod.storage:write(self.game, "name", self.myName) end)
+    self:saveCareer()
     return self.myName
   end
 
@@ -382,11 +389,18 @@ return function(mod)
   --
   -- The walk sheet every other trainer sees, unlocked by career wins.  The
   -- ladder and the picker live in lib/skins.lua; the wins and the choice
-  -- persist in mod.storage next to the name.  The engine seam is
+  -- persist through lib/career.lua next to the name.  The engine seam is
   -- field.playerSprites.walk: Player builds its sheet from it, mySprite()
   -- advertises it on the wire, and the TownMap marker follows for free --
   -- applied only inside the throwaway match world and restored on the way
   -- out, so a real playthrough never wears it.
+
+  -- One writer for the whole career, so the name, the skin and the wins
+  -- can never disagree about which of them was written last.
+  function BR:saveCareer()
+    return Career.save(mod, { name = self.myName, skin = self.skin,
+                              wins = self:winCount() }, log)
+  end
 
   function BR:winCount() return self.wins or 0 end
 
@@ -407,7 +421,7 @@ return function(mod)
       return nil, ("unlock at %d wins"):format(entry.wins)
     end
     self.skin = entry.id
-    pcall(function() mod.storage:write(self.game, "skin", entry.id) end)
+    self:saveCareer()
     if self.matchWorld then self:applySkinWalk() end
     if self.relay and self.relay:isOpen() then broadcastPlace() end
     return entry.id
@@ -450,7 +464,7 @@ return function(mod)
     local Skins = require("mods.battle_royale.lib.skins")
     local before = self:winCount()
     self.wins = before + 1
-    pcall(function() mod.storage:write(self.game, "wins", tostring(self.wins)) end)
+    self:saveCareer()
     for _, e in ipairs(Skins.justUnlocked(before, self.wins)) do
       sayLater(("You unlocked the\n%s skin!"):format(e.label), 3)
     end
@@ -4512,17 +4526,39 @@ return function(mod)
     BR.matchWorld = false
   end)
 
-  -- pick up the game handle early and any remembered name
+  -- Pick up the game handle early, and rescue a career written before
+  -- POK-120 moved the store.  The old keys lived in mod.storage, which the
+  -- engine scopes to one playthrough, so this finds something only on the
+  -- save that happened to be live when they were written -- which is
+  -- exactly the save whose wins are worth keeping.  The cache wins every
+  -- tie: once a field is in the career file, the old key is never read
+  -- again, so this cannot walk a career backwards.
   mod.events:on("game.ready", function(ev)
     BR.game = ev.game
-    local ok, stored = pcall(function() return mod.storage:read(ev.game, "name") end)
-    if ok and type(stored) == "string" and stored ~= "" then
-      BR.myName = Wire.cleanName(stored)
+    local function legacy(key)
+      local ok, value = pcall(function() return mod.storage:read(ev.game, key) end)
+      if ok then return value end
+      return nil
     end
-    local okW, wins = pcall(function() return mod.storage:read(ev.game, "wins") end)
-    if okW and tonumber(wins) then BR.wins = math.floor(tonumber(wins)) end
-    local okS, skin = pcall(function() return mod.storage:read(ev.game, "skin") end)
-    if okS and type(skin) == "string" and skin ~= "" then BR.skin = skin end
+    local rescued = false
+    if not BR.myName then
+      local stored = legacy("name")
+      if type(stored) == "string" and stored ~= "" then
+        BR.myName, rescued = Wire.cleanName(stored), true
+      end
+    end
+    if not BR.skin then
+      local skin = legacy("skin")
+      if type(skin) == "string" and skin ~= "" then BR.skin, rescued = skin, true end
+    end
+    if BR:winCount() == 0 then
+      local wins = tonumber(legacy("wins"))
+      if wins and wins >= 1 then BR.wins, rescued = Career.cleanWins(wins), true end
+    end
+    if rescued then
+      log:say("career carried over from this save's old storage")
+      BR:saveCareer()
+    end
   end)
 
   -- A match plays in a throwaway world: writing it into the player's save
@@ -4569,8 +4605,8 @@ return function(mod)
     return out
   end
   mod.exports.debugSetWins = function(n)
-    BR.wins = math.max(0, math.floor(tonumber(n) or 0))
-    pcall(function() mod.storage:write(BR.game, "wins", tostring(BR.wins)) end)
+    BR.wins = Career.cleanWins(n)
+    BR:saveCareer()
     return BR.wins
   end
   mod.exports.openSkinPicker = function()
