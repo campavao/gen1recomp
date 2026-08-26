@@ -199,6 +199,12 @@ never overwrite your actual playthrough.
   bag meant *owning* a TOWN MAP. A spectator reads the watched trainer's
   bag, so watching somebody who never picked one up left you with no way to
   see the fog at all. It is a row of its own now, alive, out or watching.
+- **A TM says what it teaches.** Every machine is named after its move for
+  the length of a match — TM19 reads `SEISMIC TOSS`, HM01 reads `CUT` — so a
+  TM on the ground is loot you can judge without a guide. It is a rename of
+  the item data rather than a bag-screen tweak, so the loot line, a fallen
+  trainer's bag and the shop all say it too. `game.data` is shared with your
+  real save, so the numbers come back the moment the match ends.
 - **The POKéMON CENTER closes when the fog rolls in.** Free unlimited
   healing is fine while everyone is still building a team — that is what the
   grace period is for, and walking to a Centre costs real time. Once the
