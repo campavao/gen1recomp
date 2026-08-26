@@ -47,7 +47,7 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 6, "peeking at the watched trainer is PROTOCOL 6")
+  eq(Wire.PROTOCOL, 7, "a ring carrying the match clock is PROTOCOL 7")
   eq(Wire.decode(Wire.peek()).t, "peek", "peek round-trips")
   local st6 = Wire.decode(Wire.state({
     party = { { species = "PIDGEY", level = 12, hp = 23, maxHp = 40, status = "PSN",
@@ -65,6 +65,15 @@ do
   eq(Wire.decode({ t = "state", party = { { sp = "MEW", lv = 900, hp = -5 } }, money = -1 }).party[1].level,
      100, "levels clamp")
   eq(Wire.decode(Wire.again()).t, "again", "again round-trips")
+  local fogged = Wire.decode(Wire.start(9, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } },
+                                       0, 180))
+  eq(fogged and fogged.fog, 180, "start carries the round's fog length (POK-116)")
+  eq(Wire.decode(Wire.start(9, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } })).fog, nil,
+     "an older start has none, and the reader falls back to its own option")
+  eq(Wire.decode({ t = "start", seed = 9, fog = 0,
+                   spawns = { { id = 1, map = "ROUTE_1", x = 1, y = 1 } } }).fog, nil,
+     "a zero-length round would divide the match by nothing, so it is dropped")
+
   local safariStart = Wire.decode(Wire.start(7,
     { { id = 1, map = "SAFARI_ZONE_CENTER", x = 2, y = 3 } }, 120))
   ok(safariStart ~= nil, "a start with a Safari round decodes")
@@ -134,6 +143,15 @@ do
      "npcout without an object is refused")
   ok(Wire.decode({ t = "npcout", map = "ROUTE_1", obj = ("X"):rep(65) }) == nil,
      "and an oversized object name is refused")
+
+  -- POK-116: the clock that lets an heir carry the fog on
+  local timed = Wire.decode(Wire.ring(3, 8, 9, 5.5, "CELADON CITY", 481.5))
+  eq(timed and timed.elapsed, 481.5, "a ring carries the host's match clock")
+  eq(ring and ring.elapsed, nil, "and is fine without one")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = 2, e = -3 })
+     .elapsed == nil, "a negative clock is dropped, not fatal")
+  ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = 2, e = "soon" })
+     .elapsed == nil, "and so is one that is not a number")
 
   local everywhere = Wire.decode(Wire.ring(8, 8, 9, -1, "CELADON CITY"))
   eq(everywhere and everywhere.r, -1,
@@ -1855,6 +1873,64 @@ do
   guest:leave()
   host:update()
   eq(hostRoster and #hostRoster, 1, "host roster shrinks when the guest leaves")
+end
+
+-- ------------------------------------------------------------------
+-- POK-116: the room outlives its host
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local host = Relay.new({ transport = hub:connect() })
+  local a = Relay.new({ transport = hub:connect() })
+  local b = Relay.new({ transport = hub:connect() })
+  local aClosed, bClosed = nil, nil
+  a:on("closed", function(r) aClosed = r or "nil" end)
+  b:on("closed", function(r) bClosed = r or "nil" end)
+
+  host:host("RED")
+  host:update()
+  a:join(host.code, "BLUE")
+  b:join(host.code, "GREEN")
+  a:update(); b:update(); host:update()
+  -- both guests offer to take the room over, as wireRelay does on joining
+  a:canHost(true)
+  b:canHost(true)
+  ok(not a:isHost(), "a guest is not the host to begin with")
+
+  host:leave()
+  a:update(); b:update()
+  ok(aClosed == nil and bClosed == nil, "the room did not close under them")
+  ok(a:isHost(), "the longest-standing eligible guest inherits the room")
+  ok(not b:isHost(), "and the other one does not")
+  eq(b.hostId, a.id, "everybody agrees who the host is now")
+
+  -- and it is a working room: the new host's broadcasts still reach the rest
+  local got = nil
+  b:on("message", function(from, m) got = { from = from, m = m } end)
+  a:broadcast(Wire.ring(2, 8, 9, 9, "CELADON CITY", 240))
+  b:update()
+  eq(got and got.from, a.id, "the new host's word carries the new host's id")
+  eq(got and Wire.decode(got.m).elapsed, 240, "clock and all")
+end
+
+-- ------------------------------------------------------------------
+-- POK-116: a room nobody can inherit still closes
+-- ------------------------------------------------------------------
+do
+  local hub = Hub.new()
+  local host = Relay.new({ transport = hub:connect() })
+  local guest = Relay.new({ transport = hub:connect() })
+  local closed = nil
+  guest:on("closed", function(r) closed = r or "nil" end)
+
+  host:host("RED")
+  host:update()
+  guest:join(host.code, "BLUE")
+  guest:update(); host:update()
+  -- the guest never offers: an older client, or one already eliminated
+  host:leave()
+  guest:update()
+  ok(closed ~= nil, "the room closes when nobody can take it over")
 end
 
 -- ------------------------------------------------------------------

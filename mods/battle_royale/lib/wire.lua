@@ -28,7 +28,11 @@
 --   {t="took", key=}                              that ball is mine
 --   {t="npcout", map=, obj=}                     a map's own trainer fell:
 --                                                 hide the sprite everywhere
---   {t="ring", phase=, cx=, cy=, r=, place=}      host: the fog closed in
+--   {t="ring", phase=, cx=, cy=, r=, place=, e=}  host: the fog closed in
+--                                                 (e: seconds since the
+--                                                 match began -- the one
+--                                                 piece of host state a
+--                                                 guest cannot derive)
 --                                                 (r < 0: over everything)
 --   {t="winner", id=}                             host: the match is over
 --
@@ -53,7 +57,12 @@ local Wire = {}
 --    peer would wait for a loot message that never comes
 -- 6: peek / state -- a spectator asks the trainer they watch for a party
 --    and bag summary, and gets one; a v5 peer would never answer
-Wire.PROTOCOL = 6
+-- 7: a ring carries the host's elapsed match clock and a start carries the
+--    round's fog length, so the room can be handed to somebody else when
+--    the host drops (POK-116) -- a v6 peer promoted mid-match has no clock
+--    to resume and would restart the fog at phase 1, with the ring
+--    springing back open around everyone
+Wire.PROTOCOL = 7
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -101,9 +110,14 @@ function Wire.face(facing, map, as)
   return { t = "face", f = facing, map = map, as = as }
 end
 
--- spawns: array of { id=, map=, x=, y= }, one per player in the match
-function Wire.start(seed, spawns, safari)
-  return { t = "start", seed = seed, spawns = spawns, safari = safari }
+-- spawns: array of { id=, map=, x=, y= }, one per player in the match.
+-- `fog` is the round's phase length: a mod option, so it belongs to the
+-- host who started the match rather than to whoever is reading -- otherwise
+-- an heir with a different setting would carry the ring on at its own pace
+-- (POK-116).
+function Wire.start(seed, spawns, safari, fog)
+  return { t = "start", seed = seed, spawns = spawns, safari = safari,
+           fog = fog }
 end
 
 function Wire.challenge(nonce) return { t = "challenge", n = nonce } end
@@ -140,8 +154,12 @@ function Wire.npcout(map, obj) return { t = "npcout", map = map, obj = obj } end
 
 -- the host's word on where the fog is now; `place` is the centre's name,
 -- carried so every client can announce it without a location table lookup
-function Wire.ring(phase, cx, cy, r, place)
-  return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place }
+-- `elapsed` is the host's own match clock.  It rides every shrink so that
+-- whoever inherits the room can carry the fog on from where it was rather
+-- than starting it again (POK-116).
+function Wire.ring(phase, cx, cy, r, place, elapsed)
+  return { t = "ring", phase = phase, cx = cx, cy = cy, r = r, place = place,
+           e = elapsed }
 end
 -- the host's Safari clock (POK-21): seconds left, zero being the buzzer
 function Wire.safari(left) return { t = "safari", left = left } end
@@ -224,8 +242,15 @@ decoders.start = function(m)
                             and safari >= 0 and safari <= 3600) then
     return nil, "bad safari"
   end
+  -- an absent or nonsense fog length falls back to the reader's own option,
+  -- which is what every client did before the field existed
+  local fog = m.fog
+  if fog ~= nil and not (type(fog) == "number" and fog == fog
+                         and fog > 0 and fog <= 86400) then
+    fog = nil
+  end
   return { t = "start", seed = math.floor(m.seed), spawns = spawns,
-           safari = math.floor(safari or 0) }
+           safari = math.floor(safari or 0), fog = fog }
 end
 
 local function nonce(m)
@@ -351,8 +376,14 @@ decoders.ring = function(m)
   if type(m.r) ~= "number" or m.r ~= m.r or m.r < -1 or m.r > 64 then
     return nil, "bad radius"
   end
+  -- a clock that is absent, negative or not finite is simply not a clock;
+  -- the heir falls back to the phase it can see
+  local elapsed = nil
+  if type(m.e) == "number" and m.e == m.e and m.e >= 0 and m.e < 1e7 then
+    elapsed = m.e
+  end
   return { t = "ring", phase = math.floor(m.phase), cx = m.cx, cy = m.cy,
-           r = m.r,
+           r = m.r, elapsed = elapsed,
            place = type(m.place) == "string" and m.place:sub(1, MAX_ID) or nil }
 end
 

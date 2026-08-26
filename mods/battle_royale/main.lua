@@ -244,6 +244,8 @@ return function(mod)
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
     tearingDown = false,  -- an exit is already in flight (POK-115)
+    wasHost = false,      -- were we the host as of the last roster (POK-116)
+    matchFog = nil,       -- the starting host's fog phase length (POK-116)
     -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
     -- the channel (and with it self.battle) is torn down by LinkState before
     -- link.battle_ended reaches us, so reading the opponent off self.battle
@@ -440,6 +442,12 @@ return function(mod)
       -- line of its own (POK-86)
       log:match(relay.code, nil)
       BR:setPhase("lobby", relay:isHost() and "hosting" or "joined")
+      -- POK-116: tell the relay we can take the room over if the host goes.
+      -- Recorded here rather than inferred, so that a room whose members
+      -- cannot do it still ends the old way instead of being handed to a
+      -- client that would restart the fog.
+      BR.wasHost = relay:isHost()
+      relay:canHost(true)
       log:say("room %s as %s#%s%s", tostring(relay.code), myName(),
               tostring(relay.id), relay:isHost() and " (host)" or "")
       -- a quick-play host is the only one who counts down: whoever opened
@@ -470,6 +478,12 @@ return function(mod)
           BR.players[id] = nil
         end
       end
+      -- The relay hands the room on by naming a new host in the roster, and
+      -- lib/relay.lua has already adopted it by the time we get here -- so a
+      -- promotion is something to notice, not something to negotiate.
+      local amHost = relay:isHost()
+      if amHost and not BR.wasHost then BR:onPromoted() end
+      BR.wasHost = amHost
       if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
@@ -605,6 +619,7 @@ return function(mod)
     self.pendingParade = nil
     self.ringDistOf = nil
     self.ringLocs = nil
+    self.matchFog = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -638,6 +653,7 @@ return function(mod)
     self.lastRoster = 0
     self.phase = "off"
     self.myId = nil
+    self.wasHost = false
   end
 
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
@@ -787,8 +803,9 @@ return function(mod)
       spawns[i] = { id = id, map = drops[i].map, x = drops[i].x, y = drops[i].y }
     end
     relay:lock(true)                       -- no late joiners mid-match
-    relay:broadcast(Wire.start(seed, spawns, safari))
-    self:onStart({ seed = seed, spawns = spawns, safari = safari })
+    relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds()))
+    self:onStart({ seed = seed, spawns = spawns, safari = safari,
+                   fog = self:fogSeconds() })
   end
 
   function BR:onStart(msg)
@@ -807,6 +824,9 @@ return function(mod)
     -- A bot's name and party are derived from the shared seed rather than
     -- sent, so every client agrees on the team it is about to fight.
     self.matchSeed = msg.seed
+    -- the starting host's phase length, so an heir runs the ring at the pace
+    -- the match was started at rather than its own option (POK-116)
+    self.matchFog = msg.fog
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -831,7 +851,7 @@ return function(mod)
       local bots = 0
       for id in pairs(self.players) do if Bots.isBot(id) then bots = bots + 1 end end
       log:say("match starts: %d trainers (%d bots), safari %ss, fog %ss, mine %s at %d,%d",
-              #msg.spawns, bots, tostring(msg.safari or 0), tostring(self:fogSeconds()),
+              #msg.spawns, bots, tostring(msg.safari or 0), tostring(self:roundFog()),
               tostring(mine.map), mine.x or -1, mine.y or -1)
     end
     -- arm the loadout hook, then start a fresh game straight into the world
@@ -841,6 +861,9 @@ return function(mod)
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
+    -- back in the running for the room: a PLAY AGAIN puts whoever stood
+    -- down last match back on their feet, and on the heir list (POK-116)
+    if self.relay then self.relay:canHost(true) end
     self.started = true
     self.matchWorld = true
     self.stats = { catches = 0, beats = 0, steps = 0,
@@ -1075,7 +1098,7 @@ return function(mod)
     elseif msg.t == "ring" then
       -- the fog is the host's to declare, like the winner
       if fromId == self.relay.hostId then
-        self:applyRing(msg.phase, msg.cx, msg.cy, msg.r, msg.place)
+        self:applyRing(msg.phase, msg.cx, msg.cy, msg.r, msg.place, msg.elapsed)
       end
 
     elseif msg.t == "winner" then
@@ -1869,8 +1892,19 @@ return function(mod)
     end
   end
 
+  -- The FOG option: what a match started from here would run at.  The
+  -- lobby row and the option cyclers all mean this one.
   function BR:fogSeconds()
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
+  end
+
+  -- The phase length of the match actually being played, which is whatever
+  -- the host who STARTED it had set.  It rides the start message so that an
+  -- heir carries the ring on at the pace the round began with rather than
+  -- its own (POK-116); before a match, and for a client old enough not to
+  -- have been told, it is just the option.
+  function BR:roundFog()
+    return self.matchFog or self:fogSeconds()
   end
 
   function BR:safariSeconds()
@@ -1880,10 +1914,18 @@ return function(mod)
   end
 
 
-  function BR:applyRing(phase, cx, cy, radius, place)
+  function BR:applyRing(phase, cx, cy, radius, place, elapsed)
     local was = self.ring and self.ring.phase
     self.ring = { phase = phase, center = { x = cx, y = cy, name = place },
                   radius = radius }
+    -- The fog clock is the only thing the host owns that nobody else can
+    -- work out for themselves, so it rides every shrink and everyone keeps
+    -- it against the day they inherit the room (POK-116).  The host's own
+    -- applyRing passes nothing and keeps the clock it already has.
+    if elapsed then
+      local now = clock()
+      if now then self.matchStartedAt = now - elapsed end
+    end
     -- every placed map's squared distance to the eye, for the bots'
     -- homeward roams (POK-42); cached here because roamBot is defined
     -- above townLocations
@@ -1917,20 +1959,54 @@ return function(mod)
     end
   end
 
+  -- The room has been handed to us (POK-116).  Almost nothing needs moving:
+  -- everything the old host was authoritative over, every guest was already
+  -- mirroring -- where each trainer stands, what has spilled, which of
+  -- Kanto's own the fog took, where the ring is -- and the rest (bot names,
+  -- teams, faces, walk streams, the ring's eye) falls out of the shared seed
+  -- at its use site.  The fog clock is the exception, which is why it rides
+  -- every shrink.
+  --
+  -- What does NOT come across is accumulated grace: the bots' fogTicks and
+  -- the per-map npcFog clocks start again here, so a sweep already counting
+  -- down gets its forty seconds back.  That is one wobble, in the players'
+  -- favour, and cheaper than shipping a state transfer to avoid it.
+  function BR:onPromoted()
+    log:say("the room is ours now: %s is the host", myName())
+    -- the say needs a world to land in; a promotion in the lobby is
+    -- the screen's own news, and the log has it either way
+    if not self:inRound() then return end
+    sayLater("The host left.\fYou are the host\nnow.")
+    -- the eye as it was announced, rather than re-derived from the seed
+    if self.ring and self.ring.center then self.ringCenter = self.ring.center end
+    -- applyRing has been keeping the clock from the host's own `e`.  A
+    -- promotion before the first shrink ever landed has none to keep, so
+    -- fall back to the phase we can see: starting its clock at the phase
+    -- boundary is the closest guess that cannot walk the ring backwards.
+    if not self.matchStartedAt then
+      local now = clock()
+      if now then
+        local phase = (self.ring and self.ring.phase) or 1
+        self.matchStartedAt = now - (phase - 1) * self:roundFog()
+      end
+    end
+  end
+
   -- host only: advance the shared clock and tell the room
   function BR:tickRing()
     if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
     local now = clock()
     if not now then return end
     self.matchStartedAt = self.matchStartedAt or now
-    local phase = Fog.phaseAt(now - self.matchStartedAt, self:fogSeconds())
+    local phase = Fog.phaseAt(now - self.matchStartedAt, self:roundFog())
     if self.ring and self.ring.phase == phase then return end
 
     local center = self.ringCenter or Fog.center(self.matchSeed, townList())
     self.ringCenter = center
     if not center then return end
     local radius = Fog.radius(phase)
-    self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius, center.name))
+    self.relay:broadcast(Wire.ring(phase, center.x, center.y, radius,
+                                   center.name, now - self.matchStartedAt))
     self:applyRing(phase, center.x, center.y, radius, center.name)
   end
 
@@ -2594,6 +2670,12 @@ return function(mod)
   function BR:eliminate(message, cause)
     if self.status == "out" or not self:inRound() then return end
     self.status = "out"
+    -- Out of the match is out of the running for the room: a spectator can
+    -- still run the fog and the bots perfectly well, but handing it to
+    -- somebody still playing keeps the authority with somebody who has a
+    -- reason to stay (POK-116).  If nobody else can, the relay closes the
+    -- room exactly as it used to.
+    if self.relay then self.relay:canHost(false) end
     log:say("OUT: you (%s), %d left", tostring(cause or "unknown"),
             self:aliveCount())
     -- Where the match ended for us, captured here rather than in any one
