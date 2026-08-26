@@ -47,7 +47,20 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 7, "a ring carrying the match clock is PROTOCOL 7")
+  eq(Wire.PROTOCOL, 8, "a room that can see who is busy is PROTOCOL 8")
+
+  -- POK-113: what a trainer is doing, for the mark over their head
+  local b = Wire.decode(Wire.busy("menu"))
+  eq(b and b.kind, "menu", "busy round-trips a menu")
+  eq(Wire.decode(Wire.busy("battle")).kind, "battle", "...and a battle")
+  eq(Wire.decode(Wire.busy(nil)).kind, nil, "...and back to nothing")
+  ok(Wire.decode(Wire.busy(nil)) ~= nil, "which is a message, not a refusal")
+  -- A kind this build has no mark for reads as "not busy".  Dropping it
+  -- would leave the LAST mark standing over someone who has moved on,
+  -- which is worse than showing nothing.
+  eq(Wire.decode({ t = "busy", k = "dancing" }).kind, nil,
+     "an unknown kind clears the mark rather than keeping a stale one")
+  eq(Wire.decode({ t = "busy", k = 7 }).kind, nil, "and so does a non-string")
   eq(Wire.decode(Wire.peek()).t, "peek", "peek round-trips")
   local st6 = Wire.decode(Wire.state({
     party = { { species = "PIDGEY", level = 12, hp = 23, maxHp = 40, status = "PSN",

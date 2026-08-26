@@ -342,6 +342,41 @@ return function(mod)
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
+  -- POK-113: the mark that goes over a trainer's head on everyone else's
+  -- screen.  A fight of any kind -- a duel, a bot, one of Kanto's own
+  -- trainers, a wild encounter -- reads as a battle; anything else above
+  -- the overworld (the PACK, the party screen, a dialog) reads as a menu.
+  -- Both are worth knowing before you walk over: someone in a fight cannot
+  -- answer you, and someone in a menu is not about to run.
+  --
+  -- The battle test is tickLevels' pair, and for the same reason: `status`
+  -- alone says "battle" only for a duel or a bot fight, and a wild
+  -- encounter or a route trainer leaves it "alive".
+  local function myBusy()
+    local game = BR.game
+    if not game then return nil end
+    if BR.status == "battle" or BR.botFight or BR:liveLocalBattle() then
+      return "battle"
+    end
+    local ow = mod.world:overworld()
+    local top = game.stack and game.stack:top()
+    if not (ow and top) or top == ow then return nil end
+    return "menu"
+  end
+
+  -- Edge-triggered: a frame goes out only when the answer CHANGES, so a
+  -- whole match of walking costs nothing.  sentBusy starts (and resyncs)
+  -- at `false` rather than nil, because nil is a real answer -- "back on
+  -- the map" -- and a peer that missed that edge would otherwise be left
+  -- holding a mark over someone who put their PACK away five minutes ago.
+  local function broadcastBusy()
+    if not (BR.relay and BR.relay:isOpen()) then return end
+    local kind = myBusy()
+    if kind == BR.sentBusy then return end
+    BR.sentBusy = kind
+    BR.relay:broadcast(Wire.busy(kind))
+  end
+
   -- ------- trainer skins (POK-79)
   --
   -- The walk sheet every other trainer sees, unlocked by career wins.  The
@@ -910,6 +945,7 @@ return function(mod)
     self.game:startNewGame({ intro = false })
     self.arming = nil
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
+    self.sentBusy = false    -- not nil: nil is "not busy", a real answer
     broadcastPlace()
     if safari > 0 then
       -- a beat and a half after landing: past the held A that started the
@@ -1067,6 +1103,13 @@ return function(mod)
         p.facing = msg.facing
         self.ghosts:face(actor, msg.facing)
       end
+
+    -- POK-113: what they are doing that is not walking.  Only meaningful
+    -- for somebody we already know about -- a busy arriving before their
+    -- first place has nowhere to be drawn, and their next resync carries
+    -- the answer again anyway.
+    elseif msg.t == "busy" then
+      if p then p.busy = msg.kind end
 
     elseif msg.t == "start" then
       -- only the host is a legitimate author; ignore a forged one
@@ -3869,6 +3912,10 @@ return function(mod)
     BR:tickAutoResolve(game)
 
     if relay and relay:isOpen() and BR:inRound() then
+      -- The mark goes out ABOVE the position block (POK-113), not inside
+      -- it: everything below is skipped while status is "battle", which is
+      -- precisely the state the room most needs told about.
+      broadcastBusy()
       local h = here()
       if h then
         if BR.status ~= "battle" then
@@ -3881,6 +3928,9 @@ return function(mod)
           if BR.resync >= RESYNC_TICKS then
             BR.resync = 0
             broadcastPlace()
+            -- re-state the mark on the same beat as the position, so a peer
+            -- that missed the edge is not left holding a stale one (POK-113)
+            BR.sentBusy = false
           end
           BR.ghosts:sync(game, h.mapId, BR.players)
           -- Our screen paused; the match did not (POK-98).  While anything
@@ -4182,6 +4232,59 @@ return function(mod)
   -- corners where no text box ever goes.  Only over the overworld itself:
   -- a battle, a menu or the town map has its own screen.
 
+  -- The engine's emote sheet, baked through OBP0 exactly as
+  -- OverworldController's obpEmoteImage does it: the bubble is OBJ art and
+  -- GBPalNormal holds OBP0 at "3100", so color 1 has to LIFT to white or
+  -- the bubble's interior comes out grey (#505).  Resolved through Assets,
+  -- so a mod's own emotes.png override still wins.
+  --
+  -- Cached on first use and never rebuilt -- this draws every frame a mark
+  -- is up, and a fresh image (or Quad) per frame would churn the GC.  A
+  -- failure caches as `false`: no bubbles rather than a retry every frame.
+  local emoteImg, emoteQuads = nil, {}
+  local function emoteSheet(game)
+    local field = game and game.data and game.data.field
+    local bubbles = field and field.emotionBubbles
+    if not (bubbles and bubbles.path) then return nil end
+    if emoteImg == nil then
+      local ok, img = pcall(function()
+        local Assets = require("src.render.Assets")
+        if not (love.image and love.image.newImageData) then
+          return love.graphics.newImage(Assets.resolve(bubbles.path))
+        end
+        local id = Assets.imageData(bubbles.path)
+        id:mapPixel(function(_, _, r, _, _, a)
+          local v = 0
+          if r > 0.5 then v = 1               -- OBJ colors 0 and 1 -> shade 0
+          elseif r > 0.17 then v = 170 / 255  -- OBJ color 2 -> shade 1
+          end                                 -- OBJ color 3 -> shade 3
+          return v, v, v, a
+        end)
+        return love.graphics.newImage(id)
+      end)
+      emoteImg = (ok and img) or false
+      if not ok then
+        mod.log:warn("emote sheet unavailable; no busy marks (%s)", tostring(img))
+      end
+    end
+    if not emoteImg then return nil end
+    return emoteImg, bubbles
+  end
+
+  -- By NAME rather than by index: the order is the cart's, and a mod (or a
+  -- Gen 2 sheet) may not keep it.
+  local function emoteQuad(bubbles, img, name)
+    if emoteQuads[name] then return emoteQuads[name] end
+    for _, b in ipairs((bubbles and bubbles.bubbles) or {}) do
+      if b.name == name then
+        local q = love.graphics.newQuad(b.x, b.y, b.w, b.h, img:getDimensions())
+        emoteQuads[name] = q
+        return q
+      end
+    end
+    return nil
+  end
+
   local function hudBox(text, tx, ty)
     local Font = require("src.render.Font")
     local w = #text + 2
@@ -4228,6 +4331,54 @@ return function(mod)
       -- blink on the fog's own beat, so the box pulses with the bite
       local t = clock() or 0
       if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
+    end
+
+    -- ------- what everyone else is doing, over their heads (POK-113)
+    --
+    -- The cart's own emotion bubbles, not a drawn-on plate: the sheet the
+    -- trainer-sight "!" comes from ships a QUESTION bubble beside it, and
+    -- a mark in the game's own art reads as part of the world instead of
+    -- as a debug overlay.  So a menu is "?" and a fight is "!" -- which is
+    -- already Gen 1's vocabulary for "this trainer is engaged", and closer
+    -- to hand than the X the ticket sketched.
+    --
+    -- Drawn here rather than through the engine's emote slot even so: that
+    -- slot is ONE entity's transient bubble and it HOLDS THE WORLD for its
+    -- frames (fxEmote / the sight pause), which is the opposite of a
+    -- standing mark over several trainers at once.
+    local sheet, bubbles = emoteSheet(game)
+    local cam = ow.camera
+    if cam and sheet then
+      local h = here()
+      for id, p in pairs(BR.players) do
+        -- On OUR map and actually drawn.  Both halves matter: a bot that
+        -- roams away changes p.map on the wire a tick before sync gets
+        -- round to despawning its ghost, and npcOf still resolved the old
+        -- handle in that window -- which put a bubble over bare ground
+        -- where somebody used to be standing.
+        if p.busy and p.status ~= "out" and h and p.map == h.mapId
+           and BR.ghosts:isSpawned(id) then
+          local npc = BR.ghosts:npcOf(id)
+          -- the ghost's px/py is where this screen has DRAWN them, which is
+          -- the cell tryEngage reads too (POK-96); marking the wire
+          -- position would float the bubble off the sprite mid-step
+          if npc and npc.px and npc.py then
+            local quad = emoteQuad(bubbles, sheet,
+                                   p.busy == "battle" and "EXCLAMATION_BUBBLE"
+                                   or "QUESTION_BUBBLE")
+            -- the engine's own bubble slot, so it lands exactly where a
+            -- trainer-sight "!" does (fxEmote: px + 4, py - 14)
+            local mx = math.floor(npc.px - cam.x) + 4
+            local my = math.floor(npc.py - cam.y) - 14
+            -- only when it would land on the screen: a bubble for somebody
+            -- across a big map is a smear at the edge, not information
+            if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
+              g.setColor(1, 1, 1, 1)
+              g.draw(sheet, quad, mx, my)
+            end
+          end
+        end
+      end
     end
     g.pop()
     return out
@@ -4555,6 +4706,15 @@ return function(mod)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
     return true
   end
+  -- Put a mark over somebody's head from outside (POK-113).  A bot never
+  -- sends `busy` -- it is simulated, not played -- so this is the only way
+  -- a single-client driver can get the overlay to draw at all.
+  mod.exports.debugBusy = function(id, kind)
+    local p = BR.players[id]
+    if not p then return false end
+    p.busy = kind
+    return true
+  end
   -- ...and one on the walk over (POK-85): a smoke needs to know the
   -- stride began, not just that a battle eventually happened
   mod.exports.walkUp = function()
@@ -4639,8 +4799,16 @@ return function(mod)
     local out = {}
     for id, p in pairs(BR.players) do
       out[#out + 1] = { id = id, name = p.name, map = p.map, x = p.x, y = p.y,
-                        status = p.status }
+                        status = p.status,
+                        -- the mark over their head (POK-113), so a driver
+                        -- can read what a second client is being shown
+                        busy = p.busy }
     end
     return out
   end
+
+  -- What THIS client is telling the room it is doing (POK-113).  The
+  -- derivation, not the last frame sent: in a solo room the frame is
+  -- suppressed (POK-102) and there would be nothing to read otherwise.
+  mod.exports.busy = function() return myBusy() end
 end

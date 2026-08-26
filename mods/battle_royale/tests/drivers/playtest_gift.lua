@@ -24,6 +24,7 @@ local Fog = require("mods.battle_royale.lib.fog")
 
 return function(game)
   local C = L.ctx(game)
+  local SHOTS = os.getenv("BR_SHOTS")
   local fails = 0
   local function check(cond, msg)
     if cond then
@@ -152,6 +153,64 @@ return function(game)
   end
   check(dropped ~= nil,
         "the released member is on the ground as a ball for somebody else")
+
+  -- ------------------------------------------------------------------
+  -- POK-113: the mark actually draws over a ghost
+  --
+  -- The wire and the derivation are proven by the two-client duel
+  -- scenario; what THAT cannot reach is the overlay itself, because both
+  -- clients are in the battle (the hud hook returns early when the
+  -- overworld is not on top) or a map apart.  So: park a bot beside us,
+  -- put a mark on it by hand, and confirm the frame renders with the
+  -- overworld up and nothing thrown.  A throw inside render.hud is
+  -- swallowed by the hook chain and only ever surfaces as a log line, so
+  -- "it looked fine" is not evidence -- tickError is.
+  -- while it is still PHASE 1 and the bot is still alive: run this after
+  -- the fog and the only bot may be gone, which would make every check
+  -- below pass without drawing a thing.
+  local botId = nil
+  for _, b in ipairs(E.bots() or {}) do
+    if b.status == "alive" then botId = b.id break end
+  end
+  if check(botId ~= nil, "a living bot to hang a mark on") then
+    -- Pewter's street, not wherever we happened to drop: a random map put
+    -- the probe against a fence line where a screenshot could not say
+    -- which sprite the mark belonged to.  This is the post every other
+    -- driver in here stages on.
+    if not check(L.flyTo(C, "PEWTER_CITY"), "flew to Pewter for the mark shot") then
+      U.log("GIFT: mark shot staged at " .. tostring(C.map()) .. " instead")
+    end
+    L.goTo(C, "PEWTER_CITY", 16, 18, 300)
+    quiet(80)
+    local ow = C.ow()
+    local map, px, py = C.map(), C.x(), C.y()
+    -- BESIDE us, never in front: the eyeline has no consent step and would
+    -- turn the probe into a fight.  Two cells clear, so a screenshot shows
+    -- unambiguously which sprite the mark belongs to.
+    E.debugPlaceBot(botId, map, px - 4, py)
+    U.wait(60)
+    U.log(("GIFT: probe at %s %s,%s; bot at %s,%s")
+          :format(tostring(map), tostring(px), tostring(py),
+                  tostring(px - 2), tostring(py)))
+    for _, kind in ipairs({ "menu", "battle" }) do
+      -- Re-place and shoot PROMPTLY.  A bot walks on its own clock and its
+      -- ghost replays those steps, so a long wait here drifts it next to
+      -- the player and a screenshot can no longer say which trainer the
+      -- bubble belongs to.  Four cells of separation for the same reason.
+      E.debugPlaceBot(botId, map, px - 4, py)
+      check(E.debugBusy(botId, kind) == true, "marked the bot as " .. kind)
+      U.wait(15)
+      check(game.stack:top() == ow,
+            "the map is on top, so the overlay is actually drawing (" .. kind .. ")")
+      if SHOTS then U.shot(game, SHOTS .. "/mark_" .. kind .. ".png") end
+      U.wait(20)
+    end
+    E.debugBusy(botId, nil)
+    U.wait(45)
+    check(game.stack:top() == ow, "and clearing the mark leaves the map alone")
+  end
+
+
 
   -- ------------------------------------------------------------------
   -- POK-117: the counter shuts when the fog rolls in
