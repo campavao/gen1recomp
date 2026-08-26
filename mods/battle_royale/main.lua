@@ -688,6 +688,24 @@ return function(mod)
   -- relay goodbye.
   -- Everything one match owns, cleared for the next: a leave (reset) or
   -- PLAY AGAIN (onAgain), which keeps the room.
+  -- Give another mod its overworld back (POK-134).  Idempotent, and called
+  -- from more than one place ON PURPOSE.  resetMatch is the one path every
+  -- deliberate exit goes through, and it is the primary route -- but it is
+  -- reached by this mod's own code, so a fault in this mod between the
+  -- suspend and the exit would strand somebody else's game for the rest of
+  -- the session.  The save events are the second net: they already mean
+  -- "the player is in a real playthrough again" (they clear matchWorld for
+  -- the same reason), and they are raised by the ENGINE, so they still
+  -- arrive when this mod is the thing that went wrong.
+  --
+  -- A hard close needs no net at all: these mods install their hooks at
+  -- module init, so the next launch puts them back regardless.
+  function BR:unsuspendMods()
+    if not self.suspendedMods then return end
+    Coexist.restore(self.suspendedMods, log)
+    self.suspendedMods = nil
+  end
+
   function BR:resetMatch()
     self:restoreSpeed()
     self.ghosts:despawnAll()
@@ -713,10 +731,7 @@ return function(mod)
     -- (POK-134).  Before the TM restore rather than after it: this one
     -- reaches into ANOTHER mod, so it goes first while the least has
     -- already been undone, and it is safe to run twice.
-    if self.suspendedMods then
-      Coexist.restore(self.suspendedMods, log)
-      self.suspendedMods = nil
-    end
+    self:unsuspendMods()
     if self.machineNames then
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
@@ -4700,12 +4715,16 @@ return function(mod)
   mod.events:on("save.created", function()
     local saved = mod.save:get("relay")
     if saved then BR:setRelayAddress(saved) end
-    if not BR.arming then BR.matchWorld = false end
+    if not BR.arming then
+      BR.matchWorld = false
+      BR:unsuspendMods()
+    end
   end)
 
   -- CONTINUE loads a real save; SAVE is theirs again.
   mod.events:on("save.loaded", function()
     BR.matchWorld = false
+    BR:unsuspendMods()
   end)
 
   -- Pick up the game handle early, and rescue a career written before

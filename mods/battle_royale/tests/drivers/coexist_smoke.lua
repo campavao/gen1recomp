@@ -122,6 +122,50 @@ return function(game)
     return C.fail("a second leave installed the hooks again")
   end
 
+  -- ------- the second net: a restore that does NOT go through resetMatch.
+  -- resetMatch is this mod's own code, so a fault between the suspend and
+  -- the exit would strand somebody else's game.  The save events are the
+  -- engine's, so they still arrive when this mod is the thing that broke.
+  -- Staged by starting a fresh match and then walking into a NEW GAME
+  -- without ever leaving properly.
+  do
+    if not E.hostSolo() then return C.fail("second hostSolo refused") end
+    E.setBots(0)
+    local up = false
+    for _ = 1, 300 do
+      U.wait(10)
+      if (E.memberCount() or 0) >= 1 then up = true break end
+    end
+    if not up then return C.fail("the second solo room never came up") end
+    E.start()
+    if not L.mashUntil(C, function() return E.phase() == "match" end, 400) then
+      return C.fail("never reached the second match")
+    end
+    U.wait(30)
+
+    local suspendedAgain = seen("removeHooks")
+    if suspendedAgain ~= 2 then
+      return C.fail(("a second match did not suspend again (removeHooks=%d)")
+        :format(suspendedAgain))
+    end
+    local before = seen("installHooks")
+
+    -- no E.leave(): straight into the engine's own New Game, which is what
+    -- a player abandoning a match outside our menu actually reaches.
+    -- Game:startNewGame is the thing that raises save.created (Game.lua);
+    -- U.newGame is no good here because it drives the TITLE screen, and
+    -- mid-match the stack top is the overworld, so it would just mash the
+    -- START menu and prove nothing.
+    game:startNewGame()
+    U.wait(60)
+
+    if seen("installHooks") ~= before + 1 then
+      return C.fail(("the save-event net did not restore: installHooks %d -> %d")
+        :format(before, seen("installHooks")))
+    end
+    U.log("COEXIST: the save-event net restored without resetMatch")
+  end
+
   U.log("COEXIST OK")
   game.driverDone = true
 end
