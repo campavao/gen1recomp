@@ -4219,11 +4219,29 @@ return function(mod)
   -- Two of these arm from a conversation as well; that half is in the
   -- world.talk wrap below.
   for mapId in pairs(Lockstep.CELLS) do
+    local repair = Lockstep.REPAIRS[mapId]
     mod.content.map_scripts:register(mapId, {
       onStep = function(_, _, x, y)
         if not BR:inSession() then return false end
         return Lockstep.blocks(mapId, x, y)
       end,
+      -- ...and put back whatever the scene we suppressed was also doing
+      -- (lib/lockstep.lua REPAIRS).  onEnter composes all-run and fires on
+      -- every entry rather than only the first, so a player who reaches
+      -- CERULEAN by any route gets the same city.  Writes to the match's
+      -- throwaway save, never the player's.
+      onEnter = repair and function(game, ow)
+        if not BR:inSession() then return end
+        local Commands = require("src.script.Commands")
+        local ctx = { game = game, save = game.save, overworld = ow }
+        for _, name in ipairs(repair.show or {}) do
+          Commands.show_object(ctx, mapId, name)
+        end
+        for _, name in ipairs(repair.hide or {}) do
+          Commands.hide_object(ctx, mapId, name)
+        end
+        log:say("lockstep: repaired %s after standing its scene down", mapId)
+      end or nil,
     })
   end
 

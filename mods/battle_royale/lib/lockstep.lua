@@ -82,6 +82,36 @@ Lockstep.CELLS = {
   },
 }
 
+-- ------- what a suppressed scene was ALSO doing
+--
+-- Heading a scene off means inheriting its side effects, and POK-126
+-- shipped without noticing one.  CERULEAN's thief does not only fight you:
+-- the fade at the end of rocketRows swaps a pair of guards, and that swap
+-- is load-bearing.  data/scripts/story.lua spells it out where BILL's
+-- ticket does the identical swap:
+--
+--   "(27,12) is the ONLY walkable neighbour of the trashed house's south
+--    door at (27,11), and that house is one of the two ways through the
+--    fence that splits Cerulean in half (the badge house is the other).
+--    Leaving GUARD2 up forever severs the city -- the gym/mart half can
+--    never reach the Route 5 exit."
+--
+-- The first read of this called it "one blocked tile beside a house door,
+-- not a route", which was wrong, and a player was stuck against the pair
+-- with "The people here were robbed." within a day of the release.
+--
+-- Vanilla opens the path two ways -- the thief, or BILL's ticket -- and
+-- both do the SAME swap, so applying it on entry is not an invention.  It
+-- is the state every real playthrough reaches, reached without the
+-- cutscene.  Written to save.objectToggles, which in a match is the
+-- throwaway save, so nothing here follows anybody home.
+Lockstep.REPAIRS = {
+  CERULEAN_CITY = {
+    show = { "CERULEANCITY_GUARD1" },   -- (28,12), the post-swap guard
+    hide = { "CERULEANCITY_GUARD2" },   -- (27,12), the one severing the city
+  },
+}
+
 -- True when this cell would start a scripted walk that a match should not
 -- have to sit through.  Callers gate on BR:inSession() first.
 function Lockstep.blocks(mapId, x, y)
