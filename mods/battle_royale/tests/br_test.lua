@@ -1904,6 +1904,31 @@ do
 end
 
 -- ------------------------------------------------------------------
+-- POK-108: a trainer in a doorway is not a door plug
+-- ------------------------------------------------------------------
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  -- one map, one door: the mart's, at 29,19 on the real VIRIDIAN_CITY
+  local maps = { VIRIDIAN_CITY = { warps = { { x = 29, y = 19,
+                                               destMap = "VIRIDIAN_MART" } } } }
+
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
+     "a living trainer in the open is solid -- you cannot walk through somebody")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "out" }),
+     "an eliminated one is walk-through, so a corpse cannot wall a survivor in")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "alive" }),
+     "and one standing IN the mart's door is too, or the shop shuts for good (POK-94)")
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "battle" }),
+     "mid-battle in a doorway seals it just as thoroughly")
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 20, status = "alive" }),
+     "the cell beside the door is not the door")
+  ok(not Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
+     "and the door is this map's, not that coordinate on every map")
+  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", nil),
+     "no peer at all is not a hole in the world")
+end
+
+-- ------------------------------------------------------------------
 -- POK-116: the room outlives its host
 -- ------------------------------------------------------------------
 do
