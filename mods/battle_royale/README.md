@@ -121,6 +121,12 @@ ring. Each bite of the fog is the overworld-poison beat you already know —
 the screen flickers dark and the poison chime plays — so you can feel it
 without opening a menu.
 
+**And a bubble over anyone who is busy.** A trainer in a menu wears a `?`
+and one in a fight wears a `!`, in the game's own emote art, visible to
+everyone. It is the difference between walking up to somebody who is about
+to walk into you and walking up to somebody three menus deep in their PACK
+-- and a `!` means they cannot answer you at all until their fight ends.
+
 **Once you are out, you watch — as a camera, not a body.** Your own
 trainer disappears (other players stopped seeing you when you fell; now
 you do too), and the view is glued to whoever you are watching, walking
@@ -167,11 +173,14 @@ never overwrite your actual playthrough.
   four moves for any move it could ever learn — level-up moves at any
   level, every compatible TM and HM — no tutor, no item, no ceremony.
   Catch a water type, teach it SURF, cross the water.
-- **A full party means choosing who to release.** At 6/6, a catch or a
-  loot-ball take opens the party screen as a picker: drop one to make room,
-  or keep the team you have. The released Pokémon lands as a ball at your
-  feet, claimable by anyone — trading up leaves a trace. Nothing ever
-  reaches a box.
+- **A full party means choosing who to release.** At 6/6, a catch, a
+  loot-ball take *or a gift* opens the party screen as a picker: drop one to
+  make room, or keep the team you have. The released Pokémon lands as a ball
+  at your feet, claimable by anyone — trading up leaves a trace. Nothing
+  ever reaches a box. Kanto hands out Pokémon already in a ball — the
+  Fighting Dojo's prize, the Silph LAPRAS, the Celadon EEVEE, the revived
+  fossils — and those used to fall straight into a PC that a match has
+  locked, which meant the prize vanished the instant it was won.
 - **Game speed is 1X.** A match has a shared clock and other people in it;
   fast-forward through the fog or slow-motion in a fight is cheating. The
   hotkey and the OPTION rows are ignored until the match ends.
@@ -190,6 +199,13 @@ never overwrite your actual playthrough.
   bag meant *owning* a TOWN MAP. A spectator reads the watched trainer's
   bag, so watching somebody who never picked one up left you with no way to
   see the fog at all. It is a row of its own now, alive, out or watching.
+- **The POKéMON CENTER closes when the fog rolls in.** Free unlimited
+  healing is fine while everyone is still building a team — that is what the
+  grace period is for, and walking to a Centre costs real time. Once the
+  ring starts closing the match is attrition, and a counter that never runs
+  out undoes it: the fog takes a tenth of everyone's maximum every four
+  seconds precisely so damage accumulates. The nurse shuts at the same
+  moment the ring does. The PC beside her was already out of order.
 - **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
   where the party IS your health — deposit fresh Pokémon, fight with one,
   withdraw and repeat — so storage, Pokémon and items both, is unreachable
