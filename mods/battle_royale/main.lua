@@ -635,6 +635,7 @@ return function(mod)
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self.pendingDrop = nil   -- a release that never landed (POK-34)
+    self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
@@ -3015,6 +3016,74 @@ return function(mod)
     }))
   end
 
+  -- A gift that lands on a full party (POK-112).
+  --
+  -- Kanto hands out Pokemon that are ALREADY in a ball -- the Fighting
+  -- Dojo's HITMONLEE and HITMONCHAN, the Silph LAPRAS, the Celadon EEVEE,
+  -- the revived fossils -- and Commands.give_pokemon puts those in the
+  -- party or, failing that, in the BOX.  In a match the PC answers OUT OF
+  -- ORDER, so "sent to BOX" is a hole in the floor: the prize is gone the
+  -- instant it is won and nobody can ever reach it again.
+  --
+  -- A ball on the ground is a ball on the ground, so a gift gets the same
+  -- rule as a catch and as a spilled ball: the party screen as a picker,
+  -- and whoever you release lands at your feet for somebody else.  The one
+  -- difference from offerDropForBall is that there is no race to re-check
+  -- -- a gift is yours alone, and cannot change hands while the picker is
+  -- up.  Both outcomes route the released mon through pendingDrop rather
+  -- than spilling here, so the ball lands under the tick's guards (on the
+  -- map, not mid-warp) exactly as POK-34's does.
+  function BR:offerDropForGift(mon, giftName)
+    local game = self.game
+    local save = game and game.save
+    if not (game and save and mon) then return end
+    local data = game.data
+    local PartyMenu = require("src.ui.PartyMenu")
+    local Party = require("src.pokemon.Party")
+    game.stack:push(PartyMenu.new(game, {
+      party = save.party,
+      pickOnly = true,
+      onSwitch = function(dropped)
+        local ddef = data and data.pokemon and data.pokemon[dropped.species]
+        local droppedName = (ddef and ddef.name) or tostring(dropped.species)
+        for i, member in ipairs(save.party) do
+          if member == dropped then table.remove(save.party, i) break end
+        end
+        if not Party.add(save.party, mon) then
+          -- cannot happen at 5/6, but a prize is never lost to a table
+          save.party[#save.party + 1] = mon
+        end
+        self.pendingDrop = dropped
+        say(("%s was\nreleased."):format(droppedName))
+      end,
+      -- B keeps your six.  The gift still does not evaporate: "released"
+      -- means "lands as a ball" everywhere else in here, so it means that
+      -- here too and whoever walks past next can have it.
+      onCancel = function()
+        self.pendingDrop = mon
+        say(("%s was\nreleased."):format(giftName))
+      end,
+    }))
+  end
+
+  -- Take back what the box just swallowed.  Boxes are plain arrays and
+  -- Boxes.deposit appends, so the gift is the last row of the box the
+  -- command named.  Nothing else can be writing to storage while this runs
+  -- -- the PC is out of order for the length of a match and a deposit is
+  -- the only other way in -- so the last row is the gift.
+  function BR:rescueBoxedGift(ctx)
+    local game = self.game
+    local save = game and game.save
+    local boxNum = ctx and ctx.boxNum
+    if not (game and save and boxNum and save.boxes) then return end
+    local box = save.boxes[boxNum]
+    local mon = box and box[#box]
+    if not (mon and mon.species) then return end
+    table.remove(box, #box)
+    local def = game.data and game.data.pokemon and game.data.pokemon[mon.species]
+    self:offerDropForGift(mon, (def and def.name) or tostring(mon.species))
+  end
+
   -- The catch picker (POK-34): a 6/6 catch hands you the decision the PC
   -- used to make silently.  Pick a member to release and the catch takes
   -- their slot; B keeps your six and the catch is gone.  The release itself
@@ -3662,6 +3731,7 @@ return function(mod)
     self.winnerId = id
     self.ghosts:despawnAll()
     self.pendingDrop = nil   -- the match ended before the release could land
+    self.pendingGift = nil   -- ...and before the boxed gift could be handed back
     self.buzzed, self.pickingTown = nil, nil
     -- via sayLater: the fog line that ended the match is usually still on
     -- screen, and the runner would refuse -- and silently drop -- the
@@ -3869,6 +3939,20 @@ return function(mod)
         BR:spillDropped(mon)
       end
     end
+
+    -- ...and a gift the party had no room for is pulled straight back out
+    -- of the box it was just dropped into (POK-112).  Same guards, and
+    -- waiting for the map also waits out the gift's own "sent to BOX" and
+    -- "PLAYER got X!" boxes, so the picker opens after the announcement
+    -- rather than underneath it.
+    if BR.pendingGift and BR:inRound() then
+      local ow = mod.world:overworld()
+      if ow and game.stack:top() == ow and not ow.transitioning then
+        local ctx = BR.pendingGift.ctx
+        BR.pendingGift = nil
+        BR:rescueBoxedGift(ctx)
+      end
+    end
     BR:tickCamera()
   end
 
@@ -3895,6 +3979,23 @@ return function(mod)
   -- which is why link.battle_ended handles that case separately.)
   mod.events:on("world.blacked_out", function()
     BR:eliminate("You whited out!\nYou are out of\nthe match.", "whiteout")
+  end)
+
+  -- A gift is about to be created (POK-112).  before_give fires ahead of
+  -- Party.add, so a party that is full HERE is one this gift cannot fit
+  -- into and the command is about to send it to the BOX -- which a match
+  -- has locked.  The ctx the command carries is where it records what it
+  -- did (ctx.boxNum), so hold on to that and let the tick read the verdict
+  -- once the announcement is off the screen.
+  --
+  -- Note this is the ONLY seam that reaches every giver.  The dojo prize
+  -- is a native map script calling Commands.give_pokemon directly, with no
+  -- ScriptRunner under it, so script.command never fires for it.
+  mod.events:on("pokemon.before_give", function(gift)
+    if not (inMatch() and gift and gift.ctx) then return end
+    local save = BR.game and BR.game.save
+    if not (save and #(save.party or {}) >= 6) then return end
+    BR.pendingGift = { ctx = gift.ctx }
   end)
 
   -- Leaving a map takes our copy of every ghost with it: they are runtime
