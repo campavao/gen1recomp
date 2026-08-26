@@ -4096,6 +4096,36 @@ return function(mod)
   -- walking into someone, so here A just names them (and, if we are already
   -- adjacent and facing, is a second way to start the fight).
 
+  -- ------- Pewter's gym escort stands down for a match (POK-122)
+  --
+  -- Vanilla Pewter stops a trainer heading east and walks them to the gym
+  -- (data/scripts/story5.lua M.PEWTER_CITY), gated on EVENT_BEAT_BROCK.
+  -- In a match that flag can never be set: BROCK is a contested boss
+  -- (POK-26) and his own talk branches on the SAME flag
+  -- (data/scripts/gyms.lua PEWTER_GYM.talk), so listing it in STORY_FLAGS
+  -- would hand every match a gym leader who cannot be fought and a TM
+  -- nobody can win.  The escort is headed off at its triggers instead.
+  --
+  -- It has to not fire at all, rather than merely stop after the first
+  -- time: a lockstep walk is not a cutscene here, it is a movement lock
+  -- while the ring closes and other trainers hunt.  There are two
+  -- triggers, and this is the first -- map_scripts composes onStep
+  -- first-truthy-consumes with a mod's contribution ahead of base
+  -- (src/script/MapScripts.lua), so returning true on the four trigger
+  -- cells means base never sees the step.  Outside a session it returns
+  -- false and vanilla Pewter is untouched, which matters: this mod is
+  -- installed alongside real playthroughs.
+  local PEWTER_ESCORT_CELLS = {
+    ["35,17"] = true, ["36,17"] = true, ["37,18"] = true, ["37,19"] = true,
+  }
+
+  mod.content.map_scripts:register("PEWTER_CITY", {
+    onStep = function(_, _, x, y)
+      if not BR:inSession() then return false end
+      return PEWTER_ESCORT_CELLS[x .. "," .. y] == true
+    end,
+  })
+
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
     -- play (POK-84).  Same reason as the START row, so the same window:
@@ -4134,6 +4164,16 @@ return function(mod)
     if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
        and not (BR.game and BR.game.save and BR.game.save.safari) then
       say("The SAFARI ZONE\nis closed for\nthe match.")
+      return
+    end
+    -- The other half of POK-122: the youngster arms the very same escort
+    -- from a conversation (story5.lua M.PEWTER_CITY.talk calls
+    -- pewterGymEscort directly), so guarding the trigger cells alone
+    -- leaves the walk one A press away.  He keeps a line; what he does
+    -- not keep is the right to march you across town mid-match.
+    if BR:inSession() and def and def.name == "PEWTERCITY_YOUNGSTER"
+       and ow and ow.map and ow.map.id == "PEWTER_CITY" then
+      say("BROCK is taking\non all comers\ntoday!")
       return
     end
     -- a spilled ball: press A to open it, like every item ball in Kanto.
