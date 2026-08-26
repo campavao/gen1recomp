@@ -4377,6 +4377,50 @@ return function(mod)
     return w
   end
 
+  -- ------- "the other one is still choosing" (POK-106)
+  --
+  -- A link turn is lockstep: submit() puts our action on the wire, sets
+  -- `phase = "waitRemote"` and parks until the peer's arrives
+  -- (src/link/LinkBattle.lua).  BattleState draws nothing for that phase --
+  -- no menu, no prompt -- so a player who has picked a move sits looking at
+  -- a still screen with no way to tell a thinking opponent from a hung
+  -- client.  Over a relay that pause can be seconds.
+  --
+  -- No engine change needed: the wait is exactly "we have a pending action
+  -- and no remote one yet", and both fields are on the state the stack is
+  -- already holding.  The dots animate on purpose -- a static box is the
+  -- one thing that would not answer the question the player is asking,
+  -- which is whether anything is still happening.  Padded to a fixed width
+  -- so the box does not breathe with them.
+  mod.hooks:wrap("render.hud", function(next, game, viewport)
+    local out = next(game, viewport)
+    if not (BR:inSession() and viewport and game.stack) then return out end
+    local top = game.stack:top()
+    if not (top and top.phase == "waitRemote"
+            and top.pendingMyAction and not top.remoteAction) then
+      return out
+    end
+    local okFont, Font = pcall(require, "src.render.Font")
+    if not okFont or not Font.draw then return out end
+
+    local sx = (viewport.gameWidth or 160) / 160
+    local sy = (viewport.gameHeight or 144) / 144
+    local g = love.graphics
+    g.push("all")
+    g.translate(viewport.gameX or 0, viewport.gameY or 0)
+    g.scale(sx, sy)
+    -- Into the battle's OWN message box: BattleState:drawTextArea has
+    -- already put it on screen and this phase leaves it empty, so we use
+    -- its exact text origin (8, 112) and its black, the same as a real
+    -- "used PSYCHIC!" line.  A bordered box of our own nested inside that
+    -- one read as a debug overlay rather than as the game talking.
+    g.setColor(0, 0, 0, 1)
+    local dots = ("."):rep(math.floor((clock() or 0) * 3) % 4)
+    Font.draw(("WAITING%-3s"):format(dots), 8, 112)
+    g.pop()
+    return out
+  end)
+
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
     if not (BR:inRound() and viewport and game.stack) then return out end
