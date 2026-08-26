@@ -243,6 +243,7 @@ return function(mod)
     started = false,      -- have I dropped into the world yet this match
     myName = nil,         -- chosen on the NAME row; nil falls back to the save
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
+    tearingDown = false,  -- an exit is already in flight (POK-115)
     -- Who the last battle was against, kept OUTSIDE self.battle on purpose:
     -- the channel (and with it self.battle) is torn down by LinkState before
     -- link.battle_ended reaches us, so reading the opponent off self.battle
@@ -473,8 +474,14 @@ return function(mod)
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
     relay:on("closed", function(reason)
-      if reason then say(reason) end
-      BR:reset()
+      -- A room that closes under us is an exit like any other, and it has
+      -- to leave the throwaway world the same way a deliberate LEAVE does.
+      -- reset() alone cleared the match state and left the match Kanto on
+      -- the stack, so the player stood in a world that was no longer a
+      -- match and no longer a save -- with SAVE un-vetoed over their real
+      -- slot, since matchWorld is exactly what the save.write hook reads
+      -- (POK-115).
+      BR:teardown(reason)
     end)
   end
 
@@ -636,26 +643,48 @@ return function(mod)
   -- Leaving has to actually leave.  A match runs in a throwaway world, so
   -- dropping the relay while standing in it left the player in a Kanto that
   -- was no longer a match and no longer a save -- the menu said "you left"
-  -- and nothing else changed.  If we are in that world, go back to the title.
-  function BR:teardown(message)
-    log:say("teardown (%s)", tostring(message or "left"))
-    local wasMatchWorld = self.matchWorld
-    log:forget()
-    self:restoreSkinWalk()
-    if self.relay then self.relay:leave() end
-    self:reset()
-    if wasMatchWorld and self.game then
-      self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
-      local ok, err = pcall(function()
-        while self.game.stack:top() do self.game.stack:pop() end
-        self.game.stack:push(self.game:makeTitleState())
-      end)
-      if not ok then
-        mod.log:warn("could not return to the title: %s", tostring(err))
-      end
-      return
+  -- and nothing else changed.  BOTH exits land here now -- teardown() and a
+  -- room that closed under us (POK-115) -- so neither can be the one that
+  -- forgets.  Takes the flag rather than reading it, because reset() clears
+  -- matchWorld on its way past.
+  function BR:toTitle(wasMatchWorld)
+    if not (wasMatchWorld and self.game) then return false end
+    self.matchWorld = false   -- the throwaway world is gone; SAVE is theirs again
+    local ok, err = pcall(function()
+      while self.game.stack:top() do self.game.stack:pop() end
+      self.game.stack:push(self.game:makeTitleState())
+    end)
+    if not ok then
+      mod.log:warn("could not return to the title: %s", tostring(err))
     end
-    if message then say(message) end
+    return true
+  end
+
+  function BR:teardown(message)
+    -- Re-entrant by construction: teardown drops the relay, and a dropped
+    -- relay fires `closed`, whose handler is itself an exit that tears
+    -- down.  Whoever arrives first owns the exit; the other turns around.
+    -- The flag is cleared through a pcall because a teardown that threw
+    -- with it still set would disable every exit after it.
+    if self.tearingDown then return end
+    self.tearingDown = true
+    local ok, err = pcall(function()
+      log:say("teardown (%s)", tostring(message or "left"))
+      local wasMatchWorld = self.matchWorld
+      log:forget()
+      self:restoreSkinWalk()
+      if self.relay then self.relay:leave() end
+      self:reset()
+      -- A say cannot outlive the stack pop: Menu.say queues a script in the
+      -- world we are leaving, so only an exit that stays put can deliver
+      -- one.  Landing on the title with no reason given is POK-115's
+      -- known gap, not an oversight here.
+      if not self:toTitle(wasMatchWorld) and message then say(message) end
+    end)
+    self.tearingDown = false
+    if not ok then
+      mod.log:warn("battle royale teardown failed: %s", tostring(err))
+    end
   end
 
   -- Leaving the finished world WITHOUT leaving the room: the throwaway
