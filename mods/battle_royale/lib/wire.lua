@@ -68,7 +68,11 @@ local Wire = {}
 -- 8: busy -- a trainer says when they are in a menu or in a fight, so the
 --    room can see it over their head (POK-113); a v7 peer sends nothing
 --    and would stand there looking idle while it read its PACK
-Wire.PROTOCOL = 8
+-- 9: bview -- the trainer you are watching sends what their fight looks
+--    like, so spectating follows them into it (POK-105); a v8 peer sends
+--    nothing and a spectator would sit on an empty map for the length of
+--    somebody else's battle
+Wire.PROTOCOL = 9
 
 Wire.DIRS = { up = true, down = true, left = true, right = true }
 Wire.STATUS = { lobby = true, alive = true, battle = true, out = true }
@@ -201,6 +205,15 @@ function Wire.busy(kind) return { t = "busy", k = kind } end
 
 -- a spectator asks the trainer they watch what they carry (POK-18)...
 function Wire.peek() return { t = "peek" } end
+-- A spectator is shown the fight they are watching (POK-105).  Pushed by
+-- the watched client on every visible change, unicast to the one spectator
+-- -- never broadcast, because nobody else in the room is looking at it.
+-- The shape is lib/bview.lua's, carried as-is.
+function Wire.bview(v)
+  return { t = "bv", me = v and v.me, foe = v and v.foe,
+           who = v and v.who, msg = v and v.msg }
+end
+
 -- ...and is answered: party rows are { sp, lv, hp, mhp, st, mv } on the
 -- wire, the bag as item stacks plus money
 function Wire.state(state)
@@ -432,6 +445,40 @@ decoders.winner = function(m)
 end
 
 decoders.again = function() return { t = "again" } end
+
+-- A battle view (POK-105).  Every field is optional on purpose: a frame
+-- for a species this build does not know, or with no message yet, is still
+-- worth drawing -- a spectator with a half-readable fight is better served
+-- than one told nothing.  Only the two sides are required, because without
+-- them there is no fight to draw.
+local function bside(s)
+  if type(s) ~= "table" then return nil end
+  if type(s.sp) ~= "string" then return nil end
+  local function num(v, lo, hi, dflt)
+    v = tonumber(v)
+    if not v or v ~= v then return dflt end
+    v = math.floor(v)
+    if v < lo then return lo end
+    if v > hi then return hi end
+    return v
+  end
+  return {
+    sp = s.sp,
+    nm = type(s.nm) == "string" and s.nm:sub(1, MAX_NAME) or nil,
+    lv = num(s.lv, 1, 100, 1),
+    hp = num(s.hp, 0, 99999, 0),
+    mhp = num(s.mhp, 1, 99999, 1),
+    st = type(s.st) == "string" and s.st:sub(1, 16) or nil,
+  }
+end
+
+decoders.bv = function(m)
+  local me, foe = bside(m.me), bside(m.foe)
+  if not (me and foe) then return nil, "bad battle view" end
+  return { t = "bv", me = me, foe = foe,
+           who = type(m.who) == "string" and m.who:sub(1, MAX_NAME) or nil,
+           msg = type(m.msg) == "string" and m.msg:sub(1, 96) or nil }
+end
 
 decoders.busy = function(m)
   -- an unknown kind is not a protocol error -- it is a peer saying

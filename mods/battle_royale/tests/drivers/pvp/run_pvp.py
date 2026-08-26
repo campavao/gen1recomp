@@ -7,7 +7,8 @@
 #
 #   python mods/battle_royale/tests/drivers/pvp/run_pvp.py [scenario] [workdir]
 #
-# Scenarios: duel (default) -- engage, lockstep fight, KO, spill, play
+# Scenarios: spectate -- the host goes out on purpose and must be SHOWN the
+# fight the guest is in (POK-105); duel (default) -- engage, lockstep fight, KO, spill, play
 # again; stall -- the host goes silent at the move menu and the POK-59
 # shot clock must forfeit them; freeze -- the host goes silent from the
 # battle intro on, and the POK-65 watchdog plus the clock must still end
@@ -32,6 +33,7 @@ SCENARIOS = {
     "duel": ("host_duel.lua", "guest_duel.lua"),
     "stall": ("host_stall.lua", "guest_stall.lua"),
     "freeze": ("host_freeze.lua", "guest_stall.lua"),
+    "spectate": ("host_spectate.lua", "guest_spectate.lua"),
 }
 
 

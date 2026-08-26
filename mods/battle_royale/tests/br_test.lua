@@ -47,7 +47,39 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 8, "a room that can see who is busy is PROTOCOL 8")
+  eq(Wire.PROTOCOL, 9, "a room that shows a spectator the fight is PROTOCOL 9")
+
+  -- POK-105: the fight a spectator is shown
+  local BV = require("mods.battle_royale.lib.bview")
+  local view = { me = { sp = "CHARIZARD", lv = 36, hp = 88, mhp = 110 },
+                 foe = { sp = "BLASTOISE", lv = 36, hp = 54, mhp = 118,
+                         st = "PSN" },
+                 who = "BLUE", msg = "It's super\neffective!" }
+  local bv = Wire.decode(Wire.bview(view))
+  ok(bv ~= nil, "a battle view round-trips")
+  eq(bv and bv.me.sp, "CHARIZARD", "our side survives the wire")
+  eq(bv and bv.foe.st, "PSN", "and so does a status")
+  eq(bv and bv.who, "BLUE", "and who they are fighting")
+  eq(bv and bv.msg, "It's super\neffective!", "and the line on screen")
+
+  -- both sides are required: there is no fight to draw without them
+  ok(Wire.decode({ t = "bv", me = view.me }) == nil, "one side is not a fight")
+  ok(Wire.decode({ t = "bv" }) == nil, "and neither is none")
+  -- ...but everything else degrades rather than dropping the frame
+  local bare = Wire.decode({ t = "bv", me = { sp = "MEW" }, foe = { sp = "MEW" } })
+  ok(bare ~= nil, "a frame with only species still draws")
+  eq(bare and bare.me.lv, 1, "a missing level reads as 1")
+  eq(bare and bare.me.mhp, 1, "and a missing maximum as 1, so no divide by zero")
+  eq(BV.fraction(bare and bare.me), 0, "an empty bar is empty, not an error")
+
+  -- a hostile frame cannot make the spectator's screen lie
+  local nasty = Wire.decode({ t = "bv",
+    me = { sp = "MEW", lv = 9999, hp = -5, mhp = 0 / 0 },
+    foe = { sp = "MEW" }, msg = string.rep("x", 500) })
+  eq(nasty and nasty.me.lv, 100, "a level is clamped to 100")
+  eq(nasty and nasty.me.hp, 0, "HP cannot go negative")
+  eq(nasty and nasty.me.mhp, 1, "and NaN is not a maximum")
+  ok(nasty and #nasty.msg <= 96, "a message cannot run off the box")
 
   -- POK-113: what a trainer is doing, for the mark over their head
   local b = Wire.decode(Wire.busy("menu"))
@@ -1363,6 +1395,83 @@ do
       eq(Data.items.HM_CUT and Data.items.HM_CUT.name, "HM01", "HMs included")
     end
   end
+end
+
+-- ------------------------------------------------------------------
+-- POK-105: the fight a spectator is shown
+-- ------------------------------------------------------------------
+do
+  local BView = require("mods.battle_royale.lib.bview")
+
+  local function battler(sp, lv, hp, maxHp, shown, status, nick)
+    return { mon = { species = sp, level = lv, hp = hp, status = status,
+                     nickname = nick, stats = { hp = maxHp } },
+             shownHP = shown }
+  end
+  local battle = {
+    player = battler("CHARIZARD", 36, 88, 110),
+    enemy  = battler("BLASTOISE", 36, 54, 118, nil, "PSN"),
+  }
+
+  local v = BView.of(battle, "BLUE", nil)
+  ok(v ~= nil, "a live battle makes a view")
+  eq(v.me.sp, "CHARIZARD", "our active")
+  eq(v.foe.sp, "BLASTOISE", "and theirs")
+  eq(v.foe.st, "PSN", "with its status")
+  eq(v.who, "BLUE", "and who they are fighting")
+  eq(v.me.mhp, 110, "maximum HP comes off stats.hp, as everywhere else here")
+
+  -- The BAR's value, not the real one: it drains behind the number so it
+  -- lands with the message that explains it.  Sending the truth early
+  -- would drop the watcher's bar a beat before the hit that caused it.
+  local draining = { player = battler("CHARIZARD", 36, 20, 110, 64),
+                     enemy = battler("BLASTOISE", 36, 54, 118) }
+  eq(BView.of(draining).me.hp, 64, "the view follows the bar, not the truth")
+
+  -- a wild encounter has nobody to name
+  eq(BView.of(battle).who, nil, "a wild fight names no trainer")
+
+  -- nothing to draw is not a view
+  ok(BView.of(nil) == nil, "no battle, no view")
+  ok(BView.of({ player = battle.player }) == nil, "one side is not a fight")
+  ok(BView.of({ player = battle.player, enemy = { mon = {} } }) == nil,
+     "and neither is a mon with no species")
+
+  -- the change test is the whole rate limit
+  ok(not BView.changed(BView.of(battle, "BLUE"), BView.of(battle, "BLUE")),
+     "an unchanged battle sends nothing")
+  ok(BView.changed(BView.of(battle, "BLUE"), nil), "the first frame always sends")
+  local hurt = { player = battler("CHARIZARD", 36, 40, 110),
+                 enemy = battle.enemy }
+  ok(BView.changed(BView.of(hurt, "BLUE"), BView.of(battle, "BLUE")),
+     "a hit sends")
+  local swapped = { player = battler("PIDGEOT", 36, 90, 100), enemy = battle.enemy }
+  ok(BView.changed(BView.of(swapped, "BLUE"), BView.of(battle, "BLUE")),
+     "a switch sends")
+  ok(BView.changed(BView.of(battle, "RED"), BView.of(battle, "BLUE")),
+     "and so does a different opponent")
+
+  -- bars
+  eq(BView.fraction({ hp = 55, mhp = 110 }), 0.5, "half a bar")
+  eq(BView.fraction({ hp = 0, mhp = 110 }), 0, "an empty one")
+  eq(BView.fraction({ hp = 999, mhp = 110 }), 1, "and one that cannot overflow")
+  eq(BView.fraction({ hp = 5, mhp = 0 }), 0, "no maximum is no bar, not a crash")
+  eq(BView.fraction(nil), 0, "and neither is nothing")
+
+  -- names: a nickname only when it says something the species does not
+  eq(BView.of({ player = battler("RATTATA", 5, 10, 20, nil, nil, "RATTATA"),
+                enemy = battle.enemy }).me.nm, nil,
+     "a nickname equal to the species is not worth the wire")
+  eq(BView.of({ player = battler("RATTATA", 5, 10, 20, nil, nil, "NIBBLES"),
+                enemy = battle.enemy }).me.nm, "NIBBLES", "a real one is")
+
+  local data = { pokemon = { CHARIZARD = { name = "CHARIZARD" } } }
+  eq(BView.nameOf(data, { sp = "CHARIZARD" }), "CHARIZARD", "named from data")
+  eq(BView.nameOf(data, { sp = "CHARIZARD", nm = "SPARKY" }), "SPARKY",
+     "a nickname wins")
+  eq(BView.nameOf(data, { sp = "MISSINGNO" }), "MISSINGNO",
+     "a species this build lacks still draws a row")
+  eq(BView.nameOf(nil, nil), "?", "and nothing draws a question mark")
 end
 
 -- ------- the rival's ambushes never fire in a match (POK-67)

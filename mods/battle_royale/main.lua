@@ -43,6 +43,7 @@ local Fame = require("mods.battle_royale.lib.fame")
 local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
+local BView = require("mods.battle_royale.lib.bview")
 local Machines = require("mods.battle_royale.lib.machines")
 local Log = require("mods.battle_royale.lib.log")
 
@@ -280,6 +281,17 @@ return function(mod)
     wasInFog = false,     -- so entering the fog is announced once
   }
 
+  -- The match clock, and the FIRST helper in here on purpose.  A local is
+  -- only in scope below its own line, so a helper defined late is a trap
+  -- for anything written above it -- which is how POK-24 shipped a tick
+  -- that died on a nil global every frame of a live match, and what
+  -- br_test's helper-order scan now catches.  Nothing depends on this, so
+  -- it belongs where everything can reach it.
+  local function clock()
+    if love and love.timer and love.timer.getTime then return love.timer.getTime() end
+    return nil
+  end
+
   local function say(text) BRMenu.say(mod, text) end
 
   -- A say that must not be lost.  The runner refuses a script while one is
@@ -376,6 +388,74 @@ return function(mod)
     if kind == BR.sentBusy then return end
     BR.sentBusy = kind
     BR.relay:broadcast(Wire.busy(kind))
+  end
+
+  -- ------- the fight a spectator is shown (POK-105)
+  --
+  -- A peek repeats every Peek.SECONDS for as long as somebody is watching,
+  -- so it doubles as the subscription and this is its expiry: three missed
+  -- asks and a watcher is gone.  Nobody watching means nothing is built.
+  local WATCHER_TTL = 10
+
+  -- The live battle, whatever KIND it is.  Found by shape on the stack
+  -- rather than from a field, because the mod's own records only cover two
+  -- of the four: BR.battle is a duel and BR.botFight is a bot, while a wild
+  -- encounter and one of Kanto's own trainers are neither.  A battler pair
+  -- with mons on both sides is precisely a battle and nothing else.
+  local function currentBattle()
+    local stack = BR.game and BR.game.stack
+    local states = (stack and stack.states) or {}
+    for i = #states, 1, -1 do
+      local s = states[i]
+      if type(s) == "table" and type(s.player) == "table"
+         and type(s.enemy) == "table" and s.player.mon and s.enemy.mon then
+        return s
+      end
+    end
+    return nil
+  end
+
+  -- Who the watched trainer is up against, when we can name them.  A wild
+  -- encounter has nobody to name, and the view says so by leaving it out.
+  local function foeName()
+    if BR.botFight and BR.players[BR.botFight] then
+      return BR.players[BR.botFight].name
+    end
+    if BR.battle and BR.battle.opponentId and BR.relay then
+      return BR.relay:nameOf(BR.battle.opponentId)
+    end
+    return nil
+  end
+
+  local function pushBattleView()
+    if not (BR.relay and BR.relay:isOpen() and BR:inRound()) then return end
+    local watchers = BR.watchers
+    if not watchers then return end
+    local now = clock() or 0
+    local any = false
+    for id, at in pairs(watchers) do
+      if (now - at) > WATCHER_TTL then watchers[id] = nil else any = true end
+    end
+    if not any then return end
+
+    local battle = currentBattle()
+    if not battle then
+      -- out of the fight: forget the last frame so the next battle's first
+      -- one is never suppressed as "unchanged"
+      BR.sentView = nil
+      return
+    end
+    -- msg is deliberately absent.  The battle's text lives behind
+    -- BattleState:say, and the only way to read it from here would be to
+    -- patch an engine class -- which is exactly what POK-29 deleted the
+    -- shim to stop doing.  The wire field is already defined and clamped,
+    -- so a `battle.message` seam can fill it later without a protocol
+    -- change; until then the HP bars carry the turn.
+    local view = BView.of(battle, foeName(), nil)
+    if not (view and BView.changed(view, BR.sentView)) then return end
+    BR.sentView = view
+    local frame = Wire.bview(view)
+    for id in pairs(watchers) do BR.relay:send(id, frame) end
   end
 
   -- ------- trainer skins (POK-79)
@@ -1214,12 +1294,26 @@ return function(mod)
       if fromId == self.relay.hostId then self:onAgain() end
 
     elseif msg.t == "peek" then
+      -- A peek is also a subscription (POK-105).  It already repeats every
+      -- Peek.SECONDS for as long as somebody is watching, so it is the
+      -- heartbeat this needs -- no new message, and a watcher who wanders
+      -- off or drops simply stops asking and ages out of the list.
+      self.watchers = self.watchers or {}
+      self.watchers[fromId] = clock() or 0
       self:answerPeek(fromId)
 
     elseif msg.t == "state" then
       -- only the trainer we are watching has anything to tell us
       if fromId == self.watching then
         self.peeked = { id = fromId, party = msg.party, items = msg.items, money = msg.money }
+      end
+
+    elseif msg.t == "bv" then
+      -- ...and only their fight is worth drawing
+      if fromId == self.watching then
+        self.watchedBattle = { id = fromId, at = clock() or 0,
+                               me = msg.me, foe = msg.foe,
+                               who = msg.who, msg = msg.msg }
       end
     end
   end
@@ -1382,12 +1476,6 @@ return function(mod)
     return not Spawn.isWarp(maps, mapId, x, y)
   end
 
-  local function clock()
-    if love and love.timer and love.timer.getTime then return love.timer.getTime() end
-    return nil
-  end
-
-  -- (below clock(): a local helper is only in scope after its line)
   -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
   -- the pair engages the other for a few seconds -- the head start a flee
   -- promises -- and the runner may not initiate on who they fled from for
@@ -3934,6 +4022,7 @@ return function(mod)
       -- it: everything below is skipped while status is "battle", which is
       -- precisely the state the room most needs told about.
       broadcastBusy()
+      pushBattleView()
       local h = here()
       if h then
         if BR.status ~= "battle" then
@@ -4351,6 +4440,59 @@ return function(mod)
       if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
     end
 
+    -- ------- the fight the watched trainer is in (POK-105)
+    --
+    -- Drawn over the map rather than as a screen of its own: a spectator is
+    -- a camera and the map behind this is still theirs to move -- LEFT and
+    -- RIGHT still change who they watch, and a screen would have to own
+    -- that. The gate is POK-113's mark, which is already the room's answer
+    -- to "is this trainer in a fight": the moment it clears, so does this.
+    local bvw = BR.watchedBattle
+    local watched = BR.watching and BR.players[BR.watching]
+    -- who the panel is about, so the bubble loop below can leave them
+    -- alone: their "!" would otherwise land ON the panel, over the very HP
+    -- numbers it exists to show -- and a panel headed IS FIGHTING has
+    -- already said the thing the bubble would
+    local panelFor = nil
+    if BR.status == "out" and bvw and bvw.id == BR.watching
+       and watched and watched.busy == "battle" then
+      panelFor = BR.watching
+      local data = game.data
+      local function bar(px, py, frac)
+        g.setColor(0, 0, 0, 1)
+        g.rectangle("line", px + 0.5, py + 0.5, 47, 5)
+        local w = math.floor(46 * frac)
+        if w > 0 then g.rectangle("fill", px + 1, py + 1, w, 4) end
+      end
+      local function row(s, ty)
+        g.setColor(0, 0, 0, 1)
+        Font.draw(("%s :L%d"):format(BView.nameOf(data, s), s and s.lv or 1),
+                  8, ty)
+        bar(8, ty + 10, BView.fraction(s))
+        -- the numbers too: a bar says "hurt", a number says "one more hit"
+        Font.draw(("%3d/%3d"):format(s and s.hp or 0, s and s.mhp or 1),
+                  64, ty + 9)
+        if s and s.st then Font.draw(s.st, 112, ty + 9) end
+        g.setColor(1, 1, 1, 1)
+      end
+
+      -- The box spans ty*8 .. (ty+h)*8, so with h = 11 the bottom border is
+      -- at y = 112 and the last line has to END above it -- the footer sat
+      -- at 104 and came out sliced in half.
+      Font.drawBox(0, 3, 20, 11)
+      g.setColor(0, 0, 0, 1)
+      Font.draw(("%s IS FIGHTING"):format(watched.name or "?"), 8, 32)
+      g.setColor(1, 1, 1, 1)
+      row(bvw.foe, 46)
+      row(bvw.me, 72)
+      local footer = bvw.msg or (bvw.who and ("VS %s"):format(bvw.who))
+      if footer then
+        g.setColor(0, 0, 0, 1)
+        Font.draw(footer, 8, 98)
+        g.setColor(1, 1, 1, 1)
+      end
+    end
+
     -- ------- what everyone else is doing, over their heads (POK-113)
     --
     -- The cart's own emotion bubbles, not a drawn-on plate: the sheet the
@@ -4375,7 +4517,7 @@ return function(mod)
         -- handle in that window -- which put a bubble over bare ground
         -- where somebody used to be standing.
         if p.busy and p.status ~= "out" and h and p.map == h.mapId
-           and BR.ghosts:isSpawned(id) then
+           and id ~= panelFor and BR.ghosts:isSpawned(id) then
           local npc = BR.ghosts:npcOf(id)
           -- the ghost's px/py is where this screen has DRAWN them, which is
           -- the cell tryEngage reads too (POK-96); marking the wire
@@ -4671,6 +4813,24 @@ return function(mod)
     return out
   end
   mod.exports.watching = function() return BR.watching end
+  -- The fight we are being shown, and who is being shown ours (POK-105).
+  -- A driver needs both ends: the sender cannot prove it pushed to anybody
+  -- and the receiver cannot prove the frame was about the right trainer.
+  mod.exports.watchedBattle = function()
+    local v = BR.watchedBattle
+    if not v then return nil end
+    return { id = v.id, who = v.who, msg = v.msg,
+             me = v.me and { sp = v.me.sp, lv = v.me.lv,
+                             hp = v.me.hp, mhp = v.me.mhp, st = v.me.st },
+             foe = v.foe and { sp = v.foe.sp, lv = v.foe.lv,
+                               hp = v.foe.hp, mhp = v.foe.mhp, st = v.foe.st } }
+  end
+  mod.exports.watchers = function()
+    local out = {}
+    for id in pairs(BR.watchers or {}) do out[#out + 1] = id end
+    table.sort(out)
+    return out
+  end
   mod.exports.watchedMap = function()
     local p = BR.watching and BR.players[BR.watching]
     return p and p.map

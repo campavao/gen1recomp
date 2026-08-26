@@ -127,6 +127,32 @@ everyone. It is the difference between walking up to somebody who is about
 to walk into you and walking up to somebody three menus deep in their PACK
 -- and a `!` means they cannot answer you at all until their fight ends.
 
+**And spectating follows them into a fight (POK-105).** When the trainer
+you are watching is in a battle, a panel over the map shows both actives,
+their levels, their HP as bars and numbers, and who they are up against —
+and it moves as the fight does. Before this, a spectator sat on an empty
+map for the length of somebody else's battle.
+
+It is a summary the watched client pushes, not the battle protocol. There
+is no battle protocol to listen to for most fights: a bot, a wild encounter
+and one of Kanto's own trainers resolve entirely on one client from the
+match seed, and only a duel has a wire at all — a two-party lockstep a
+third party could never replay without drifting. So the view is derived
+from what the watched client can see of its own fight, which is the one
+thing every kind of battle has in common. A frame is about 180 bytes
+against the ~780 the party peek next door already spends every three
+seconds, and it is only sent when something visible changes.
+
+The subscription is the peek heartbeat: a spectator already asks every few
+seconds, so that ask *is* the "I am watching you", and a watcher who
+wanders off simply stops asking and ages out.
+
+The one thing it does not carry yet is the battle's text. That lives behind
+`BattleState:say`, and reading it from a mod would mean patching an engine
+class — which is what POK-29 deleted the shim to stop doing. The wire field
+is already defined and clamped, so a `battle.message` seam can fill it
+later without a protocol change; until then the HP bars carry the turn.
+
 **Once you are out, you watch — as a camera, not a body.** Your own
 trainer disappears (other players stopped seeing you when you fell; now
 you do too), and the view is glued to whoever you are watching, walking
