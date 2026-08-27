@@ -21,6 +21,8 @@ __pycache__/
 # Claude Code project config: agents, skills, CLAUDE.md. The .* rule above
 # would otherwise hide the whole directory.
 !.claude/
+# modkit reads this to know which files a package does not carry.
+!mods/*/.modkitignore
 .claude/settings.local.json
 .claude/worktrees/
 .claude/agent-memory/
