@@ -51,6 +51,17 @@ write, so carry the findings forward yourself:
 When you learn something mid-run that changes the search, `SendMessage` the running
 agent rather than letting it finish on a stale premise.
 
+## Model tiers
+
+The agents carry their own. `verify` and `play` are pinned to `sonnet` — they drive a
+driver and read what came back, which is not frontier work. `explore`, `plan`, `build`
+and `quality` inherit, because finding a root cause, writing a spec, implementing it and
+reviewing it are the steps where a weaker model costs more than it saves.
+
+Anything you spawn outside those six — a log grep, a file sweep — takes `model: "haiku"`
+and `effort: "low"`. Do not pass a model override to the six; their definitions already
+say what they need.
+
 ## Concurrency
 
 Check `git status` before step 4. If another session has uncommitted changes in files

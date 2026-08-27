@@ -15,6 +15,13 @@ scanning a big diff — cases where the tokens land in the agent's context inste
 this one. That is the whole test. If you can answer it with a handful of tool calls,
 answer it.
 
+**And size the model to the job.** That kind of work is extraction, not reasoning, so
+pass `model: "haiku"` — grepping a log for the failing line does not want a frontier
+model, and paying for one is pure waste. Reach for `sonnet` when the agent has to judge
+something (is this the same bug, does this diff do what it claims); leave the model
+unset only when it genuinely needs the reasoning this session has. `effort: "low"`
+belongs on the mechanical ones too.
+
 The full explore → plan → build → verify → quality pipeline still exists, in the `do`
 skill. It runs when the user asks for it by name (`/do <ticket>`), not by default.
 
