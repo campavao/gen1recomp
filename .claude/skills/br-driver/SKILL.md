@@ -14,6 +14,11 @@ until the window closes.
 
 ## Launch
 
+**Never let a driver's window steal the user's focus.** They are working while you run,
+and a window that jumps in front costs them their place. `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1`
+is not optional — keep it on every driver launch:
+
+    SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 \
     POKEPORT_GAME=red \
     POKEPORT_IMPORT_ROM="C:/Users/cam95/Documents/roms/pokemon-red-us.gb" \
     POKEPORT_IDENTITY=br-<name> POKEPORT_SPEED=3 \
@@ -23,6 +28,15 @@ until the window closes.
 From the repo root. A fresh identity imports the ROM on first run (~1 min); budget
 2–3 min per scenario after that.
 
+The window still opens and still renders, so screenshots and `U.shot` work normally —
+it just does not take focus. The hint is SDL's own (`SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN`,
+verified present in both the installed LOVE 11.5 SDL 2.28.5 and the packed build's), so it
+costs nothing where it is unsupported. Do **not** reach for `love.window.minimize()` instead:
+a minimized window may stop rendering, which silently breaks every screenshot assertion.
+
+The one launch that SHOULD take focus is handing the game to the user to play — they are
+asking for it then. Leave the hint off for that, and only that.
+
 To hand the game to the user instead, drop the driver and identity — the default
 `pokemon-love2d` identity already has `red/` imported and holds their career and
 skins. Tell them the log arrives when they close the window, and that `lovec`'s own
@@ -30,8 +44,9 @@ console shows it live.
 
 ## Driver contract
 
-`return function(game)`, stepped as a coroutine. Helpers in `tests/drivers/util.lua`:
-`U.wait/tap/hold/shot/log/teleport`. Reach the mod at
+`return function(game)`, stepped as a coroutine. Helpers come from the engine's own
+`tests/drivers/util.lua` at the REPO ROOT — not under `mods/battle_royale/` — required as
+`require("tests.drivers.util")`: `U.wait/tap/hold/shot/log/teleport`. Reach the mod at
 `game.mods.exports.battle_royale` — `setSafari`, `setFog`, `setBots`, `hostSolo`,
 `start`, `phase`, `status`, `safariLeft`, `buzz`, `ring`, `aliveCount`,
 `debugPhase`, `debugWin`, `debugSpill`, `spillState`. End with `love.event.quit(code)`.
@@ -83,7 +98,13 @@ covered frame fails loudly.
 
 ## Two-client PvP
 
+    SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 \
     python mods/battle_royale/tests/drivers/pvp/run_pvp.py [duel|stall|freeze] [workdir]
+
+This one opens TWO windows, so the hint matters more here, not less. `run_pvp.py` builds
+each child's environment with `env = dict(os.environ)` and never overrides `SDL_*`, so
+setting it on the parent shell reaches both clients — there is nothing to change in the
+harness itself.
 
 Boots `relay/server.js` on `127.0.0.1:7790`, launches two LOVE instances that
 coordinate through handshake files in `BR_PVP_DIR`, and watches both logs: any
