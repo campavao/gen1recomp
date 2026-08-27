@@ -89,7 +89,11 @@ Linear (POK-nn).
   asked at the moment a battle opens rather than the moment it was queued,
   so a walk-up armed during the match cannot open a fight in a finished
   world, and the 1X clamp holds through `"over"` so the Hall of Fame is
-  never fast-forwarded.
+  never fast-forwarded. Wild rolls ask a different predicate,
+  `canRollWild()`, which also says yes in `"safari"`: the zone's rule is
+  "no trainer fights", not "no wild encounters", and the engine only calls
+  `encounter.species` on a non-nil `encounter.roll`, so refusing there
+  switches the Safari opening off rather than deferring it.
 - POK-155 — the scripted route. `script.command` is wrapped so a gym
   leader, rival, Snorlax, bird or Mewtwo script cannot push its own
   `BattleState` past `encounter.roll` and `trainer.before_battle`. The wrap

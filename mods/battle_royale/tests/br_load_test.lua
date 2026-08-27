@@ -372,11 +372,14 @@ do
   -- Nobody fights in the Safari (POK-21) and "drop" is the buzzer's own
   -- frame -- there are no route trainers in the zone to notice -- but it is
   -- a real behaviour change and a decision, so it is asserted rather than
-  -- left to be rediscovered.
+  -- left to be rediscovered.  (The GRASS is the other way round in the
+  -- Safari -- see T3 -- which is why the two hooks ask different
+  -- predicates.)
   T.eq(trainerCancelled("safari"), "cancel", "and nobody fights in the Safari")
   T.eq(trainerCancelled("drop"), "cancel", "nor in the buzzer's own frame")
 
-  -- ------- T3: and nothing walks out of the grass either.
+  -- ------- T3: and nothing walks out of the grass either -- except in the
+  -- zone, where walking out of the grass is the entire game.
   local function rolled(phase)
     setPhase(phase)
     return Runtime.call("encounter.roll", function() return "rolled" end, {}, {})
@@ -384,11 +387,74 @@ do
   T.eq(rolled("match"), "rolled", "in a match the grass still rolls")
   T.check(rolled("over") == nil, "once it is over it does not")
   T.eq(rolled("off"), "rolled", "and out of a session the roll is untouched")
-  -- ...and the same side effect here.  The Safari's own wild rolls come
-  -- through encounter.species, a separate hook this does not touch, so the
-  -- zone still works exactly as POK-21 built it.
-  T.check(rolled("safari") == nil, "the Safari's grass does not roll this way")
-  T.check(rolled("drop") == nil, "and neither does the drop's")
+  -- The Safari is NOT the same side effect as T2's.  This assertion used to
+  -- read the other way, justified by "the zone's wild rolls come through
+  -- encounter.species, a separate hook" -- which is not how the engine
+  -- chains them: encounter.species is only called on a NON-NIL roll
+  -- (src/world/OverworldController.lua:3867-3871).  A nil here is the
+  -- zone's grass switched off, so every player walked it for two minutes,
+  -- caught nothing, and was eliminated at the buzzer for catching nothing.
+  -- 212 assertions passed with the Safari opening dead.
+  T.eq(rolled("safari"), "rolled", "the Safari's grass is the point of the Safari")
+  T.check(rolled("drop") == nil, "the drop's does not -- it is the buzzer's frame")
+
+  -- ------- T3b: the two hooks AS THE ENGINE CHAINS THEM, which is the
+  -- coverage T3 on its own did not have.  rollEncounter calls
+  -- encounter.roll, and only if that is non-nil does it pass the result
+  -- through encounter.species -- so a test that drives each hook alone can
+  -- watch the second one work on a roll the first would never have handed
+  -- it.  This drives the pair the way the overworld does.
+  local function chained(phase)
+    setPhase(phase)
+    local enc = Runtime.call("encounter.roll",
+                             function() return { species = "RATTATA", level = 3 } end,
+                             {}, {})
+    if not enc then return nil end
+    return Runtime.call("encounter.species", function(e) return e end, enc, {})
+  end
+  T.check(type(exports.debugSafariPool) == "function",
+          "exports debugSafariPool (this match's zone, as a fixture)")
+  local pool = exports.debugSafariPool(20260827)
+  T.eq(#pool, require("mods.battle_royale.lib.safari").POOL_SIZE,
+       "the fixture stands a full zone")
+  local inPool = {}
+  for _, sp in ipairs(pool) do inPool[sp] = true end
+
+  local caught = chained("safari")
+  T.check(caught ~= nil,
+          "a step in the zone's grass produces an encounter at all")
+  T.check(caught and inPool[caught.species],
+          "...drafted from THIS match's zone (got "
+          .. tostring(caught and caught.species) .. ")")
+  T.eq(caught and caught.level, exports.level(),
+       "...at the rung, not the zone's vanilla levels")
+  -- and the same chain in a match: the roll survives, the level is
+  -- rewritten, and the pool does NOT apply -- outside the zone the species
+  -- is whatever the route rolled.
+  local wild = chained("match")
+  T.check(wild ~= nil, "a route's grass rolls in a match")
+  T.eq(wild and wild.species, "RATTATA",
+       "...and keeps the route's own species -- the pool is the zone's alone")
+  T.eq(wild and wild.level, exports.level(), "...also at the rung")
+  T.check(chained("over") == nil,
+          "and at \"over\" the chain never reaches encounter.species at all")
+  exports.debugSafariPool(nil)
+
+  -- T3c: the other two terms of canRollWild, which the phase table above
+  -- cannot see.  A spectator and a player already in a PvP battle are
+  -- refused in the ZONE too -- widening the roll to "safari" widened the
+  -- phase and nothing else.
+  setPhase("safari")
+  setStatus("out")
+  T.check(Runtime.call("encounter.roll", function() return "rolled" end, {}, {}) == nil,
+          "a spectator's grass is quiet even in the zone")
+  setStatus("alive")
+  T.check(exports.debugPvp(true), "the fixture stands a PvP battle in the zone")
+  T.check(Runtime.call("encounter.roll", function() return "rolled" end, {}, {}) == nil,
+          "...and a fight already in hand refuses a wild one on top of it")
+  exports.debugPvp(false)
+  T.eq(rolled("safari"), "rolled", "cleared again: the zone rolls")
+  setStatus("alive")
 
   -- ------- T4: canOpenBattle's truth table.  Cheap, and it is the
   -- predicate every guard above leans on.

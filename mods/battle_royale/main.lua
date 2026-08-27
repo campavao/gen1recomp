@@ -2470,6 +2470,27 @@ return function(mod)
     return self.phase == "match" and self.status == "alive" and not self.battle
   end
 
+  -- May a WILD encounter roll right now?  Narrower than inRound() and
+  -- WIDER than canOpenBattle(), by exactly one phase: the Safari's rule is
+  -- "no trainer fights", not "no wild encounters" -- catching is the whole
+  -- point of the phase, and a party caught there is what you drop with.
+  -- Everything else answers the same as canOpenBattle: "drop" is the
+  -- buzzer's own frame, "over" is a finished world, and a spectator or a
+  -- player already in a battle is in neither of them.
+  --
+  -- Scoping the grass to canOpenBattle() instead killed the Safari
+  -- outright, and the reason it is not merely cosmetic is the ENGINE's
+  -- chain: encounter.species is only called on a NON-NIL roll
+  -- (src/world/OverworldController.lua:3867-3871, and the same shape in
+  -- src/world/gen2/World.lua:3956-3959).  A nil here is not "the zone
+  -- rolls through the other hook", it is no zone at all -- two minutes of
+  -- empty grass and then tickDrop eliminating the whole room for catching
+  -- nothing.
+  function BR:canRollWild()
+    return (self.phase == "safari" or self.phase == "match")
+       and self.status == "alive" and not self.battle
+  end
+
   -- Has the ring started closing?  Distinct from mod.exports.inFog, which
   -- asks whether THIS player is standing in it: this is the match-wide
   -- clock, true for everyone from the first shrink onwards however safe the
@@ -4251,19 +4272,27 @@ return function(mod)
   -- ...and nothing new opens once the match is over (POK-145).  Both hooks
   -- ask inSession() first, so out of a session they stay invisible: a real
   -- playthrough is untouched by the mod being installed.  Inside one they
-  -- also refuse during "safari" and "drop", deliberately -- nobody fights
-  -- in the Safari (POK-21), "drop" is the buzzer's own frame, and the wild
-  -- rolls in the zone come through encounter.species, which is a separate
-  -- hook and unaffected.
+  -- ask DIFFERENT questions, and the difference is one phase: the Safari.
+  -- Its rule is "no trainer fights" (POK-21), not "no wild encounters" --
+  -- the two minutes in the zone are where the party comes from -- so the
+  -- grass asks canRollWild() and a trainer asks canOpenBattle().  Both
+  -- still refuse at "drop", the buzzer's own frame, and at "over".
   mod.hooks:wrap("encounter.roll", function(next, encDef, ctx)
     if BR.status == "out" then return nil end
-    if BR:inSession() and not BR:canOpenBattle() then return nil end
+    -- NOT canOpenBattle(): the engine calls encounter.species only on a
+    -- non-nil roll (src/world/OverworldController.lua:3867-3871), so a nil
+    -- returned here does not hand the zone over to that hook -- it is the
+    -- zone's grass switched off, and with it the whole Safari opening.
+    if BR:inSession() and not BR:canRollWild() then return nil end
     return next(encDef, ctx)
   end)
 
   mod.hooks:wrap("trainer.before_battle", function(next, game, context, continue)
     -- Kanto's own trainers are in the match (POK-14) -- but only while
-    -- there IS one.
+    -- there IS one.  canOpenBattle() here rather than canRollWild(): the
+    -- Safari refuses trainers even though it welcomes wild rolls.  There
+    -- are no route trainers in the zone to notice, so this is a decision
+    -- about what the phase MEANS rather than an observable change.
     if BR.status == "out" or (BR:inSession() and not BR:canOpenBattle()) then
       continue({ cancel = true })
       return true
@@ -6078,6 +6107,21 @@ return function(mod)
     BR.battle = on and { opponentId = "fixture",
                          channel = { peerGone = function() end } } or nil
     return BR.battle ~= nil
+  end
+
+  -- ...and this match's zone.  The pool itself is pure -- Safari.pool(seed,
+  -- nil) needs no ROM and br_test already checks the rotation that way --
+  -- but the only route that puts one ON BR is onStart, which needs a spawn
+  -- of ours and a live game to start.  Without this seam the Safari's grass
+  -- can only be tested one hook at a time, and the two hooks in isolation
+  -- are exactly what hid the roll being switched off in the zone: the
+  -- engine chains encounter.roll into encounter.species, so a test has to
+  -- as well.  A fixture, like the four above: no broadcast, no clock, no
+  -- phase change.  nil clears it, the way leaving a match does.
+  mod.exports.debugSafariPool = function(seed)
+    if seed == nil then BR.safariPool = nil return nil end
+    BR.safariPool = Safari.pool(seed, BR.game and BR.game.data)
+    return BR.safariPool
   end
 
   -- The last fixture of the same family (POK-155).  The scripted-battle wrap
