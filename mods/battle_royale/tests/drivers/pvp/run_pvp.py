@@ -32,6 +32,9 @@ SCENARIOS = {
     "duel": ("host_duel.lua", "guest_duel.lua"),
     "stall": ("host_stall.lua", "guest_stall.lua"),
     "freeze": ("host_freeze.lua", "guest_stall.lua"),
+    # two clients the handshake refuses to lockstep: forces
+    # engine_skew and photographs whatever the refusal produces
+    "skew": ("host_skew.lua", "guest_skew.lua"),
 }
 
 
