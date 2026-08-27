@@ -1,0 +1,55 @@
+name: battle royale
+
+# The mod's own suites, kept in a separate file from ci.yml on purpose:
+# ci.yml belongs to upstream, is already red on a stock checkout, and its
+# triggers (dev, main) never match this branch. Keeping them apart also means
+# a rebase onto origin/dev cannot conflict here, and this file is easy to
+# leave out of any cherry-pick onto an RFC branch.
+#
+# No ROM: the mod suites run against the committed fixture data, like the
+# T4 tier upstream.
+on:
+  push:
+    branches: [battle-royale]
+    paths:
+      - 'mods/battle_royale/**'
+      - '.github/workflows/br.yml'
+  pull_request:
+    branches: [battle-royale]
+  workflow_dispatch:
+
+concurrency:
+  group: br-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  mod:
+    name: mod suites
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: install luajit
+        run: sudo apt-get update && sudo apt-get install -y luajit
+      - name: br_test
+        run: luajit mods/battle_royale/tests/br_test.lua
+      - name: br_load_test
+        run: luajit mods/battle_royale/tests/br_load_test.lua
+      - name: seams_test
+        run: luajit mods/battle_royale/tests/seams_test.lua
+      - name: mod SDK
+        run: luajit tests/run_modkit.lua
+
+  relay:
+    name: relay
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: node --test
+        run: node --test
+        working-directory: mods/battle_royale/relay

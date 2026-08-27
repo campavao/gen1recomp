@@ -18,6 +18,12 @@ __pycache__/
 !.github/
 !.gitignore
 !.luacheckrc
+# Claude Code project config: agents, skills, CLAUDE.md. The .* rule above
+# would otherwise hide the whole directory.
+!.claude/
+.claude/settings.local.json
+.claude/worktrees/
+.claude/*.lock
 
 # Android build outputs / local SDK path / packaged payload (keep love-android sources)
 mobile/android/app/build/
