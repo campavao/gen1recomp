@@ -69,6 +69,11 @@ Three clean runs is the check.
 against a stash before calling anything a regression. Never pipe a suite through
 `Select-Object` — it short-circuits and `$LASTEXITCODE` goes meaningless.
 
+**Green CI is not a full `br_test`.** CI has no ROM, so `data/generated/` is absent
+and the real-Kanto sweep, spawn, and lockstep-flee sections skip — 1633 assertions
+there against 1790 locally. Those three cover map and spawn behaviour. Run the suite
+locally before trusting a gameplay change.
+
 **The engine log only appears when the process exits.** `Logger.lua` is `print` with
 no file sink and stdout is block-buffered. There is no live tail. Drivers exit on
 their own and capture fine; an interactive `lovec` session does not until the window
