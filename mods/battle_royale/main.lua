@@ -52,6 +52,7 @@ local Lockstep = require("mods.battle_royale.lib.lockstep")
 local Stats = require("mods.battle_royale.lib.stats")
 local Door = require("mods.battle_royale.lib.door")
 local Log = require("mods.battle_royale.lib.log")
+local Despawn = require("mods.battle_royale.lib.despawn")
 
 local SCREEN = "BattleRoyaleMenu"
 -- The relay the mod ships pointed at, so downloading it and pressing QUICK
@@ -284,6 +285,7 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    despawns = Despawn.new(),  -- beaten trainers, hidden on a quiet frame
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
     pendingFame = nil,    -- a parade that belongs to somebody else (POK-107)
@@ -968,6 +970,7 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
+    self.despawns:clear()
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
     self.walkUp = nil
@@ -1798,7 +1801,7 @@ return function(mod)
 
     elseif msg.t == "npcout" then
       -- somebody beat one of Kanto's own; the sprite goes away here too
-      pcall(function() mod.world:toggleObject(msg.map, msg.obj, false) end)
+      pcall(function() BR.despawns:hide(BR.game, msg.map, msg.obj) end)
       -- a fallen gym leader is news to the whole lobby (POK-26) -- whether
       -- a rival took the prize or the fog burned it
       local fallen = Gyms.leaderOfObject(
@@ -3076,7 +3079,7 @@ return function(mod)
       for _, obj in ipairs((data.maps[mapId] and data.maps[mapId].objects) or {}) do
         if obj.trainerClass and obj.name then
           took = took + 1
-          pcall(function() mod.world:toggleObject(mapId, obj.name, false) end)
+          pcall(function() BR.despawns:hide(BR.game, mapId, obj.name) end)
           if self.relay then self.relay:broadcast(Wire.npcout(mapId, obj.name)) end
         end
       end
@@ -4539,7 +4542,7 @@ return function(mod)
     -- the toggle store is the engine's own "this object is gone" switch; a
     -- reload mid-fade can refuse, and then the sprite lingers until the map
     -- is next entered, which is the acceptable failure
-    pcall(function() mod.world:toggleObject(npc.map, npc.obj, false) end)
+    pcall(function() BR.despawns:hide(BR.game, npc.map, npc.obj) end)
     if self.relay then
       self.relay:broadcast(Wire.npcout(npc.map, npc.obj))
       if spill then self.relay:broadcast(Wire.spill(spill.map, spill.mons)) end
@@ -4949,6 +4952,9 @@ return function(mod)
     -- below until the player has read it.  Move this call under that block
     -- and the banner is silently dropped on the frame the match ends.
     if BR.phase ~= "off" then BR:tickSays() end
+    if BR.phase ~= "off" then
+      BR.despawns:drain(BR.game, mod.world:overworld(), BR:screenIsQuiet())
+    end
     -- the Champion's parade starts once the screen is quiet (POK-47)
     if BR.pendingParade and BR.phase == "over" then
       local nowP = clock()
