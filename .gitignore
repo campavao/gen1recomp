@@ -23,6 +23,7 @@ __pycache__/
 !.claude/
 .claude/settings.local.json
 .claude/worktrees/
+.claude/agent-memory/
 .claude/*.lock
 
 # Android build outputs / local SDK path / packaged payload (keep love-android sources)

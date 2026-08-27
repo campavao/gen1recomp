@@ -37,9 +37,9 @@ changed.
    `"github": "campavao/kanto-battle-royale"` — the launcher's *Check for updates*
    walks installed mods and skips any without that field. Eleven releases shipped
    un-offerable because it was missing.
-2. Zip from the mod-repo clone: `LICENSE, README.md, main.lua, manifest.json, lib/,
-   tests/, relay/, assets/, COMPATIBILITY.md`. No `site/`, `tools/`, `.git*`. Top
-   folder inside the zip must be `battle_royale/`.
+2. **Never hand-roll the zip.** From the mod-repo clone: `python tools/pack.py`
+   (`--check` to verify without writing). It is an allowlist, so a new repo-only
+   directory has to be added deliberately rather than shipping by accident.
 3. `gh release create vX.Y.Z --repo campavao/kanto-battle-royale --target main
    --title "vX.Y.Z — <clause>" --notes-file notes.md <zip>`
 4. In the clone: `node tools/build-index.mjs` (needs `gh` on PATH; it refuses a
@@ -54,6 +54,30 @@ A **relay** deploy still kills every live match; run
 
 A **PROTOCOL bump** splits the player base — 0.35.0 cannot share a room with 0.34.x.
 That is the thing worth timing against live players, not the deploy.
+
+## Two rules the zip has to hold
+
+Both were learned by failing the mod index's submission checklist, and
+`tools/pack.py` enforces both — this section is why, not what to type.
+
+**Files sit at the archive root, not under `battle_royale/`.** The engine takes
+either: `LauncherMods.locateRoot` returns `""` for a root manifest and `"<dir>"`
+for a single wrapping folder, and the install path is `mods/<manifest.id>` either
+way (`LauncherMods.lua:1022`), so flattening cannot change where a mod lands. The
+index's PR checklist asks for root, so root is what ships.
+
+**`tests/` does not ship.** Nothing at runtime references it, it was 39% of the
+download, and `modkit.py validate --strict` / `lint` fail MK301 on any
+distributed file containing the literal `data/generated/` — which `br_test.lua`
+does, in `pcall`'d `dofile` calls that skip when the cache is absent. No ROM
+content is ever involved; the gate is a string match, and the file simply has no
+business in a player's download. `pack.py` re-checks the same strings so a
+release cannot reintroduce it.
+
+Before submitting to the index, both of these must pass in the engine repo:
+
+    python tools/modkit.py validate battle_royale --strict
+    python tools/modkit.py lint battle_royale
 
 ## Release notes
 
