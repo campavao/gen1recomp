@@ -4,6 +4,7 @@ description: Plays Kanto BR through a driver and reports what the match actually
 tools: Read, Write, Grep, Glob, Bash, Skill
 skills:
   - br-driver
+model: sonnet
 memory: project
 color: pink
 ---
@@ -16,6 +17,12 @@ Play a match and say what it was like. Two jobs, depending on who called you:
 
 You cannot play with hands. Everything goes through a driver — see the `br-driver`
 skill. `playtest_match.lua` is the usual starting point for a full round.
+
+Play the match a player actually gets: from the lobby, default settings, all the way
+through. Default means default — do not turn the Safari off or cut a phase short to
+reach the part you care about. Staging (`debugPhase`, `debugWin`, teleports) is for
+answering one narrow question for explore, never for scoring a build, and a phase you
+skipped is a phase you did not judge.
 
 ## What you are reading
 

@@ -2457,25 +2457,92 @@ do
     BR.ring = { phase = 3, center = { name = "CELADON CITY" } }
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "SPECTATING|LEVEL: 5|FOG: CELADON CITY|LEAVE MATCH", "spectating, with the fog")
-    -- The match is over: the host can run it back, a guest waits to be sent.
-    -- The champion is SENT here once the Hall of Fame closes (POK-82), so
-    -- the report reads as a result -- no live level, no ring that stopped
-    -- closing, no count of who is still standing.
+    -- The match is over, and this face is now only the moment between the
+    -- winner being named and endMatch taking the exit (POK-144) -- the
+    -- START menu is open at "over" (POK-84), so it is still reachable and
+    -- still reads as a result: no live level, no ring that stopped
+    -- closing, no count of who is still standing.  PLAY AGAIN is NOT here
+    -- any more; it is the lobby's own start row, below.
     BR.phase = "over"
     BR.relay = room(true)
     items = BRMenu.items({}, BR, {})
-    eq(labels(items), "MATCH OVER|PLAY AGAIN|LEAVE MATCH",
-       "over, as the host: PLAY AGAIN")
-    ok(not find(items, "PLAY AGAIN").keepOpen, "which closes the report (the world is about to go)")
+    eq(labels(items), "MATCH OVER|LEAVE MATCH",
+       "over, as the host: no run-it-back row on the match face")
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "MATCH OVER|LEAVE MATCH",
-       "over, as a guest: the host decides")
+       "over, as a guest: the same two rows")
     -- still standing when it ended means you are the one left standing
     BR.status = "alive"
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "YOU WIN!|LEAVE MATCH", "the champion is told so")
     BR.status = "out"
+
+    -- ------- T8: the finished match lands on the LOBBY face, carrying its
+    -- result (POK-144).  This is the screen every terminal route reaches
+    -- now, so it is the screen that has to say what happened -- there is no
+    -- overworld under it to queue a say onto.
+    BR.phase, BR.status, BR.relay = "lobby", "lobby", room(true)
+    BR.solo = true
+    BR.lastResult = { won = true, at = 0 }
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "lobby", "a finished match lands on the LOBBY face, not the match one")
+    ok(labels(items):find("YOU WIN!", 1, true), "and the lobby says so")
+    ok(labels(items):find("PLAY AGAIN", 1, true),
+       "the host's start row reads PLAY AGAIN")
+    ok(not labels(items):find("START MATCH", 1, true), "...and not both")
+    BR.lastResult = { won = false, name = "SAM", at = 0 }
+    items = BRMenu.items({}, BR, {})
+    ok(labels(items):find("MATCH OVER", 1, true), "a loss says so plainly")
+    ok(labels(items):find("SAM WON", 1, true),
+       "a loss names the trainer who did not lose")
+    BR.lastResult = nil
+    items = BRMenu.items({}, BR, {})
+    ok(labels(items):find("START MATCH", 1, true), "a fresh room is a fresh room")
+    ok(not labels(items):find("MATCH OVER", 1, true), "...with nothing to report")
+
+    -- ------- T9: and the first face too, when the room went with the
+    -- match.  A relay that closed means there is nothing to go back to, so
+    -- the screen offers the ways to start again -- with the result ON the
+    -- version row rather than above it.
+    --
+    -- That is not a stylistic choice.  This face is EXACTLY maxRows(2) long
+    -- (the assertion further up says so in as many words), so a row of its
+    -- own would push the build number off the bottom behind a scroll arrow
+    -- -- the regression POK-104 exists to prevent, on the one line a
+    -- refused player is asked to read out.  The suite asserted the
+    -- invariant and its violation in the same file for one round; it
+    -- asserts the invariant here too so that cannot happen twice.
+    BR.relay = nil
+    BR.solo = false
+    --
+    -- The version here is the WIDEST this mod can realistically stamp, not
+    -- a round "9.9.9": the folded row is "YOU LOST v" plus the version, so
+    -- the fixture is what decides whether the 17-character assertion below
+    -- means anything at all.  "0.36.10" makes it exactly 17 -- the last one
+    -- that fits.  One more character and fit() sizes the box to 21 tiles on
+    -- a 20-tile canvas and clips the build number off the right, which is
+    -- the whole reason the row exists.
+    local WIDEST = "0.36.10"
+    BR.lastResult = { won = false, name = "SAM", at = 0 }
+    items, view = BRMenu.items({ version = WIDEST }, BR, {})
+    eq(view, "menu", "no room left is the first face")
+    eq(labels(items),
+       "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|YOU LOST v0.36.10",
+       "the result rides ON the version row, and the winner's name is dropped")
+    ok(#items <= BRMenu.maxRows(2),
+       ("the first face still fits with a result on it (%d/%d)")
+       :format(#items, BRMenu.maxRows(2)))
+    BR.lastResult = { won = true, at = 0 }
+    items = BRMenu.items({ version = WIDEST }, BR, {})
+    ok(labels(items):find("YOU WIN! v0.36.10", 1, true),
+       "a win reads as a win on the same row")
+    eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17,
+         ("first-face row fits the box (%d): %s"):format(#it.label, it.label))
+    end
+    BR.lastResult = nil
   end
 end
 
@@ -3572,7 +3639,12 @@ do
   end
 
   -- ------- restore twice: every exit path runs through resetMatch and some
-  -- arrive twice, so this must not double-install
+  -- arrive twice, so this must not double-install.
+  --
+  -- That invariant used to be aspirational -- a bot winning, a match nobody
+  -- won and a champion whose parade could not run all reached no reset at
+  -- all.  It is true now: BR:endMatch is the single funnel, and both of its
+  -- branches (keep the room / teardown) call resetMatch (POK-144).
   do
     local handle, calls = fake()
     local token = Coexist.suspend(function() return handle end)

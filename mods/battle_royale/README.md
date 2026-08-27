@@ -250,10 +250,11 @@ HOST GAME or JOIN BY CODE turns it into the lobby in place — the code, the
 roster filling in, BOTS / FILL TO, OPEN, the countdown — and you leave it
 by starting the match or backing out. During a match the same row is the
 report: who's left, the Safari clock, the level, where the fog is. When a
-match ends the host's report gains **PLAY AGAIN**: the room goes back to
-the lobby with everyone in it — same code, roster kept, unlocked again for
-anyone else who wants in — and START MATCH rolls a fresh drop. Nobody
-exchanges a code twice.
+match ends every client leaves the finished world on its own and lands back
+on this screen — the result of the match at the top, the room still there
+with everyone in it, same code, roster kept, unlocked again for anyone else
+who wants in. The lobby's start row reads **PLAY AGAIN** instead of START
+MATCH, and rolls a fresh drop. Nobody exchanges a code twice.
 
 **How much play there has been, and how to say no.** The relay has always
 seen the multiplayer side — it hosts the rooms — but `SOLO VS BOTS` never
@@ -619,8 +620,8 @@ loopback sockets.
 ### The two-client PvP harness
 
 The PvP surface — the forced engage, the lockstep battle, the 30-second
-shot clock, the loser's spill, PLAY AGAIN — is regression-tested with two
-real clients fighting over a local relay:
+shot clock, the loser's spill, the return to the lobby — is
+regression-tested with two real clients fighting over a local relay:
 
 ```sh
 python mods/battle_royale/tests/drivers/pvp/run_pvp.py         # duel
@@ -633,7 +634,8 @@ through handshake files), and watches both logs: any `PVP FAIL` line fails
 the run, both `PVP OK` lines pass it. **duel** walks the guest into the
 host's eyeline in Pewter and plays the fight to a KO — asserting the
 lockstep battle opens on both clients, the loser's bag hits the ground on
-the winner's screen, and PLAY AGAIN returns both to the lobby. **stall**
+the winner's screen, and the finished match returns both to the lobby with
+nobody pressing anything. **stall**
 has the host go silent mid-battle; lockstep means the fight cannot resolve
 until they move, so the win must come from the shot clock forfeiting them.
 
@@ -653,8 +655,8 @@ POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_IDENTITY=br-fame \
 `fame_smoke.lua` hosts a solo match, declares the win (`debugWin` — a
 driver cannot play one down to a single survivor in the time it has), sits
 through the Hall of Fame, and asserts the champion ends up **off** the
-finished world with the room still standing, so PLAY AGAIN can run it
-back. `FAME OK` passes it; any `PVP FAIL` line fails it.
+finished world with the room still standing, so the lobby's PLAY AGAIN row
+can run it back. `FAME OK` passes it; any `PVP FAIL` line fails it.
 
 `bot_smoke.lua` is the other half of that: it posts on Pewter's street,
 drops a bot down the block with `debugPlaceBot`, and checks that the bot
@@ -664,8 +666,9 @@ before the fight, and carries its own name from the battle intro on.
 
 ### The playtest probes
 
-Three more solo drivers, one per half of the 2026-08-25 playtest batch.
-Same shape as the two above — one client, a `LocalRoom`, no relay server:
+Four more solo drivers — three from the 2026-08-25 playtest batch, one for
+the end of a match. Same shape as the two above — one client, a
+`LocalRoom`, no relay server:
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
@@ -693,6 +696,22 @@ to the all-fog endgame, so it is deliberately last. `MATCH OK` passes it.
 exiled to opposite corners of Kanto and the fog turned off long enough
 that it cannot be what herds them. It watches them cross seams and logs
 each move with the distance it closed. `HUNT OK` passes it.
+
+`playtest_over.lua` is the end of the match, which nothing headless can
+watch. `BR_OVER_CASE` picks the leg. `you` / `bot` / `nobody` / `botwin`
+are the four terminal routes, taken with **no input at all** after the win,
+to prove each funnels through `armEnding` → `endMatch` onto the lobby
+screen with the result on it; `speed` proves the Hall of Fame is not
+fast-forwarded (it must run *without* `POKEPORT_SPEED`); `inbattle` wins
+while a bot fight is still on screen; `walkup` arms a walk-up before the
+win so it arrives after it. The review round added `twice` and `twicebot`
+(a second match started while the first client's ending is still live),
+`card` and `wedge` (the MATCH RECORD card is never yanked, but a parade
+with no Fame under it still lands), `overscript` and `overscript_ctl` (a
+Kanto scripted battle refused at `"over"`, against a control with the wrap
+off), `normal` (an ordinary Red session, untouched) and `noauto` (nothing
+starts itself after a win). `OVER OK` passes it; any `PVP FAIL` line fails
+it.
 
 ### Reading the logs
 
