@@ -322,6 +322,17 @@ pushes the lobby screen on top, so the roster and START MATCH are right
 there. An open room re-arms its quick-play countdown. The next START MATCH
 rolls a new seed and spawns like the first.
 
+**Re-based 2026-08-27 (POK-144):** there is no PLAY AGAIN row and no
+`BR:playAgain()` any more. Every client arms an ending the moment the match
+ends and takes it itself (`BR:armEnding` -> the tick -> `BR:endMatch`), so
+the room is back in the lobby without anyone pressing anything -- and the
+lobby's own start row reads PLAY AGAIN when there is a result to run back
+from. `endMatch` does the host's half (broadcast `again`, unlock the room)
+and does NOT re-arm the quick-play countdown: a countdown nobody armed
+would drop a host who won, read the result and walked away into a fresh
+match thirty seconds later. The `again` message is still on the wire, as
+the recovery for a client that never saw `winner`.
+
 Today the room locks at start and the only way to a second match is everyone
 leaving and the host re-hosting.
 

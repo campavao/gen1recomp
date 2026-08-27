@@ -236,7 +236,12 @@ function Wire.fame(party, stats)
   end
   return { t = "fame", party = rows, stats = stats }
 end
--- PLAY AGAIN (POK-20): host only, back to the lobby with the roster kept
+-- Back to the lobby with the roster kept (POK-20, re-based by POK-144).
+-- Host only, and no longer a button anybody presses: endMatch broadcasts it
+-- as part of every ending that keeps the room.  A client already at "over"
+-- takes it as "the exit is due" and lets its own ending finish first; a
+-- client still standing in a match it never saw end takes it as the exit
+-- itself, which is the recovery this message has always been.
 function Wire.again() return { t = "again" } end
 
 -- What this trainer is doing (POK-113).  Edge-triggered: sent when the
