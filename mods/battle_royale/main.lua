@@ -989,6 +989,7 @@ return function(mod)
     self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
+    self.botFightPos = nil
     self.botParty = nil
     self.npcFight = nil
     self.ring = nil
@@ -2324,8 +2325,13 @@ return function(mod)
     -- TIER half is per bot (POK-121), so the multiply happens inside.
     local alive = self:aliveCount()
     for id, p in pairs(self.players) do
-      -- a bot on its way over is not also strolling somewhere (POK-85)
-      if p.bot and p.status == "alive" and p.map and id ~= striding then
+      -- a bot on its way over is not also strolling somewhere (POK-85),
+      -- and the one we are FIGHTING stands its ground (POK-154): walkUp is
+      -- cleared the moment the battle opens, so without this the opponent
+      -- resumed roaming behind the battle screen and its loot spilled
+      -- wherever it had wandered to by the end
+      if p.bot and p.status == "alive" and p.map and id ~= striding
+         and id ~= self.botFight then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
@@ -2397,15 +2403,16 @@ return function(mod)
     return field and field.townMap and field.townMap.locations
   end
 
-  -- the named places worth closing the ring on
-  local function townList()
+  -- the named places worth closing the ring on; `all` widens it from the
+  -- fly towns to every outdoor map the Town Map can place (the routes)
+  local function townList(all)
     local locations = townLocations()
     local maps = BR.game and BR.game.data and BR.game.data.maps
     if not (locations and maps) then return {} end
     local Map = require("src.world.Map")
     local out = {}
     for id, def in pairs(maps) do
-      if Map.isOutdoor(def) and Map.isFlyTown(def) and locations[id] then
+      if Map.isOutdoor(def) and (all or Map.isFlyTown(def)) and locations[id] then
         out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
                           name = locations[id].name or id }
       end
@@ -2605,12 +2612,31 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
-  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- Where a BOT can be dealt at the buzzer: the fly towns AND the routes
+  -- (POK-147).  The player's picker stays towns-only -- a town is a place
+  -- you can name -- but a thirty-bot deal over eleven towns wraps into
+  -- guaranteed pairs standing in each other's sight-line at t=0, and the
+  -- roster was resolving itself before anybody met anybody.  Kanto has 34
+  -- placeable outdoor maps, so at Bots.MAX every bot starts a map of its
+  -- own and the early fights go back to being found, not dealt.
+  function BR:botDropSpots()
+    local spots = townList(true)
+    local maps = (self.game and self.game.data and self.game.data.maps) or {}
+    table.sort(spots, function(a, b)
+      local ia = maps[a.id] and maps[a.id].index or 0
+      local ib = maps[b.id] and maps[b.id].index or 0
+      if ia ~= ib then return ia < ib end
+      return a.id < b.id
+    end)
+    return spots
+  end
+
+  -- host only: at the buzzer the bots are DEALT drop maps -- the deck, not
+  -- the dice (POK-43), so no two share one while maps remain and the drop
   -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
-    local towns = self:dropTowns()
+    local towns = self:botDropSpots()
     if #towns == 0 then return end
     local now = clock() or 0
     local ids = {}
@@ -4101,7 +4127,8 @@ return function(mod)
     if not now then return end
     local live = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map
+      -- the bot in OUR battle screen is not free to be jumped (POK-154)
+      if p.bot and p.status == "alive" and p.map and id ~= self.botFight
          and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
         live[#live + 1] = { id = id, p = p }
       end
@@ -4192,6 +4219,11 @@ return function(mod)
     self.status = "battle"
     self.botFight = botId
     self.botFightAt = clock()
+    -- Where the fight is happening, kept for the spill (POK-154).  On the
+    -- host the roam exclusion above freezes the bot anyway, but a non-host
+    -- client keeps receiving the host's steps for it, so by battle.ended
+    -- bot.map/x/y can be a seam away from where anybody fought.
+    self.botFightPos = { map = bot.map, x = bot.x, y = bot.y }
     self.pending = nil
     broadcastPlace()
 
@@ -4209,6 +4241,7 @@ return function(mod)
       mod.log:warn("couldn't start a bot battle: %s", tostring(battle))
       self.status = "alive"
       self.botFight = nil
+      self.botFightPos = nil
       return
     end
     -- Overlay the bot's own name on the class chassis, the engine's own
@@ -4660,19 +4693,27 @@ return function(mod)
     end
     local botId = BR.botFight
     if not botId then return end
-    BR.botFight = nil
+    local fightPos = BR.botFightPos
+    BR.botFight, BR.botFightPos = nil, nil
     if BR.status == "battle" then BR.status = "alive" end
     if ev.result == "win" then
       local bot = BR.players[botId]
-      if bot then
-        bot.status = "out"
-        BR.ghosts:despawn(botId)
-        BR:spillBot(botId, bot)
+      -- `alive` guards the race where the host already put this bot out
+      -- while our battle screen was up -- eliminating it twice would spill
+      -- its loot twice
+      if bot and bot.status == "alive" then
+        -- the loot lands where the fight happened, beside the winner, not
+        -- wherever the tracked position drifted to mid-battle (POK-154)
+        if fightPos then
+          bot.map, bot.x, bot.y = fightPos.map, fightPos.x, fightPos.y
+        end
+        -- eliminateBot, not an inline copy of it: the copy had drifted to
+        -- omit the OUT log line, so the one elimination the player caused
+        -- was the one the log never showed
+        BR:eliminateBot(botId, bot, BR:playerName())
       end
-      if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
       if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
-      BR:checkWinner()
     end
     broadcastPlace()
   end)
@@ -6035,11 +6076,16 @@ return function(mod)
   end
   -- what the spill table has placed, and what it could not (for drivers)
   mod.exports.spillState = function()
-    local spawned, failed = {}, {}
+    local spawned, failed, balls = {}, {}, {}
     for key, npcId in pairs(BR.spills.spawned or {}) do spawned[key] = npcId end
     for key, why in pairs(BR.spills.failed or {}) do failed[key] = why end
-    return { spawned = spawned, failed = failed, here = mod.world:current(),
-             lastSync = BR.spills.lastSync }
+    -- where each ball actually sits, so a driver can assert a spill landed
+    -- where the fight happened and not where the bot drifted to (POK-154)
+    for key, ball in pairs(BR.spills.balls or {}) do
+      balls[key] = { map = ball.map, x = ball.x, y = ball.y }
+    end
+    return { spawned = spawned, failed = failed, balls = balls,
+             here = mod.world:current(), lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a
