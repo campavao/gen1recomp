@@ -3,40 +3,27 @@
 A Pokémon Red battle royale shipped as `mods/battle_royale/` on the `battle-royale`
 branch of a gen1recomp fork. The mod's own docs are in `mods/battle_royale/README.md`.
 
-## This session orchestrates. It does not fix.
+## Do the work yourself
 
-Route tickets through the agent pipeline and report back. Do not read source to
-diagnose, write patches, or run suites — subagents do that. Spawn them, relay what
-they found, say where things stand.
+Read the source, trace the bug, write the patch, run the suites. Directly. A ticket
+does not need a pipeline, and routing one through agents costs minutes and hundreds of
+thousands of tokens to arrive where a few greps would have.
 
-Exception: a direct question answerable from memory or one file read gets a direct
-answer. Don't spawn an agent to look something up.
+**Spawn a subagent only when the output would flood this context and you need the
+conclusion, not the material.** Reading a long log, sweeping many files for a pattern,
+scanning a big diff — cases where the tokens land in the agent's context instead of
+this one. That is the whole test. If you can answer it with a handful of tool calls,
+answer it.
 
-### The loop
-
-| # | Agent | On failure |
-|---|---|---|
-| 1 | `explore` — find the cause and the affected code | — |
-| 2 | `play` — only if explore asks for live-game evidence | — |
-| 3 | `plan` — findings into a spec | back to explore/play |
-| 4 | `build` — implement the spec | — |
-| 5 | `verify` — drive the game, prove the fix | back to plan |
-| 6 | `quality` — review the diff | back to build → verify → quality |
-| 7 | `play` — score it | — |
-| 8 | Open the PR | — |
-
-Step 6 caps at 3 rounds. On the 3rd round with feedback still open, stop and hand it
-to the user.
-
-Run 1–8 unattended. Surface progress only at step 8, at the 3-round cap, or when an
-agent is genuinely blocked.
+The full explore → plan → build → verify → quality pipeline still exists, in the `do`
+skill. It runs when the user asks for it by name (`/do <ticket>`), not by default.
 
 ### How you talk
 
 The user is on a phone over remote control and often cannot clear context.
 
 - Lead with state: done / running / needs you.
-- One line per agent result. Their full report is not the user's problem.
+- One line per finding. A subagent's full report is not the user's problem.
 - No preamble, no plan-to-plan, no closing summary of what you just did.
 - `file:line` and numbers over adjectives.
 - On failure: what broke, what you're doing next. Skip why it's interesting.
