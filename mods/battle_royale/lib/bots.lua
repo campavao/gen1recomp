@@ -839,6 +839,78 @@ function Bots.resolveFight(recA, recB, data, rng)
   return winner
 end
 
+-- What one gulp of each potion tier is worth, as a fraction of a mon.
+-- The record stores fractions, not points, so the bag's medicine speaks
+-- the same language: a POTION is worth about a third of a mid-match mon,
+-- which is the same ballpark 20 points is against Gen 1 HP curves.
+Bots.POTION_HEAL = {
+  POTION = 0.3, SUPER_POTION = 0.5, HYPER_POTION = 0.8,
+  MAX_POTION = 1, FULL_RESTORE = 1,
+}
+
+-- Drink from the bag between fights (POK-158 M2): the weakest potion
+-- that helps, onto the most-hurt mon still standing, whenever anybody is
+-- under 0.6 -- roughly when a player reaches for the bag rather than the
+-- Centre.  Consumes the item.  Returns the item id used and the mon
+-- healed, or nil when nothing was needed or nothing was left.
+function Bots.quaff(record, bag)
+  if not (record and bag and bag.items) then return nil end
+  local worst
+  for _, m in ipairs(record) do
+    local f = m.hpFrac or 0
+    if f > 0 and f < 0.6 and (not worst or f < worst.hpFrac) then worst = m end
+  end
+  if not worst then return nil end
+  local best
+  for _, it in ipairs(bag.items) do
+    local heal = Bots.POTION_HEAL[it.id]
+    if heal and (it.n or 0) >= 1 and (not best or heal < best.heal) then
+      best = { it = it, heal = heal }
+    end
+  end
+  if not best then return nil end
+  best.it.n = best.it.n - 1
+  if best.it.n <= 0 then
+    for i, it in ipairs(bag.items) do
+      if it == best.it then table.remove(bag.items, i) break end
+    end
+  end
+  worst.hpFrac = math.min(1, math.floor((worst.hpFrac + best.heal) * 100 + 0.5) / 100)
+  return best.it.id, worst
+end
+
+-- A looted bag folds into the bot's own (POK-158 M2): stacks merge by
+-- id, money adds.
+function Bots.bagMerge(bag, loot)
+  if not (bag and loot) then return bag end
+  for _, it in ipairs(loot.items or {}) do
+    local mine
+    for _, own in ipairs(bag.items) do
+      if own.id == it.id then mine = own break end
+    end
+    if mine then mine.n = math.min(99, (mine.n or 0) + (it.n or 0))
+    else bag.items[#bag.items + 1] = { id = it.id, n = it.n or 1 } end
+  end
+  bag.money = (bag.money or 0) + (loot.money or 0)
+  return bag
+end
+
+-- The move inside a TM item id, or nil for anything else.
+function Bots.tmMove(itemId)
+  if type(itemId) ~= "string" then return nil end
+  local move = itemId:match("^TM_(.+)$")
+  return move
+end
+
+-- Can this species learn this move from a machine?  `def.tmhm` is the
+-- generated per-species table of machine moves.
+function Bots.canLearn(def, moveId)
+  for _, m in pairs((def and def.tmhm) or {}) do
+    if m == moveId then return true end
+  end
+  return false
+end
+
 -- Is this record hurt enough that a trainer would walk to a Centre?
 -- Half a team's worth of damage, or anything fainted -- a player limps
 -- in earlier than that, but a bot that healed every scratch would never

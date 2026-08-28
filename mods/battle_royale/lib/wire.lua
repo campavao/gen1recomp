@@ -190,16 +190,22 @@ function Wire.out() return { t = "out" } end
 function Wire.botout(id) return { t = "botout", id = id } end
 
 -- A bot's persistent team (POK-158): each mon's species and how much of
--- itself it still has.  Broadcast by whoever changed the record -- the
--- host on a catch, the client whose fight just scarred it -- and applied
--- verbatim by everyone else.
+-- itself it still has, plus its BAG once it has a real one -- potions get
+-- drunk and looted bags merge in, so the bag has to travel with the team.
+-- Broadcast by whoever changed the record -- the host on a catch, the
+-- client whose fight just scarred it -- and applied verbatim by everyone.
 function Wire.botrec(id, record)
   local rows = {}
   for i, m in ipairs(record or {}) do
     if i > 6 then break end
     rows[i] = { s = m.species, f = m.hpFrac }
   end
-  return { t = "botrec", id = id, mons = rows }
+  local out = { t = "botrec", id = id, mons = rows }
+  local bag = record and record.bag
+  if bag then
+    out.bag = { items = bag.items or {}, money = bag.money or 0 }
+  end
+  return out
 end
 
 -- a fallen team on the ground (DESIGN D8); `mons` rows are
@@ -440,6 +446,13 @@ decoders.botrec = function(m)
                             hpFrac = math.max(0, math.min(1, f)) }
   end
   if #record == 0 then return nil, "empty record" end
+  if m.bag ~= nil then
+    if type(m.bag) ~= "table" then return nil, "bad bag" end
+    local items = decodeItems(m.bag.items or {})
+    if not items then return nil, "bad bag items" end
+    record.bag = { items = items,
+                   money = math.max(0, math.floor(tonumber(m.bag.money) or 0)) }
+  end
   return { t = "botrec", id = m.id, record = record }
 end
 
