@@ -5739,19 +5739,57 @@ return function(mod)
   -- sight is untouched in real playthroughs.
   local trainerTalk = {}   -- mapId -> the live talk table
 
+  -- ------- press A at the world (POK-141)
+  --
+  -- Gen 1 makes every field move a party-menu detour, and the fog charges
+  -- for each one.  Later generations ask at the obstacle instead -- walk
+  -- into the tree, "CUT it down?" -- so a match does too.  The engine's
+  -- side-effect-free checkers (useCutFieldMove / useSurfFieldMove) carry
+  -- the party menu's own gates, badges included, and tryCut / trySurf
+  -- play the vanilla scene; all this adds is the ask, on the map-script
+  -- onInteract seam, which the A-press dispatch consults after NPCs and
+  -- signs and before the bookshelves.  Out of a session it returns false
+  -- and vanilla is untouched -- faithfulness is only bent inside a match.
+  local function fieldMoveInteract(game, ow, fx, fy)
+    if not BR:inSession() or BR.status ~= "alive" then return false end
+    if BR.battle or BR.botFight or BR.pending then return false end
+    local move, go
+    if ow.useCutFieldMove and ow:useCutFieldMove() == "ok" then
+      move = "CUT"
+      go = function() ow:tryCut(fx, fy) end
+    elseif ow.useSurfFieldMove and ow:useSurfFieldMove() == "ok" then
+      move = "SURF"
+      go = function() ow:trySurf(fx, fy) end
+    end
+    if not move then return false end
+    local TextBox = require("src.render.TextBox")
+    local ask = move == "CUT" and "This tree can be\nCUT down.  Cut it?"
+      or "The water is calm.\nSURF across it?"
+    game.stack:push(TextBox.new(game, ask, nil, {
+      choice = function(yes)
+        if yes then go() end
+      end,
+    }))
+    return true
+  end
+
   do
-    -- Data loads before mods, so the map roster is enumerable here; the
-    -- per-TEXT choices wait for arm time, when the base scripts are
-    -- certainly attached.
+    -- Data loads before mods, so the map roster is enumerable here (the
+    -- registry freezes after load); the per-TEXT talk choices wait for
+    -- arm time, when the base scripts are certainly attached.  Every map
+    -- gets the A-press field-move offer; maps with trainer objects also
+    -- get their live talk table.
     local okD, EngineData = pcall(require, "src.core.Data")
     for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
+      local contribution = { onInteract = fieldMoveInteract }
       for _, o in ipairs(def.objects or {}) do
         if o.trainerClass and o.text then
           trainerTalk[mapId] = {}
-          mod.content.map_scripts:register(mapId, { talk = trainerTalk[mapId] })
+          contribution.talk = trainerTalk[mapId]
           break
         end
       end
+      mod.content.map_scripts:register(mapId, contribution)
     end
   end
 
@@ -5798,6 +5836,47 @@ return function(mod)
       end
     end
   end
+
+  -- The TOWN MAP flies during a match (POK-141's third ask).  The bag's
+  -- copy is read-only in vanilla; in a session, with FLY known and the
+  -- sky reachable (the party menu's own two gates), using it opens the
+  -- fly picker instead -- one press from the bag to the departure,
+  -- because the fog is running.  Anything short of both gates falls
+  -- through to the vanilla read-only map, as does every other item.
+  mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
+                                      moveIndex, picker)
+    if id == "TOWN_MAP" and not battle
+       and BR:inSession() and BR.status == "alive" then
+      local ow = mod.world:overworld()
+      local okM, Map = pcall(require, "src.world.Map")
+      local okF, FieldDefaults = pcall(require, "src.world.FieldDefaults")
+      if ow and okM and okF and ow:partyKnows("FLY")
+         and Map.isOutside(ow.map.def,
+                           FieldDefaults.field(game.data, "outsideTilesets")) then
+        if list and list.close then list:close() end
+        local ok = pcall(function()
+          require("src.ui.Screens").push(game, "TownMap", { fly = true,
+            onFly = function(mapId) ow:flyTo(mapId) end })
+        end)
+        if ok then return end
+      end
+    end
+    return next(game, battle, id, target, list, moveIndex, picker)
+  end)
+
+  -- Hold-to-scroll in the POKeDEX (POK-109).  ListMenu grew keyRepeat
+  -- exactly so a mod could turn it on per list kind; a 151-row list is
+  -- the list that needs it.  Session-gated like everything else: a real
+  -- playthrough's dex paces exactly as the cart did.
+  mod.hooks:wrap("ui.list_menu", function(next, opts, ctx)
+    local out = next(opts, ctx)
+    if BR:inSession() and ctx and ctx.kind == "POK\195\169DEX"
+       and type(out) == "table" then
+      if out.keyRepeat == nil then out.keyRepeat = true end
+      if out.pageJump == nil then out.pageJump = true end
+    end
+    return out
+  end)
 
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
