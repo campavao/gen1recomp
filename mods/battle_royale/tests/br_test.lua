@@ -2058,9 +2058,7 @@ do
   eq(Bots.newRecord(4242, 1001, nil)[1].species, rec[1].species,
      "the drop mon is derived: two lazy creations agree")
 
-  for _, tier in ipairs(Bots.TIERS) do
-    eq(Bots.recordCap(tier), tier.maxParty, tier.id .. " caps at its tier")
-  end
+  eq(Bots.recordCap(), 6, "every bot builds to a full six, like a player")
 
   local team = {
     { species = "PIDGEY", hpFrac = 1 },
@@ -2098,6 +2096,51 @@ do
   eq(Bots.rollCatch(r2, 2, slots, always), nil, "the cap is the cap")
   eq(Bots.rollCatch({ {} }, 6, slots, never), nil, "most dwells catch nothing")
   eq(Bots.rollCatch({ {} }, 6, {}, always), nil, "no grass table, no catch")
+
+  -- ------- the records fight (POK-158 M3)
+
+  local sim = { pokemon = {
+    BIG = { baseStats = { hp = 100, attack = 100, defense = 100,
+                          speed = 100, special = 100 } },
+    SMALL = { baseStats = { hp = 20, attack = 20, defense = 20,
+                            speed = 20, special = 20 } },
+  } }
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 1 } }, sim), 500,
+     "power is the base-stat total")
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 0.5 },
+                        { species = "SMALL", hpFrac = 0 } }, sim), 250,
+     "wounds scale it and faints zero it")
+  eq(Bots.recordPower({ { species = "WHO", hpFrac = 1 } }, nil), 300,
+     "an unplaceable species gets the middling default")
+
+  local recA = { { species = "BIG", hpFrac = 1 } }
+  local recB = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA, recB, sim, function() return 0.5 end), "a",
+     "the stronger team usually wins")
+  eq(recA[1].hpFrac, 0.8, "and pays a fifth of itself for a small win")
+  local recA2 = { { species = "BIG", hpFrac = 1 } }
+  local recB2 = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA2, recB2, sim, function() return 0.9 end), "b",
+     "an upset stays possible")
+  eq(recB2[1].hpFrac, 0.1, "and the underdog barely stands")
+  ok(Bots.recordAlive(recB2), "a winner is never wiped by its own win")
+
+  -- who wants the nurse (POK-158 M2)
+  ok(Bots.wantsHeal({ { hpFrac = 0.4 } }), "half a team down wants healing")
+  ok(Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0 } }), "a faint always does")
+  ok(not Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0.8 } }),
+     "scratches walk it off")
+  ok(not Bots.wantsHeal({}), "an empty record wants nothing")
+
+  -- ...and the errand ladder honours it
+  local sick = { x = 5, y = 5 }
+  local g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
+                                    items = { { x = 6, y = 5 } } },
+                            function() return 0 end)
+  eq(g.kind, "heal", "a hurt team walks to the Centre before the loot")
+  eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
+                     function() return 0 end).kind, "seam",
+     "but never into the fog")
 end
 
 -- ------- the endgame hunt (POK-95)

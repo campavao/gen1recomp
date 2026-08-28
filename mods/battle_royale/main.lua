@@ -2324,9 +2324,8 @@ return function(mod)
     local data = self.game and self.game.data
     local enc = data and data.encounters and data.encounters[p.map]
     local slots = enc and enc.grass and enc.grass.slots
-    local tier = p.tier or Bots.tier(self.matchSeed, id)
     local rec = self:botRecord(id)
-    local caught = Bots.rollCatch(rec, Bots.recordCap(tier), slots, p.rng)
+    local caught = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng)
     if caught then
       log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
               tostring(caught), #rec)
@@ -2334,13 +2333,83 @@ return function(mod)
     end
   end
 
+  -- A spill under a bot's feet joins its team (POK-158 M2).  The 1.5s
+  -- item dwell used to be pure theater; now the ball it stood on is
+  -- taken -- gone for everyone, exactly as if a player had pocketed it
+  -- -- and the mon inside joins the record, fresh the way a player's
+  -- pickup is.  Bags stay on the ground: a bot has no persistent bag
+  -- yet, and eating one would erase loot a player could still use.
+  function BR:botLoot(id, p)
+    local rec = self:botRecord(id)
+    if #rec >= Bots.recordCap() then return end
+    local key = self.spills and self.spills:keyAt(p.map, p.x, p.y)
+    local ball = key and self.spills:get(key)
+    if not (ball and ball.species) or ball.bag then return end
+    self.spills:take(key)
+    rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+    log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
+            tostring(ball.species), #rec)
+    if self.relay then
+      self.relay:broadcast(Wire.took(key))
+      self.relay:broadcast(Wire.botrec(id, rec))
+    end
+  end
+
+  -- The Centre serves bots too (POK-158 M2).  Walking to the door and
+  -- waiting the dwell out is the whole visit -- the interior trip is
+  -- abstracted, the way the fight against another bot is -- and the rule
+  -- is the player's own: no nurse in a fogged town (POK-117/140), which
+  -- pickBotGoal enforced when it offered the errand and this re-checks,
+  -- because the ring may have moved while the bot walked over.
+  function BR:botHeal(id, p)
+    if self:fogOver(p.map) then return end
+    local rec = self:botRecord(id)
+    local healed = false
+    for _, m in ipairs(rec) do
+      if (m.hpFrac or 0) < 1 then m.hpFrac = 1 healed = true end
+    end
+    if not healed then return end
+    log:say("HEALED: %s at the %s CENTER", tostring(p.name), tostring(p.map))
+    if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+  end
+
+  -- The cell in front of this map's POKeMON CENTER door, or nil.  Doors
+  -- all face south in Gen 1, so "in front" is one cell down; a door whose
+  -- step cell is not walkable is not offered (a bot grinding at a blocked
+  -- doorway forever is worse than one that never heals).  Cached: warps
+  -- cannot move during a match.
+  function BR:centerDoorOn(mapId)
+    self.centerDoorCache = self.centerDoorCache or {}
+    local hit = self.centerDoorCache[mapId]
+    if hit ~= nil then return hit or nil end
+    local data = self.game and self.game.data
+    local def = data and data.maps and data.maps[mapId]
+    local found = false
+    for _, w in ipairs((def and def.warps) or {}) do
+      if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true)
+         and canWalk(mapId, w.x, w.y + 1) then
+        found = { x = w.x, y = w.y + 1 }
+        break
+      end
+    end
+    self.centerDoorCache[mapId] = found
+    return found or nil
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
-  function BR:pickBotGoal(p, now)
+  function BR:pickBotGoal(id, p, now)
+    local rec = self:botRecord(id)
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
       inFog = self:fogOver(p.map),
-      items = self.spills and self.spills:cellsOn(p.map) or nil,
+      -- a wrecked team walks to the Centre (POK-158 M2), under the same
+      -- rule the player's nurse serves by: not once the fog has the town
+      heal = (Bots.wantsHeal(rec) and not self:fogOver(p.map))
+        and self:centerDoorOn(p.map) or nil,
+      -- loot is only an errand while there is room to pocket it
+      items = (self.spills and #rec < Bots.recordCap())
+        and self.spills:cellsOn(p.map) or nil,
       grass = self:grassOn(p.map),
       -- the floor under every other errand: a bot must always have
       -- somewhere it can walk HERE, or a town with no grass freezes it
@@ -2368,8 +2437,11 @@ return function(mod)
       p.dwellUntil = nil
       self:markBot(id, p, nil)
       -- the dwell pays out as it ends: six seconds in the grass was a
-      -- hunt, and sometimes the hunt works (POK-158)
-      if p.dwellKind == "grass" then self:botCatch(id, p) end
+      -- hunt, a pause on a spill was picking it up, a wait at the Centre
+      -- door was the nurse (POK-158)
+      if p.dwellKind == "grass" then self:botCatch(id, p)
+      elseif p.dwellKind == "item" then self:botLoot(id, p)
+      elseif p.dwellKind == "heal" then self:botHeal(id, p) end
       p.dwellKind = nil
     end
 
@@ -2377,7 +2449,7 @@ return function(mod)
     local stale = not goal or goal.map ~= p.map
       or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
     if stale then
-      p.goal, p.path = self:pickBotGoal(p, now), nil
+      p.goal, p.path = self:pickBotGoal(id, p, now), nil
       goal = p.goal
     end
     if not goal then return nil end
@@ -4312,9 +4384,15 @@ return function(mod)
     if not now then return end
     local live = {}
     for id, p in pairs(self.players) do
-      -- the bot in OUR battle screen is not free to be jumped (POK-154)
+      -- the bot in OUR battle screen is not free to be jumped (POK-154).
+      -- The cooldown is a breather AFTER a fight; a bot that has never
+      -- fought owes nobody one.  (`or 0` here made it a clock-since-boot
+      -- gate: for the first twelve real seconds of the process no bot
+      -- could fight at all, which an accelerated driver sits entirely
+      -- inside.)
       if p.bot and p.status == "alive" and p.map and id ~= self.botFight
-         and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
+         and (not p.lastFight
+              or (now - p.lastFight) >= Bots.FIGHT_COOLDOWN) then
         live[#live + 1] = { id = id, p = p }
       end
     end
@@ -4324,12 +4402,20 @@ return function(mod)
         local a, b = live[i], live[j]
         if Bots.near(a.p, b.p) then
           a.p.lastFight, b.p.lastFight = now, now
-          -- a coin flip: both sides are one mon at the same rung, so there
-          -- is nothing to weigh.  When bots carry real teams this is where
-          -- the comparison goes.
-          local loser = (love.math.random() < 0.5) and a or b
-          local winner = (loser == a) and b or a
+          -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
+          -- times what each team has left, an upset still possible, and
+          -- the winner walks away hurt.  The loser's record is what the
+          -- spill puts on the ground; the winner's scars ride a botrec so
+          -- every client carries them into its next fight.
+          local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
+                                      self.game and self.game.data,
+                                      function() return love.math.random() end)
+          local winner = (w == "a") and a or b
+          local loser = (w == "a") and b or a
           self:eliminateBot(loser.id, loser.p, winner.p.name)
+          if self.relay then
+            self.relay:broadcast(Wire.botrec(winner.id, self:botRecord(winner.id)))
+          end
           return
         end
       end
@@ -6503,6 +6589,33 @@ return function(mod)
       end
     end
     return out
+  end
+  -- why tickBotFights is or is not resolving, for drivers (POK-158)
+  mod.exports.debugFightProbe = function()
+    local now = clock() or 0
+    local out = { host = (BR.relay and BR.relay:isHost()) and true or false,
+                  phase = BR.phase, now = now, bots = {} }
+    for id, p in pairs(BR.players) do
+      if p.bot then
+        out.bots[#out.bots + 1] = {
+          id = id, status = p.status, map = p.map, x = p.x, y = p.y,
+          sinceFight = now - (p.lastFight or 0),
+        }
+      end
+    end
+    return out
+  end
+
+  -- a test hook, like debugPlaceBot: wound a bot's whole team to `frac`,
+  -- so a driver can stage "hurt enough to want the Centre" (POK-158 M2)
+  mod.exports.debugScarBot = function(id, frac)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    for _, m in ipairs(rec) do
+      m.hpFrac = math.max(0, math.min(1, tonumber(frac) or 0))
+    end
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
   end
   -- a bot's persistent team, for drivers (POK-158).  Reads through the
   -- lazy accessor, so asking is the same as any client's first look.

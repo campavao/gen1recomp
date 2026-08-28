@@ -431,7 +431,7 @@ end
 -- declines to move a bot already standing on the map nearest the ring's
 -- eye.  Nothing else was left to move them.  A bot must always have an
 -- errand it can perform HERE.
-Bots.DWELL = { grass = 6, item = 1.5, stroll = 0, ring = 0, seam = 0 }
+Bots.DWELL = { grass = 6, item = 1.5, heal = 4, stroll = 0, ring = 0, seam = 0 }
 
 -- A bot gives up on a goal it cannot reach rather than grinding at a wall.
 Bots.GOAL_SECONDS = 20
@@ -582,6 +582,11 @@ function Bots.chooseGoal(bot, ctx, rng)
   -- else on this map matters if standing here is what kills you.
   if ctx.inFog or ctx.ringSoon then return { kind = "seam", why = "ring" } end
 
+  -- A wrecked team walks to the Centre before it does anything else
+  -- (POK-158 M2).  `heal` is the door cell, offered by the caller only
+  -- when the team is hurt enough and the Centre still serves.
+  if ctx.heal then return { kind = "heal", x = ctx.heal.x, y = ctx.heal.y } end
+
   -- Loot on the floor beats grass: it is already a team, and somebody
   -- else paid for it.
   local item = Bots.nearest(bot, ctx.items)
@@ -715,12 +720,13 @@ function Bots.newRecord(seed, id, data)
   return { { species = first.species, hpFrac = 1 } }
 end
 
--- The record's ceiling is the tier's, directly: ROOKIE stops at two, an
--- ACE builds to six.  The old partySize curve rode the rung because a
--- synthesized team materialized at its cap instantly; a caught team is
--- paced by the catching, which is the arc the curve was faking.
-function Bots.recordCap(tier)
-  return (tier and tier.maxParty) or 1
+-- Every bot builds to a full six, like a player.  This was briefly the
+-- tier's maxParty, but the tier caps never actually read in play -- what
+-- a ROOKIE is worse AT is roaming and battle AI, and capping its team on
+-- top of that just made small teams nobody could attribute to anything.
+-- The catching itself is the pacing.
+function Bots.recordCap()
+  return 6
 end
 
 -- The rows a FIGHT is built from: healthy mons only, at the rung, in
@@ -771,6 +777,80 @@ function Bots.recordAlive(record)
     if (m.hpFrac or 0) > 0 then return true end
   end
   return false
+end
+
+-- What a record can put up in a fight: each healthy mon's base-stat
+-- total, scaled by how much of it is left.  Every mon fights at the same
+-- rung, so base stats are the whole difference between species -- an
+-- ACE's GOLEM outweighs a ROOKIE's third RATTATA, which is what the tier
+-- pools were always supposed to buy.  300 is a middling total, the
+-- benefit of the doubt for a species the data cannot place.
+function Bots.recordPower(record, data)
+  local total = 0
+  for _, m in ipairs(record or {}) do
+    local frac = m.hpFrac or 0
+    if frac > 0 then
+      local def = data and data.pokemon and data.pokemon[m.species]
+      local bs = def and def.baseStats
+      local stat = bs and ((bs.hp or 0) + (bs.attack or 0) + (bs.defense or 0)
+                          + (bs.speed or 0) + (bs.special or 0)) or 300
+      total = total + stat * frac
+    end
+  end
+  return total
+end
+
+-- Resolve a meeting between two records (POK-158 M3): the coin flip is
+-- dead.  The stronger team usually wins -- the roll is weighted by
+-- power, so an upset stays possible the way it is in a real fight -- and
+-- the WINNER walks away hurt: the loser's power lands on it as damage,
+-- front-loaded onto its lead the way a Gen 1 fight chews through one,
+-- capped so a won fight never wipes the team that won it.
+--
+-- Returns "a" or "b"; the winner's record is scarred in place, the
+-- loser's is left for the spill.
+function Bots.resolveFight(recA, recB, data, rng)
+  local pa = Bots.recordPower(recA, data)
+  local pb = Bots.recordPower(recB, data)
+  if pa <= 0 and pb <= 0 then return (rng() < 0.5) and "a" or "b" end
+  local winner = (rng() < pa / (pa + pb)) and "a" or "b"
+  local wrec = (winner == "a") and recA or recB
+  local wp = (winner == "a") and pa or pb
+  local lp = (winner == "a") and pb or pa
+  local budget = (wp > 0) and math.min(0.9, lp / wp) or 0
+  local healthy, totalFrac = {}, 0
+  for _, m in ipairs(wrec) do
+    if (m.hpFrac or 0) > 0 then
+      healthy[#healthy + 1] = m
+      totalFrac = totalFrac + m.hpFrac
+    end
+  end
+  local damage = budget * totalFrac
+  for i, m in ipairs(healthy) do
+    if damage <= 0 then break end
+    -- the last healthy mon is the one that took the fight: it stands
+    local floor_ = (i == #healthy) and 0.05 or 0
+    local take = math.min(m.hpFrac - floor_, damage)
+    if take > 0 then
+      m.hpFrac = math.floor((m.hpFrac - take) * 100 + 0.5) / 100
+      damage = damage - take
+    end
+  end
+  return winner
+end
+
+-- Is this record hurt enough that a trainer would walk to a Centre?
+-- Half a team's worth of damage, or anything fainted -- a player limps
+-- in earlier than that, but a bot that healed every scratch would never
+-- be caught wounded, and being caught wounded is half the drama.
+function Bots.wantsHeal(record)
+  local n, total = 0, 0
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) <= 0 then return true end
+    n = n + 1
+    total = total + m.hpFrac
+  end
+  return n > 0 and (total / n) <= 0.5
 end
 
 -- The catch a grass dwell earns: a species off the map's own grass table
