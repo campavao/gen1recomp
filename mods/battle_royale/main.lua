@@ -4542,6 +4542,19 @@ return function(mod)
     return next(battle)
   end)
 
+  -- No level on any screen during a round (RFC 0019).  The rung makes the
+  -- number the same for everyone and moves it on a clock, so it reads as a
+  -- threat it is not -- a Lv37 opponent looks dangerous to a player who
+  -- has not worked out their own team is Lv37 too -- and the one time it
+  -- moves visibly (a shrink paying out between fights) it reads as a bug.
+  -- All four surfaces at once: levels are simply not a thing in a match.
+  -- On an engine without the seam the hook is never called and this wrap
+  -- costs nothing, so shipping it ahead of the engine is safe.
+  mod.hooks:wrap("pokemon.level_visible", function(next, mon, ctx)
+    if inMatch() then return false end
+    return next(mon, ctx)
+  end)
+
   -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
   -- The rung is the only power curve: D12 scaling never demotes, so paid
   -- EXP compounds into a party above the fog's beat while every opponent
