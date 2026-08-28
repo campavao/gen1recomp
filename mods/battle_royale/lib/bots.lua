@@ -966,6 +966,22 @@ function Bots.canLearn(def, moveId)
   return false
 end
 
+-- Can this record cross water (POK-158 M4)?  The same rule the player
+-- lives by -- somebody on the team knows SURF -- read as capability
+-- from the team it built: a HEALTHY mon whose species takes HM03.  The
+-- "taught ahead of time" half of the goal; a fainted swimmer carries
+-- nobody, which is also the player's rule.
+function Bots.canSurf(record, data)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0
+       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species],
+                         "SURF") then
+      return true
+    end
+  end
+  return false
+end
+
 -- Is this record hurt enough that a trainer would walk to a Centre?
 -- Half a team's worth of damage, or anything fainted -- a player limps
 -- in earlier than that, but a bot that healed every scratch would never

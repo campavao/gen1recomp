@@ -2010,6 +2010,77 @@ do
   else
     print("skip: Pewter corner pin (no generated Kanto data)")
   end
+
+  -- POK-158 M4: water is swimmable, not walkable, and a SURF team's path
+  -- crosses it.  Pallet's south strip is the pin: its pond leads out to
+  -- ROUTE_21 and has no land route across.
+  if okData and okTs and maps and tilesets and maps.PALLET_TOWN then
+    local Bots = require("mods.battle_royale.lib.bots")
+    local Map = require("src.world.Map")
+    local def = maps.PALLET_TOWN
+    local ts = tilesets[def.tileset]
+    local water
+    for y = 0, def.height * 2 - 1 do
+      for x = 0, def.width * 2 - 1 do
+        if Map.defIsWaterCell(def, ts, x, y) then
+          water = { x = x, y = y }
+          break
+        end
+      end
+      if water then break end
+    end
+    ok(water ~= nil, "Pallet has water")
+    ok(Spawn.swimmable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "a water cell is swimmable")
+    ok(not Spawn.walkable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "...and still not walkable")
+    ok(not Spawn.swimmable(maps, tilesets, "PALLET_TOWN", -1, water.y),
+       "out of bounds swims nowhere")
+    -- a shore cell one step up from the water, and a path onto the water
+    -- that exists only for a swimmer
+    local shore
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if Map.defIsWaterCell(def, ts, c.x, c.y + 1) then shore = c break end
+    end
+    ok(shore ~= nil, "Pallet has a reachable shore")
+    local walkOnly = function(x, y)
+      return Spawn.walkable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    local swimToo = function(x, y)
+      return walkOnly(x, y)
+        or Spawn.swimmable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    -- as far out to sea below the shore as the pond goes
+    local target = { x = shore.x, y = shore.y + 1 }
+    while Spawn.swimmable(maps, tilesets, "PALLET_TOWN",
+                          target.x, target.y + 1) do
+      target.y = target.y + 1
+    end
+    eq(Bots.path(walkOnly, shore, target), nil,
+       "no SURF, no path onto the water")
+    ok(Bots.path(swimToo, shore, target) ~= nil,
+       "a SURF team's path crosses the water")
+  else
+    print("skip: Pallet water pin (no generated Kanto data)")
+  end
+end
+
+-- POK-158 M4: the capability itself comes off the record, healthy mons
+-- only, by the species' own machine list
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local data = { pokemon = {
+    PSYDUCK = { tmhm = { "SURF", "STRENGTH" } },
+    RATTATA = { tmhm = { "DIG" } },
+  } }
+  ok(Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0.4 } }, data),
+     "a healthy SURF learner carries the team across")
+  ok(not Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0 } }, data),
+     "a fainted swimmer carries nobody")
+  ok(not Bots.canSurf({ { species = "RATTATA", hpFrac = 1 } }, data),
+     "no SURF learner, no crossing")
+  ok(not Bots.canSurf({}, data), "an empty record stays ashore")
+  ok(not Bots.canSurf(nil, nil), "no record, no data, no crash")
 end
 
 -- ------- bots that hunt (POK-42, POK-43)
