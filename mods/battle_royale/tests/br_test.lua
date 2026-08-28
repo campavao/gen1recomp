@@ -2663,7 +2663,7 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
        "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits

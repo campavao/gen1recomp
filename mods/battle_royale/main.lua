@@ -5939,7 +5939,11 @@ return function(mod)
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
-    if not (BR.ring and BR.phase == "match" and viewport) then return out end
+    if not (BR.phase == "match" and viewport) then return out end
+    -- the fog needs a ring; the last-trainers markers (POK-151) need only
+    -- a thin roster, which in a real match arrives ring in hand anyway
+    local lastFew = BR:aliveCount() <= 4
+    if not (BR.ring or lastFew) then return out end
     local top = game.stack and game.stack:top()
     if not top then return out end
     local okTM, TownMap = pcall(require, "src.ui.TownMap")
@@ -5955,40 +5959,67 @@ return function(mod)
     local sx = (viewport.gameWidth or 160) / 160
     local sy = (viewport.gameHeight or 144) / 144
     local ox, oy = viewport.gameX or 0, viewport.gameY or 0
-    local center, radius = BR.ring.center, BR.ring.radius
+    local center = BR.ring and BR.ring.center
+    local radius = BR.ring and BR.ring.radius
 
     local g = love.graphics
     g.push("all")
-    -- one shaded square per town-map cell the fog has taken.  Walking the
-    -- grid rather than the location table: several maps share a square, and
-    -- shading it once per map would stack the alpha into a solid black blot.
-    local all = Fog.coversAll(radius)
-    g.setColor(0.25, 0.15, 0.35, 0.55)
-    -- The LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
-    -- and the art runs to its edges -- shading only the location grid left
-    -- a bright strip down the right and along the bottom, glaring once the
-    -- fog covered everything.  A cell past the grid can never be inside the
-    -- ring, so walking the whole screen is correct in every phase.
-    -- Fog.shadesTile owns the screen-vs-location offset (POK-146):
-    -- comparing raw screen tiles against the ring's centre drew the safe
-    -- region a town up and to the left of the one the fog announced.
-    for gy = 0, 17 do
-      for gx = 0, 19 do
-        if Fog.shadesTile(center, radius, gx, gy) then
-          g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
-                      GRID * sx, GRID * sy)
+    if BR.ring then
+      -- one shaded square per town-map cell the fog has taken.  Walking
+      -- the grid rather than the location table: several maps share a
+      -- square, and shading it once per map would stack the alpha into a
+      -- solid black blot.
+      local all = Fog.coversAll(radius)
+      g.setColor(0.25, 0.15, 0.35, 0.55)
+      -- The LOCATION grid is 16x16, but the town map SCREEN is 20x18
+      -- tiles and the art runs to its edges -- shading only the location
+      -- grid left a bright strip down the right and along the bottom,
+      -- glaring once the fog covered everything.  A cell past the grid
+      -- can never be inside the ring, so walking the whole screen is
+      -- correct in every phase.  Fog.shadesTile owns the
+      -- screen-vs-location offset (POK-146): comparing raw screen tiles
+      -- against the ring's centre drew the safe region a town up and to
+      -- the left of the one the fog announced.
+      for gy = 0, 17 do
+        for gx = 0, 19 do
+          if Fog.shadesTile(center, radius, gx, gy) then
+            g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
+                        GRID * sx, GRID * sy)
+          end
         end
       end
+      -- and a box round the eye of it, so the safe place is named as well
+      -- as merely un-shaded.  Not once the fog has taken the eye too: a
+      -- box round a shaded square would promise a safety that is not there.
+      if not all then
+        g.setColor(1, 1, 1, 0.9)
+        g.setLineWidth(math.max(1, sx))
+        g.rectangle("line", ox + (center.x + Fog.MAP_OX) * GRID * sx,
+                    oy + (center.y + Fog.MAP_OY) * GRID * sy,
+                    GRID * sx, GRID * sy)
+      end
     end
-    -- and a box round the eye of it, so the safe place is named as well as
-    -- merely un-shaded.  Not once the fog has taken the eye too: a box round
-    -- a shaded square would promise a safety that is not there.
-    if not all then
-      g.setColor(1, 1, 1, 0.9)
-      g.setLineWidth(math.max(1, sx))
-      g.rectangle("line", ox + (center.x + Fog.MAP_OX) * GRID * sx,
-                  oy + (center.y + Fog.MAP_OY) * GRID * sy,
-                  GRID * sx, GRID * sy)
+    -- The last trainers standing, on the map (POK-151).  At four or fewer
+    -- alive, every OTHER living trainer -- bot or human, they are all
+    -- trainers to the roster -- gets a mark on their map's square, blinking
+    -- so it reads as live intel rather than art.  Your own square is what
+    -- the map's native cursor already shows.  Several trainers on one
+    -- square draw once: the mark says "somebody is here", and the count box
+    -- says how many are left.  An interior has no square; its trainer
+    -- simply is not on the map, which is Gen 1's own answer for buildings.
+    if lastFew and (math.floor((clock() or 0) * 2) % 2 == 0) then
+      g.setColor(1, 0.2, 0.2, 0.95)
+      local marked = {}
+      for _, p in pairs(BR.players) do
+        local loc = p.status == "alive" and p.map and locations[p.map]
+        if loc and not marked[loc.x .. ":" .. loc.y] then
+          marked[loc.x .. ":" .. loc.y] = true
+          g.rectangle("fill",
+            ox + ((loc.x + Fog.MAP_OX) * GRID + 2) * sx,
+            oy + ((loc.y + Fog.MAP_OY) * GRID + 2) * sy,
+            (GRID - 4) * sx, (GRID - 4) * sy)
+        end
+      end
     end
     g.pop()
     return out
