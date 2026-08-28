@@ -250,6 +250,21 @@ return function(mod)
     end
   end
 
+  -- The move-scoring layer an ai-tier bot fights with (POK-160): a
+  -- record in the same ai_classes registry the vanilla three passes
+  -- live in, named from the trainer overlay in startBotBattle.  Inert
+  -- for every other battle -- nothing else's aiMods names it.  A
+  -- registry that will not take it degrades to the vanilla passes.
+  do
+    local ok, err = pcall(function()
+      mod.content.ai_classes:register("BR_BOT_MOVES", Bots.MOVE_LAYER)
+    end)
+    if not ok then
+      mod.log:warn("bot move layer not registered (%s); vanilla AI stands in",
+                   tostring(err))
+    end
+  end
+
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
@@ -4697,15 +4712,31 @@ return function(mod)
     local aiClass = Bots.fightAI(self.matchSeed, botId)
     if bp and (bp.name or aiClass) then
       local was = battle.trainer and battle.trainer.name
-      battle.trainer = setmetatable({ name = bp.name, aiClass = aiClass },
-                                    { __index = battle.trainer })
+      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
+      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
+      -- top.  A ROOKIE keeps whatever move choice its face class shipped
+      -- with -- no field, so the chassis answers through __index.
+      local aiMods
+      if aiClass then
+        aiMods = {}
+        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+          aiMods[#aiMods + 1] = m
+        end
+        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      end
+      battle.trainer = setmetatable(
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { __index = battle.trainer })
       if bp.name and was and was ~= bp.name
          and type(battle.introText) == "string" then
         local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
         battle.introText = battle.introText:gsub(pattern,
                                                  (bp.name:gsub("%%", "%%%%")), 1)
       end
+      -- both were baked from the face's class before the overlay existed
+      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
       battle.aiUses = battle:aiUsesFor()
+      battle.enemyAIMods = battle.trainer.aiMods
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
