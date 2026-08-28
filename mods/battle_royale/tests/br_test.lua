@@ -1938,6 +1938,27 @@ do
   ok(not none[key(0, 0)], "no seeds, no region")
   local edge = Spawn.floodEscapable(8, 6, isWalk, { { x = -3, y = 99 } })
   ok(not edge[key(0, 0)], "an out-of-bounds seed seeds nothing")
+
+  -- An edge is only a way out where the step actually CROSSES.  Pewter's
+  -- fenced south-east corner touches the south edge, but ROUTE_2 is half
+  -- Pewter's width and every landing from that stretch clamps onto a
+  -- tree -- a real player was dropped there with no Fly and no way out.
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and maps and tilesets and maps.PEWTER_CITY then
+    local def = maps.PEWTER_CITY
+    local ts = tilesets[def.tileset]
+    local pocket = {}
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if c.x >= 36 and c.y >= 26 then pocket[#pocket + 1] = c.x .. "," .. c.y end
+    end
+    eq(#pocket, 0, "nobody drops in Pewter's fenced corner ("
+       .. table.concat(pocket, " ") .. ")")
+    ok(#Spawn.cellsOf(def, ts, maps, tilesets) > 500,
+       "the town square is still a drop zone")
+  else
+    print("skip: Pewter corner pin (no generated Kanto data)")
+  end
 end
 
 -- ------- bots that hunt (POK-42, POK-43)

@@ -2094,7 +2094,8 @@ return function(mod)
     local data = BR.game and BR.game.data
     local def = data and data.maps[mapId]
     if not def then return {} end
-    local cells = Spawn.cellsOf(def, data.tilesets[def.tileset])
+    local cells = Spawn.cellsOf(def, data.tilesets[def.tileset],
+                                data.maps, data.tilesets)
     cellCache[mapId] = cells
     return cells
   end
@@ -3818,6 +3819,19 @@ return function(mod)
     -- BR:startBotFight).  A WILD encounter or one of Kanto's own trainers
     -- leaves it "alive", which is how this shipped.
     if self.status == "battle" or self:liveLocalBattle() then return end
+    -- ...and the guard above still left a window (the Discord report of a
+    -- party jumping 15 -> 30 against Brock): localBattle is set by
+    -- battle.started, which BattleState emits AFTER it is pushed -- the
+    -- BattleTransition flash before it is a second or two in which the
+    -- rung can land, and the fight then OPENS on freshly-jumped mons.
+    -- Sweep the stack for either state instead of trusting the event's
+    -- timing; same test startBotBattle applies before opening a fight.
+    local BattleTransition = require("src.render.BattleTransition")
+    for _, state in ipairs((self.game.stack and self.game.stack.states) or {}) do
+      if state.awardExp or getmetatable(state) == BattleTransition then
+        return
+      end
+    end
     local now = clock()
     if not now then return end
     if (now - (self.lastLevelTick or 0)) < 1 then return end
