@@ -3630,6 +3630,51 @@ do
      "both cooltrainer brains turn up across a roster")
 end
 
+-- POK-160 item 3: the move layer plays the turn a person would.  It
+-- rides the engine's own additive scoring (base 10, minimum wins), so
+-- these pins are exact scores, not tendencies.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local TypeChart = require("src.battle.TypeChart")
+  TypeChart.load({ type_chart = { types = {}, matchups = {
+    { attacker = "ELECTRIC", defender = "WATER",  multiplier = 20 },
+    { attacker = "ELECTRIC", defender = "GROUND", multiplier = 0 },
+    { attacker = "NORMAL",   defender = "ROCK",   multiplier = 5 },
+  } } })
+  local layer = Bots.MOVE_LAYER
+  eq(layer.kind, "layer", "the move layer is an ai_classes layer record")
+  local data = { moves = {
+    THUNDERBOLT = { power = 95, type = "ELECTRIC" },
+    TACKLE      = { power = 35, type = "NORMAL" },
+    GROWL       = { power = 0,  type = "NORMAL" },
+  } }
+  local user = { curTypes = { "ELECTRIC" }, curMoves = {
+    { id = "THUNDERBOLT", pp = 10 }, { id = "TACKLE", pp = 10 },
+    { id = "GROWL", pp = 10 } } }
+  local function fresh(targetTypes)
+    return { data = data, user = user, target = { curTypes = targetTypes } }
+  end
+  -- vs WATER: THUNDERBOLT is STAB and super-effective -- the pick
+  local v = fresh({ "WATER" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 7,
+     "the biggest expected hit is encouraged past every vanilla nudge")
+  eq(layer.score(v, data.moves.TACKLE, 10), 10, "a lesser neutral hit sits at par")
+  eq(layer.score(v, data.moves.GROWL, 10), 10, "status is left to the vanilla passes")
+  -- vs GROUND: THUNDERBOLT is immune, TACKLE becomes the best hit
+  v = fresh({ "GROUND" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 20, "an immune move is never the pick")
+  eq(layer.score(v, data.moves.TACKLE, 10), 7, "...and the best remaining hit takes over")
+  -- vs ROCK: TACKLE is resisted AND not the best -- discouraged
+  v = fresh({ "ROCK" })
+  eq(layer.score(v, data.moves.TACKLE, 10), 11, "resisted filler waits its turn")
+  -- a mon whose ONLY hit is resisted still swings it rather than sitting down
+  v = { data = data, user = { curTypes = { "NORMAL" },
+                              curMoves = { { id = "TACKLE", pp = 10 } } },
+        target = { curTypes = { "ROCK" } } }
+  eq(layer.score(v, data.moves.TACKLE, 10), 7,
+     "the best available hit is the pick even when resisted")
+end
+
 -- POK-85: the walk over.  Bots.wander is a roam; this is a stride.
 do
   local Bots = require("mods.battle_royale.lib.bots")
