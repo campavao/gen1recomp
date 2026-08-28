@@ -165,6 +165,47 @@ return function(game)
   end
   if not engaged then return C.fail("the fight never staged") end
 
+  -- POK-158 M4: if the bag's TM fits anybody on the team, the fight has
+  -- to open with the move already known.  (The taught mon may also know
+  -- it naturally -- either way it must be on somebody's list.)
+  local battle
+  for _ = 1, 300 do
+    local top = game.stack:top()
+    if type(top) == "table" and top.enemyParty then battle = top break end
+    U.wait(5)
+  end
+  if battle then
+    local BotsLib = require("mods.battle_royale.lib.bots")
+    local rec = E.botRecord(victim.id)
+    local want
+    for _, it in ipairs((rec and rec.bag and rec.bag.items) or {}) do
+      local mv = BotsLib.tmMove(it.id)
+      if mv and game.data.moves[mv] then
+        for _, m in ipairs(battle.enemyParty) do
+          if BotsLib.canLearn(game.data.pokemon[m.species], mv) then
+            want = mv break
+          end
+        end
+      end
+      if want then break end
+    end
+    if want then
+      local found = false
+      for _, m in ipairs(battle.enemyParty) do
+        for _, mv in ipairs(m.moves or {}) do
+          if (type(mv) == "table" and mv.id or mv) == want then found = true end
+        end
+      end
+      if not found then
+        return C.fail(("its TM (%s) fits the team and was never taught")
+          :format(want))
+      end
+      U.log("CAREER: it walked in knowing " .. want)
+    else
+      U.log("CAREER: no teachable TM this seed; teach unchecked")
+    end
+  end
+
   local doneIn
   for i = 1, 3000 do
     if E.status() ~= "battle" and not E.walkUp() and doneIn == nil then

@@ -65,6 +65,15 @@ do
   local clampR = Wire.decode({ t = "botrec", id = 1001,
                                mons = { { s = "MEW", f = 7 } } })
   eq(clampR and clampR.record[1].hpFrac, 1, "fractions clamp to [0,1]")
+  -- the bag rides as a field on the record table itself
+  local recBag = { { species = "PIDGEY", hpFrac = 1 } }
+  recBag.bag = { items = { { id = "POTION", n = 2 } }, money = 750 }
+  local withBag = Wire.decode(Wire.botrec(1001, recBag))
+  ok(withBag and withBag.record.bag, "the bag rides the record")
+  eq(withBag and withBag.record.bag.money, 750, "money intact")
+  eq(withBag and withBag.record.bag.items[1].n, 2, "stacks intact")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = { { s = "A", f = 1 } },
+                   bag = "nope" }) == nil, "a wordy bag is refused")
 
   -- ------- the room door (POK-142)
   --
@@ -2141,6 +2150,43 @@ do
   eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
                      function() return 0 end).kind, "seam",
      "but never into the fog")
+
+  -- ------- the bag lives (POK-158 M2/M4)
+
+  local hurtRec = { { species = "A", hpFrac = 0.3 },
+                    { species = "B", hpFrac = 0.5 } }
+  local bag = { items = { { id = "POKE_BALL", n = 2 },
+                          { id = "SUPER_POTION", n = 1 },
+                          { id = "POTION", n = 1 } }, money = 500 }
+  local used, onto = Bots.quaff(hurtRec, bag)
+  eq(used, "POTION", "the weakest potion that helps goes first")
+  eq(onto and onto.species, "A", "onto the most-hurt mon standing")
+  eq(hurtRec[1].hpFrac, 0.6, "and it helps")
+  eq(#bag.items, 2, "the empty bottle leaves the bag")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0.9 } }, bag), nil,
+     "nobody hurt, nothing drunk")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0 } }, bag), nil,
+     "a potion cannot raise the fainted")
+  local drained = { { species = "A", hpFrac = 0.2 } }
+  eq(Bots.quaff(drained, { items = { { id = "POKE_BALL", n = 9 } } }), nil,
+     "no medicine, no gulp")
+
+  Bots.bagMerge(bag, { items = { { id = "POKE_BALL", n = 3 },
+                                 { id = "TM_ICE_BEAM", n = 1 } },
+                       money = 250 })
+  eq(bag.money, 750, "the money adds")
+  local counts = {}
+  for _, it in ipairs(bag.items) do counts[it.id] = it.n end
+  eq(counts.POKE_BALL, 5, "stacks merge by id")
+  eq(counts.TM_ICE_BEAM, 1, "new items append")
+
+  eq(Bots.tmMove("TM_ICE_BEAM"), "ICE_BEAM", "a TM names its move")
+  eq(Bots.tmMove("POTION"), nil, "a potion does not")
+  ok(Bots.canLearn({ tmhm = { [13] = "ICE_BEAM", [15] = "SWIFT" } },
+                   "ICE_BEAM"), "tmhm says yes")
+  ok(not Bots.canLearn({ tmhm = { [15] = "SWIFT" } }, "ICE_BEAM"),
+     "and no")
+  ok(not Bots.canLearn(nil, "ICE_BEAM"), "an unknown species learns nothing")
 end
 
 -- ------- the endgame hunt (POK-95)

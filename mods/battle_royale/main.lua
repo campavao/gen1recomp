@@ -2312,6 +2312,23 @@ return function(mod)
       rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
       self.botRecords[id] = rec
     end
+    if not rec.bag then
+      -- The bag is part of the record now (POK-158 M2): the authored
+      -- staples plus the seeded TM, derived identically everywhere like
+      -- the drop mon -- and then LIVED OUT OF: potions get drunk, looted
+      -- bags fold in.  Rows are copies: BOT_LOOT is shared authored data
+      -- and a bot drinking from it would drink for every bot at once.
+      local items = {}
+      for _, it in ipairs(BOT_LOOT.items) do
+        items[#items + 1] = { id = it.id, n = it.n }
+      end
+      local tm = Bots.lootTM(self.matchSeed, id)
+      local data = self.game and self.game.data
+      if tm and data and data.items and data.items[tm] then
+        items[#items + 1] = { id = tm, n = 1 }
+      end
+      rec.bag = { items = items, money = BOT_LOOT.money }
+    end
     return rec
   end
 
@@ -2341,14 +2358,24 @@ return function(mod)
   -- yet, and eating one would erase loot a player could still use.
   function BR:botLoot(id, p)
     local rec = self:botRecord(id)
-    if #rec >= Bots.recordCap() then return end
     local key = self.spills and self.spills:keyAt(p.map, p.x, p.y)
     local ball = key and self.spills:get(key)
-    if not (ball and ball.species) or ball.bag then return end
+    if not ball then return end
+    if ball.bag then
+      -- a fallen trainer's bag folds into the bot's own (POK-158 M2):
+      -- the potions get drunk later, the TMs get taught, the money rides
+      -- to whoever finally beats it
+      Bots.bagMerge(rec.bag, ball)
+      log:say("LOOTED: %s took %s's bag", tostring(p.name),
+              tostring(ball.name or "someone"))
+    elseif ball.species and #rec < Bots.recordCap() then
+      rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+      log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
+              tostring(ball.species), #rec)
+    else
+      return
+    end
     self.spills:take(key)
-    rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
-    log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
-            tostring(ball.species), #rec)
     if self.relay then
       self.relay:broadcast(Wire.took(key))
       self.relay:broadcast(Wire.botrec(id, rec))
@@ -2407,9 +2434,10 @@ return function(mod)
       -- rule the player's nurse serves by: not once the fog has the town
       heal = (Bots.wantsHeal(rec) and not self:fogOver(p.map))
         and self:centerDoorOn(p.map) or nil,
-      -- loot is only an errand while there is room to pocket it
-      items = (self.spills and #rec < Bots.recordCap())
-        and self.spills:cellsOn(p.map) or nil,
+      -- loot is only an errand while something there can be taken: any
+      -- of it with room in the party, just the bags without
+      items = self.spills
+        and self.spills:cellsOn(p.map, #rec >= Bots.recordCap()) or nil,
       grass = self:grassOn(p.map),
       -- the floor under every other errand: a bot must always have
       -- somewhere it can walk HERE, or a town with no grass freezes it
@@ -4413,8 +4441,14 @@ return function(mod)
           local winner = (w == "a") and a or b
           local loser = (w == "a") and b or a
           self:eliminateBot(loser.id, loser.p, winner.p.name)
+          local wrec = self:botRecord(winner.id)
+          local drank = Bots.quaff(wrec, wrec.bag)
+          if drank then
+            log:say("POTION: %s used its %s", tostring(winner.p.name),
+                    tostring(drank))
+          end
           if self.relay then
-            self.relay:broadcast(Wire.botrec(winner.id, self:botRecord(winner.id)))
+            self.relay:broadcast(Wire.botrec(winner.id, wrec))
           end
           return
         end
@@ -4437,17 +4471,17 @@ return function(mod)
     self:checkWinner()
   end
 
-  -- A bot's bag: the authored staples plus its one seeded TM (POK-62),
-  -- the same answer for the spill on the ground and the spectator's peek
+  -- A bot's bag: what its RECORD is actually carrying by now (POK-158),
+  -- the same answer for the spill on the ground and the spectator's peek.
+  -- A copy, so the spill/peek plumbing (which decorates the table) never
+  -- writes into the record.
   function BR:botBag(id)
+    local bag = self:botRecord(id).bag or { items = {}, money = 0 }
     local items = {}
-    for _, it in ipairs(BOT_LOOT.items) do items[#items + 1] = it end
-    local tm = Bots.lootTM(self.matchSeed, id)
-    local data = self.game and self.game.data
-    if tm and data and data.items and data.items[tm] then
-      items[#items + 1] = { id = tm, n = 1 }
+    for _, it in ipairs(bag.items or {}) do
+      items[#items + 1] = { id = it.id, n = it.n }
     end
-    return { items = items, money = BOT_LOOT.money }
+    return { items = items, money = bag.money or 0 }
   end
 
   -- A bot's loot: its team as balls and its authored bag (botBag -- a
@@ -4468,6 +4502,49 @@ return function(mod)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
       self.spills:add(spill)
+    end
+  end
+
+  -- Taught ahead of time (POK-158 M4).  A bot's bag has carried a seeded
+  -- TM since POK-62; now the moves inside actually reach its mons: at
+  -- fight build, each TM in the bag is offered to the first compatible
+  -- mon (the species' own tmhm list), whose default moveset gets its
+  -- oldest move swapped for it.  BattleState honours a party slot's
+  -- `moves` list, so this rides the engine's own seam.  The TM stays in
+  -- the bag for the winner -- the teaching happened "before the match",
+  -- and eating it would starve the TM economy POK-62 built.  Two teaches
+  -- at most: a team that is nothing but machine moves reads as a hack,
+  -- not an ace.
+  function BR:teachBotMoves(rows)
+    local data = self.game and self.game.data
+    local rec = self.botFight and self:botRecord(self.botFight)
+    local bag = rec and rec.bag
+    if not (data and bag) then return end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local taught = 0
+    for _, it in ipairs(bag.items or {}) do
+      if taught >= 2 then break end
+      local moveId = Bots.tmMove(it.id)
+      if moveId and data.moves and data.moves[moveId] then
+        for _, row in ipairs(rows) do
+          if not row.moves
+             and Bots.canLearn(data.pokemon and data.pokemon[row.species], moveId) then
+            local okM, built = pcall(Pokemon.new, data, row.species, row.level)
+            local ids, dup = {}, false
+            for _, mv in ipairs((okM and built and built.moves) or {}) do
+              local mid = type(mv) == "table" and mv.id or mv
+              ids[#ids + 1] = mid
+              if mid == moveId then dup = true end
+            end
+            if not dup and #ids > 0 then
+              if #ids >= 4 then ids[1] = moveId else ids[#ids + 1] = moveId end
+              row.moves = ids
+              taught = taught + 1
+            end
+            break -- one attempt per TM: taught, or it already knew it
+          end
+        end
+      end
     end
   end
 
@@ -4515,6 +4592,7 @@ return function(mod)
     end
     self.botParty = rows
     self.botFightIdx = idx
+    self:teachBotMoves(rows)
     local look = self.players[botId]
     local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
@@ -5018,9 +5096,16 @@ return function(mod)
        and ev.battle.enemyParty then
       -- The fight is over and the bot lived: it keeps its wounds
       -- (POK-158).  Whoever fought it is the one client that knows the
-      -- outcome, so this client writes the scars and tells the room.
+      -- outcome, so this client writes the scars and tells the room --
+      -- and the bot reaches for its own bag on the way out, the way a
+      -- player patches a lead before walking on.
       local rec = BR:botRecord(botId)
       Bots.scarRecord(rec, fightIdx, ev.battle.enemyParty)
+      local drank = Bots.quaff(rec, rec.bag)
+      if drank then
+        log:say("POTION: %s used its %s", tostring(BR.players[botId]
+          and BR.players[botId].name), tostring(drank))
+      end
       if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
     end
     if ev.result == "win" then
@@ -6625,6 +6710,13 @@ return function(mod)
     local out = {}
     for i, m in ipairs(rec) do
       out[i] = { species = m.species, hpFrac = m.hpFrac }
+    end
+    if rec.bag then
+      local items = {}
+      for i, it in ipairs(rec.bag.items or {}) do
+        items[i] = { id = it.id, n = it.n }
+      end
+      out.bag = { items = items, money = rec.bag.money or 0 }
     end
     return out
   end
