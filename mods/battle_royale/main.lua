@@ -935,6 +935,10 @@ return function(mod)
     -- ("setPhase would log a teardown as a new match") and so does BR:reset,
     -- so a disarm inside setPhase would never fire on the way out.
     disarmScriptWrap()
+    -- ...and the route trainers get their sight lines back (POK-150):
+    -- emptying the live talk tables re-exposes vanilla engagement, and
+    -- the disarm is idempotent so the save-event net may call it too
+    self:disarmTrainerTalk()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -1335,6 +1339,9 @@ return function(mod)
     -- exit (POK-155).  Before setPhase, so no script can dispatch a row in
     -- the new phase ahead of the guard that reads it.
     armScriptWrap()
+    -- ...and route trainers go opt-in for the same window (POK-150):
+    -- their sight lines stand down, their talk still fights
+    self:armTrainerTalk()
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -5707,6 +5714,91 @@ return function(mod)
     })
   end
 
+  -- ------- NPC trainers stop engaging on sight (POK-150)
+  --
+  -- "I had to get thru a gauntlet of trainers which I didn't want to do.
+  -- I think it actually hurts exploration."  For the length of a match a
+  -- route trainer is an OPT-IN resource: walking past one costs nothing,
+  -- talking to one still starts the vanilla fight -- the reward stays,
+  -- the toll goes.
+  --
+  -- The lever is the engine's own: checkTrainerSight skips any trainer
+  -- whose TEXT constant has a talk script (a scripted trainer runs its
+  -- own show), and talkTo hands a Lua talk handler the overworld and the
+  -- npc.  So every GENERIC trainer gets a handler that does exactly what
+  -- talkTo's own trainer branch does -- engage, or the after-text -- and
+  -- only the ambush is gone.  Trainers with a base talk script are left
+  -- alone: those are the set pieces, and gyms stay bosses (their leader
+  -- was always reached by talking).
+  --
+  -- The talk tables are LIVE and registered AT LOAD (the registry is
+  -- frozen after it): one empty table per map that has a trainer object,
+  -- filled at onStart and emptied at resetMatch, with
+  -- MapScripts.invalidate flushing the per-map view cache both ways.
+  -- Outside a session every contribution is an empty table, so vanilla
+  -- sight is untouched in real playthroughs.
+  local trainerTalk = {}   -- mapId -> the live talk table
+
+  do
+    -- Data loads before mods, so the map roster is enumerable here; the
+    -- per-TEXT choices wait for arm time, when the base scripts are
+    -- certainly attached.
+    local okD, EngineData = pcall(require, "src.core.Data")
+    for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
+      for _, o in ipairs(def.objects or {}) do
+        if o.trainerClass and o.text then
+          trainerTalk[mapId] = {}
+          mod.content.map_scripts:register(mapId, { talk = trainerTalk[mapId] })
+          break
+        end
+      end
+    end
+  end
+
+  local function trainerTalkHandler(game, ow, npc, onDone)
+    local done = onDone or function() end
+    local d = npc and npc.def
+    if not (d and d.trainerClass) then return done() end
+    npc:facePlayer(ow.player)
+    if not ow:trainerDefeated(npc) then
+      return ow:engageTrainer(npc, done)
+    end
+    local header = game.data:trainerHeader(ow.map.def.label, d.index)
+    local after = header and header.after and game.data.text[header.after]
+    if not after then return done() end
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game, after, done))
+  end
+
+  function BR:armTrainerTalk()
+    local data = self.game and self.game.data
+    if not data or not data.maps then return end
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    if not okMS then return end
+    for mapId, T in pairs(trainerTalk) do
+      local touched = false
+      local def = data.maps[mapId]
+      for _, o in ipairs((def and def.objects) or {}) do
+        if o.trainerClass and o.text and not T[o.text]
+           and not MapScripts.baseTalk(mapId, o.text) then
+          T[o.text] = trainerTalkHandler
+          touched = true
+        end
+      end
+      if touched then MapScripts.invalidate(mapId) end
+    end
+  end
+
+  function BR:disarmTrainerTalk()
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    for mapId, T in pairs(trainerTalk) do
+      if next(T) then
+        for k in pairs(T) do T[k] = nil end
+        if okMS then MapScripts.invalidate(mapId) end
+      end
+    end
+  end
+
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
     -- play (POK-84).  Same reason as the START row, so the same window:
@@ -5872,15 +5964,17 @@ return function(mod)
     -- shading it once per map would stack the alpha into a solid black blot.
     local all = Fog.coversAll(radius)
     g.setColor(0.25, 0.15, 0.35, 0.55)
-    -- the LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
+    -- The LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
     -- and the art runs to its edges -- shading only the location grid left
     -- a bright strip down the right and along the bottom, glaring once the
     -- fog covered everything.  A cell past the grid can never be inside the
     -- ring, so walking the whole screen is correct in every phase.
+    -- Fog.shadesTile owns the screen-vs-location offset (POK-146):
+    -- comparing raw screen tiles against the ring's centre drew the safe
+    -- region a town up and to the left of the one the fog announced.
     for gy = 0, 17 do
       for gx = 0, 19 do
-        local dx, dy = gx - center.x, gy - center.y
-        if all or (dx * dx + dy * dy) > (radius * radius) then
+        if Fog.shadesTile(center, radius, gx, gy) then
           g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
                       GRID * sx, GRID * sy)
         end
@@ -5892,7 +5986,8 @@ return function(mod)
     if not all then
       g.setColor(1, 1, 1, 0.9)
       g.setLineWidth(math.max(1, sx))
-      g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
+      g.rectangle("line", ox + (center.x + Fog.MAP_OX) * GRID * sx,
+                  oy + (center.y + Fog.MAP_OY) * GRID * sy,
                   GRID * sx, GRID * sy)
     end
     g.pop()
@@ -6031,9 +6126,14 @@ return function(mod)
     local g = gbCanvas(viewport)
     g.setColor(1, 1, 1, 1)
 
-    -- top-right: the count
+    -- Top-right: the count -- dropped a row while the SAFARI clock is up
+    -- (POK-152).  The clock box is 13 tiles wide and the count up to 9 on
+    -- a 20-tile row, so they overlapped on tiles 11-12, and the clock
+    -- painted second: a full lobby read "1 LEFT" with the 3 underneath
+    -- the clock's border.  The other top-left boxes (FOG!, the watched
+    -- name) are 9 tiles at most, so row 0 is safe everywhere else.
     local left = ("%d LEFT"):format(BR:aliveCount())
-    hudBox(left, 20 - (#left + 2), 0)
+    hudBox(left, 20 - (#left + 2), BR.phase == "safari" and 3 or 0)
 
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
@@ -6211,6 +6311,7 @@ return function(mod)
     if not BR.arming then
       BR.matchWorld = false
       BR:unsuspendMods()
+      BR:disarmTrainerTalk()
     end
   end)
 
@@ -6218,6 +6319,7 @@ return function(mod)
   mod.events:on("save.loaded", function()
     BR.matchWorld = false
     BR:unsuspendMods()
+    BR:disarmTrainerTalk()
   end)
 
   -- Pick up the game handle early, and rescue a career written before
