@@ -989,6 +989,7 @@ return function(mod)
     self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
+    self.botFightPos = nil
     self.botParty = nil
     self.npcFight = nil
     self.ring = nil
@@ -1941,11 +1942,17 @@ return function(mod)
       -- engage LATER, never earlier, and an idle ghost is snapped onto the
       -- truth by the very next sync.
       local gx, gy = self.ghosts:cellOf(id)
-      others[#others + 1] = { id = id, map = p.map, x = gx or p.x,
-                              y = gy or p.y,
-                              facing = p.facing, moving = false,
-                              status = p.status,
-                              busy = p.status == "battle" }
+      -- No drawn ghost, no engage (POK-149).  The old `gx or p.x` fallback
+      -- was the pop-in: a bot that had just crossed a seam onto this map
+      -- could be fought off its wire cell before this screen had drawn it
+      -- at all -- "I couldn't see them before the ! appeared".  Skipping it
+      -- only ever delays the engage a beat, until the ghost exists.
+      if gx then
+        others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
+                                facing = p.facing, moving = false,
+                                status = p.status,
+                                busy = p.status == "battle" }
+      end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
     -- are entities rather than map tiles (a body in the way is exactly the
@@ -1988,6 +1995,58 @@ return function(mod)
     -- and the challenger flashes while the challenge flies (POK-55)
     if ow then
       ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+    end
+  end
+
+  -- The other half of the eyeline (POK-149).  tryEngage is the player
+  -- spotting somebody; nothing ever let a bot spot the PLAYER, so the only
+  -- way a bot fight started was the player standing still, facing it, at
+  -- whatever range it had already closed to -- and the walk-up beat
+  -- (POK-85) was built for a range nobody ever engaged at.  Now a bot
+  -- whose own facing crosses you calls the fight the way a route trainer
+  -- does: the ! goes up over ITS head, it walks over, the battle opens.
+  --
+  -- Local, like every bot fight: each client tests its own player against
+  -- the bots on its map, and whoever is seen fights the team every client
+  -- derives from the seed anyway.
+  function BR:tryBotEngage()
+    if self.status ~= "alive" or self.battle or self.pending
+       or self.botFight then return end
+    local ow = mod.world:overworld()
+    local player = ow and ow.player
+    if not (player and ow.map) or ow.transitioning then return end
+    local map = ow.map
+    local blocked = function(x, y)
+      return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
+    end
+    -- inbound honours a flee's grace only, like an inbound challenge
+    local avoid = self:fleeAvoid(false)
+    local me = { { id = self.myId, map = map.id, x = player.cellX,
+                   y = player.cellY, facing = player.facing, moving = false,
+                   status = "alive", busy = false } }
+    for id, p in pairs(self.players) do
+      if Bots.isBot(id) and p.status == "alive" and p.map == map.id
+         and not avoid[id] then
+        -- its GHOST's cell, never its wire cell, for the same reason
+        -- tryEngage asks the screen (POK-96): a bot this client has not
+        -- drawn cannot call a fight
+        local gx, gy = self.ghosts:cellOf(id)
+        if gx and Engage.target(
+             { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
+               moving = false, status = "alive", busy = p.busy and true },
+             me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
+          self.pending = { to = id, nonce = -1, host = true }
+          engageFlash(self.ghosts:npcOf(id), function()
+            BR:walkUpThen(id, function()
+              if BR.pending and BR.pending.to == id then BR.pending = nil end
+              if BR.status == "alive" and not BR.battle and not BR.botFight then
+                BR:startBotBattle(id)
+              end
+            end)
+          end)
+          return
+        end
+      end
     end
   end
 
@@ -2106,7 +2165,20 @@ return function(mod)
       -- no safe-here exemption: standing still is exactly the failure
       -- being fixed.  homeward still holds when no exit is any closer.
       dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
-      if not dest then p.lastRoam = now return end
+      if not dest then
+        local hereD = hunt(p.map)
+        if hereD and hereD > 0 then
+          -- A PLATEAU, not an arrival (POK-153): the target is on another
+          -- map, yet no seam is strictly closer at town-map grain, so the
+          -- hunt had nothing to say and the bot paced here forever.  Head
+          -- for the ring's eye instead -- the user's own fallback ask --
+          -- and failing even that, any seam beats standing still.
+          dest = (dist and Bots.homeward(exits,
+                    function(m) return dist[m] end, nil, p.rng))
+            or exits[p.rng(1, #exits)]
+        end
+        if not dest then p.lastRoam = now return end
+      end
     elseif dist then
       -- holding still is only wisdom INSIDE the ring; outside it, the
       -- least-bad seam beats waiting for the fog
@@ -2315,6 +2387,47 @@ return function(mod)
     return dir
   end
 
+  -- The stalk, at cell grain (POK-153).  Same-map prey used to get the
+  -- greedy Bots.wander(toward), and greedy is exactly what paces: two
+  -- blocked candidate directions at a ledge or a fence and the march
+  -- turns back into shuffling -- which a spectator at three-left watched
+  -- a bot do indefinitely.  A stalk deserves what errands already have:
+  -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
+  function BR:stepBotHunt(id, p, prey)
+    -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
+    -- not stay over its head while it walks somebody down
+    if p.busy then self:markBot(id, p, nil) end
+    p.dwellUntil = nil
+    -- adjacent is as close as a stalk gets; the eyelines do the rest
+    if math.abs(prey.x - p.x) + math.abs(prey.y - p.y) <= 1 then
+      p.huntPath, p.huntFor = nil, nil
+      return nil
+    end
+    if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    local stale = not (p.huntPath and p.huntPath[1])
+      or p.huntMap ~= p.map
+      or not p.huntFor
+      or (math.abs(p.huntFor.x - prey.x) + math.abs(p.huntFor.y - prey.y)) > 2
+    if stale then
+      p.huntMap, p.huntFor = p.map, { x = prey.x, y = prey.y }
+      p.huntPath = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+                             { x = p.x, y = p.y },
+                             { x = prey.x, y = prey.y })
+      if not p.huntPath then
+        -- unreachable -- a Surf pocket, a ledge-locked hollow: the greedy
+        -- step is still better than standing down
+        return Bots.wander(p, p.rng, canWalk, prey)
+      end
+    end
+    local dir = table.remove(p.huntPath, 1)
+    local d = dir and Bots.DELTA[dir]
+    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+      p.huntPath = nil        -- somebody moved into us; repath next beat
+      return nil
+    end
+    return dir
+  end
+
   function BR:tickBots()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     local now = clock()
@@ -2323,9 +2436,20 @@ return function(mod)
     -- roster thins (POK-95) and every bot reads the same roster -- but the
     -- TIER half is per bot (POK-121), so the multiply happens inside.
     local alive = self:aliveCount()
+    -- self.players never holds the local player (the huntDistOf lesson),
+    -- so the host's own trainer was invisible to every same-map hunt: on a
+    -- solo match no bot ever walked at the player at all, and "hunt the
+    -- nearest trainer, bot or human" only ever meant remote humans.
+    local meHere = (self.phase == "match" and self.status == "alive")
+      and here() or nil
     for id, p in pairs(self.players) do
-      -- a bot on its way over is not also strolling somewhere (POK-85)
-      if p.bot and p.status == "alive" and p.map and id ~= striding then
+      -- a bot on its way over is not also strolling somewhere (POK-85),
+      -- and the one we are FIGHTING stands its ground (POK-154): walkUp is
+      -- cleared the moment the battle opens, so without this the opponent
+      -- resumed roaming behind the battle screen and its loot spilled
+      -- wherever it had wandered to by the end
+      if p.bot and p.status == "alive" and p.map and id ~= striding
+         and id ~= self.botFight then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
@@ -2347,6 +2471,9 @@ return function(mod)
           -- (not in the Safari: nobody fights there, and a ghost body
           -- closing in on you is a wall in a phase with no way past it)
           local prey
+          if meHere and meHere.mapId == p.map then
+            prey = { x = meHere.x, y = meHere.y }
+          end
           for otherId, o in pairs(self.phase == "match" and self.players or {}) do
             if otherId ~= id and o.status == "alive" and o.map == p.map then
               if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
@@ -2356,8 +2483,8 @@ return function(mod)
             end
           end
           -- Prey outranks any errand: a trainer on your map is what you
-          -- came for.  The hunt keeps Bots.wander, which is right for it --
-          -- a stalk should wobble.
+          -- came for.  The stalk walks a real path now (POK-153) -- see
+          -- stepBotHunt for why greedy wandering paced instead.
           --
           -- Everything else is an ERRAND now (POK-121).  The old version
           -- picked a far random walkable cell and biased wander toward it,
@@ -2368,8 +2495,10 @@ return function(mod)
           -- turned the march back into pacing, which is exactly what a
           -- watched bot must never do.
           local dir
-          if prey or self.phase ~= "match" then
-            dir = Bots.wander(p, p.rng, canWalk, prey)
+          if prey then
+            dir = self:stepBotHunt(id, p, prey)
+          elseif self.phase ~= "match" then
+            dir = Bots.wander(p, p.rng, canWalk, nil)
           else
             dir = self:stepBotErrand(id, p, now)
           end
@@ -2397,15 +2526,16 @@ return function(mod)
     return field and field.townMap and field.townMap.locations
   end
 
-  -- the named places worth closing the ring on
-  local function townList()
+  -- the named places worth closing the ring on; `all` widens it from the
+  -- fly towns to every outdoor map the Town Map can place (the routes)
+  local function townList(all)
     local locations = townLocations()
     local maps = BR.game and BR.game.data and BR.game.data.maps
     if not (locations and maps) then return {} end
     local Map = require("src.world.Map")
     local out = {}
     for id, def in pairs(maps) do
-      if Map.isOutdoor(def) and Map.isFlyTown(def) and locations[id] then
+      if Map.isOutdoor(def) and (all or Map.isFlyTown(def)) and locations[id] then
         out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
                           name = locations[id].name or id }
       end
@@ -2605,12 +2735,31 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
-  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- Where a BOT can be dealt at the buzzer: the fly towns AND the routes
+  -- (POK-147).  The player's picker stays towns-only -- a town is a place
+  -- you can name -- but a thirty-bot deal over eleven towns wraps into
+  -- guaranteed pairs standing in each other's sight-line at t=0, and the
+  -- roster was resolving itself before anybody met anybody.  Kanto has 34
+  -- placeable outdoor maps, so at Bots.MAX every bot starts a map of its
+  -- own and the early fights go back to being found, not dealt.
+  function BR:botDropSpots()
+    local spots = townList(true)
+    local maps = (self.game and self.game.data and self.game.data.maps) or {}
+    table.sort(spots, function(a, b)
+      local ia = maps[a.id] and maps[a.id].index or 0
+      local ib = maps[b.id] and maps[b.id].index or 0
+      if ia ~= ib then return ia < ib end
+      return a.id < b.id
+    end)
+    return spots
+  end
+
+  -- host only: at the buzzer the bots are DEALT drop maps -- the deck, not
+  -- the dice (POK-43), so no two share one while maps remain and the drop
   -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
-    local towns = self:dropTowns()
+    local towns = self:botDropSpots()
     if #towns == 0 then return end
     local now = clock() or 0
     local ids = {}
@@ -4101,7 +4250,8 @@ return function(mod)
     if not now then return end
     local live = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map
+      -- the bot in OUR battle screen is not free to be jumped (POK-154)
+      if p.bot and p.status == "alive" and p.map and id ~= self.botFight
          and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
         live[#live + 1] = { id = id, p = p }
       end
@@ -4192,6 +4342,11 @@ return function(mod)
     self.status = "battle"
     self.botFight = botId
     self.botFightAt = clock()
+    -- Where the fight is happening, kept for the spill (POK-154).  On the
+    -- host the roam exclusion above freezes the bot anyway, but a non-host
+    -- client keeps receiving the host's steps for it, so by battle.ended
+    -- bot.map/x/y can be a seam away from where anybody fought.
+    self.botFightPos = { map = bot.map, x = bot.x, y = bot.y }
     self.pending = nil
     broadcastPlace()
 
@@ -4209,6 +4364,7 @@ return function(mod)
       mod.log:warn("couldn't start a bot battle: %s", tostring(battle))
       self.status = "alive"
       self.botFight = nil
+      self.botFightPos = nil
       return
     end
     -- Overlay the bot's own name on the class chassis, the engine's own
@@ -4660,19 +4816,27 @@ return function(mod)
     end
     local botId = BR.botFight
     if not botId then return end
-    BR.botFight = nil
+    local fightPos = BR.botFightPos
+    BR.botFight, BR.botFightPos = nil, nil
     if BR.status == "battle" then BR.status = "alive" end
     if ev.result == "win" then
       local bot = BR.players[botId]
-      if bot then
-        bot.status = "out"
-        BR.ghosts:despawn(botId)
-        BR:spillBot(botId, bot)
+      -- `alive` guards the race where the host already put this bot out
+      -- while our battle screen was up -- eliminating it twice would spill
+      -- its loot twice
+      if bot and bot.status == "alive" then
+        -- the loot lands where the fight happened, beside the winner, not
+        -- wherever the tracked position drifted to mid-battle (POK-154)
+        if fightPos then
+          bot.map, bot.x, bot.y = fightPos.map, fightPos.x, fightPos.y
+        end
+        -- eliminateBot, not an inline copy of it: the copy had drifted to
+        -- omit the OUT log line, so the one elimination the player caused
+        -- was the one the log never showed
+        BR:eliminateBot(botId, bot, BR:playerName())
       end
-      if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
       if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
-      BR:checkWinner()
     end
     broadcastPlace()
   end)
@@ -5072,7 +5236,10 @@ return function(mod)
           BR.spills:sync(h.mapId)
           -- nobody fights in the Safari (POK-21), nor at the gate on the
           -- way out of it
-          if BR.phase == "match" then BR:tryEngage() end
+          if BR.phase == "match" then
+            BR:tryEngage()
+            BR:tryBotEngage()
+          end
         end
       end
       -- the Safari opening: its clock, the buzzer's patience running out
@@ -6035,11 +6202,16 @@ return function(mod)
   end
   -- what the spill table has placed, and what it could not (for drivers)
   mod.exports.spillState = function()
-    local spawned, failed = {}, {}
+    local spawned, failed, balls = {}, {}, {}
     for key, npcId in pairs(BR.spills.spawned or {}) do spawned[key] = npcId end
     for key, why in pairs(BR.spills.failed or {}) do failed[key] = why end
-    return { spawned = spawned, failed = failed, here = mod.world:current(),
-             lastSync = BR.spills.lastSync }
+    -- where each ball actually sits, so a driver can assert a spill landed
+    -- where the fight happened and not where the bot drifted to (POK-154)
+    for key, ball in pairs(BR.spills.balls or {}) do
+      balls[key] = { map = ball.map, x = ball.x, y = ball.y }
+    end
+    return { spawned = spawned, failed = failed, balls = balls,
+             here = mod.world:current(), lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a

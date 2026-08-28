@@ -245,6 +245,13 @@ Bots.FIGHT_COOLDOWN = 12
 -- Two bots notice each other about as far off as a player would.
 Bots.NOTICE = 3
 
+-- How far a bot SEES a player down its own facing (POK-149).  Four cells
+-- is the longest sight line Gen 1 gives its own trainers, and it is
+-- deliberately shorter than the player's eyeline (Engage.RANGE): spotting
+-- first is the player's edge, being spotted is the price of blundering
+-- across a line.
+Bots.SIGHT = 4
+
 function Bots.isBot(id)
   return type(id) == "number" and id >= Bots.ID_BASE
 end

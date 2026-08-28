@@ -1969,6 +1969,30 @@ do
   ok(not dup, "no two bots share a town while towns remain")
   eq(#Bots.dealTowns(3, 7, Spawn.rng(7)), 7, "more bots than towns still all land")
 
+  -- POK-147: the deal only avoids sharing WHILE MAPS REMAIN, so the pool
+  -- has to be at least the roster.  Eleven fly towns under thirty bots
+  -- wrapped into 2-3 per town, all in sight-line at t=0, and 18 of 31
+  -- trainers were gone before the player met anybody.  The bot deal now
+  -- draws from every outdoor map the Town Map can place (BR:botDropSpots);
+  -- this pins that Kanto actually offers Bots.MAX of them.
+  do
+    local okData, maps = pcall(dofile, "data/generated/maps.lua")
+    local okField, field = pcall(dofile, "data/generated/field.lua")
+    local locs = okField and field and field.townMap and field.townMap.locations
+    if okData and maps and locs then
+      local Map = require("src.world.Map")
+      local spots = 0
+      for id, def in pairs(maps) do
+        if Map.isOutdoor(def) and locs[id] then spots = spots + 1 end
+      end
+      ok(spots >= Bots.MAX,
+         "enough placeable outdoor maps that a full deal never wraps ("
+         .. spots .. " for " .. Bots.MAX .. " bots)")
+    else
+      print("skip: bot drop pool (no generated Kanto data)")
+    end
+  end
+
   -- POK-62: the TM in the bag
   local inPool = {}
   for _, id in ipairs(Bots.TM_COMMON) do inPool[id] = true end
