@@ -48,7 +48,23 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 9, "a room that can name a build mismatch is PROTOCOL 9")
+  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+
+  -- botrec (POK-158): the record on the wire
+  local br = Wire.decode(Wire.botrec(1001, {
+    { species = "PIDGEY", hpFrac = 1 }, { species = "EKANS", hpFrac = 0.4 },
+  }))
+  ok(br ~= nil, "botrec round-trips")
+  eq(br and #br.record, 2, "both mons arrive")
+  eq(br and br.record[2].hpFrac, 0.4, "the wound arrives with them")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = {} }) == nil,
+     "an empty record is refused")
+  ok(Wire.decode({ t = "botrec", id = 1001,
+                   mons = { { s = "A", f = "x" } } }) == nil,
+     "a wordy hp fraction is refused")
+  local clampR = Wire.decode({ t = "botrec", id = 1001,
+                               mons = { { s = "MEW", f = 7 } } })
+  eq(clampR and clampR.record[1].hpFrac, 1, "fractions clamp to [0,1]")
 
   -- ------- the room door (POK-142)
   --
@@ -1938,6 +1954,27 @@ do
   ok(not none[key(0, 0)], "no seeds, no region")
   local edge = Spawn.floodEscapable(8, 6, isWalk, { { x = -3, y = 99 } })
   ok(not edge[key(0, 0)], "an out-of-bounds seed seeds nothing")
+
+  -- An edge is only a way out where the step actually CROSSES.  Pewter's
+  -- fenced south-east corner touches the south edge, but ROUTE_2 is half
+  -- Pewter's width and every landing from that stretch clamps onto a
+  -- tree -- a real player was dropped there with no Fly and no way out.
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and maps and tilesets and maps.PEWTER_CITY then
+    local def = maps.PEWTER_CITY
+    local ts = tilesets[def.tileset]
+    local pocket = {}
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if c.x >= 36 and c.y >= 26 then pocket[#pocket + 1] = c.x .. "," .. c.y end
+    end
+    eq(#pocket, 0, "nobody drops in Pewter's fenced corner ("
+       .. table.concat(pocket, " ") .. ")")
+    ok(#Spawn.cellsOf(def, ts, maps, tilesets) > 500,
+       "the town square is still a drop zone")
+  else
+    print("skip: Pewter corner pin (no generated Kanto data)")
+  end
 end
 
 -- ------- bots that hunt (POK-42, POK-43)
@@ -2012,6 +2049,98 @@ do
   end
   ok(prizes >= 20 and prizes <= 100,
      "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
+
+  -- ------- the record (POK-158 M1): a team a bot BUILDS, not a synth
+
+  local rec = Bots.newRecord(4242, 1001, nil)
+  eq(#rec, 1, "one mon at the drop, whatever the tier")
+  eq(rec[1].hpFrac, 1, "and it is healthy")
+  eq(Bots.newRecord(4242, 1001, nil)[1].species, rec[1].species,
+     "the drop mon is derived: two lazy creations agree")
+
+  eq(Bots.recordCap(), 6, "every bot builds to a full six, like a player")
+
+  local team = {
+    { species = "PIDGEY", hpFrac = 1 },
+    { species = "RATTATA", hpFrac = 0 },     -- fainted last fight
+    { species = "EKANS", hpFrac = 0.4 },
+  }
+  local rows, idx = Bots.fightRows(team, 30)
+  eq(#rows, 2, "a fainted mon does not fight")
+  eq(rows[1].species, "PIDGEY", "record order holds")
+  eq(rows[2].species, "EKANS", "the hurt one still answers the bell")
+  eq(rows[1].level, 30, "every fight is at the rung")
+  eq(idx[2], 3, "idx maps each row back to its record slot")
+  eq(#Bots.spillRows(team, 30), 3, "the spill counts the fallen too")
+
+  -- the fight ends; the enemyParty rows land back on the right mons
+  Bots.scarRecord(team, idx, {
+    { hp = 12, stats = { hp = 48 } },        -- PIDGEY down to a quarter
+    { hp = 0, stats = { hp = 40 } },         -- EKANS fainted
+  })
+  eq(team[1].hpFrac, 0.25, "damage carries out of the fight")
+  eq(team[2].hpFrac, 0, "an untouched fainted mon stays fainted")
+  eq(team[3].hpFrac, 0, "a mon lost in the fight is recorded lost")
+  ok(Bots.recordAlive(team), "one healthy mon is still a trainer")
+  ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
+     "a wiped record is not")
+
+  -- catches: capped by tier, paced by chance, drawn from the map's table
+  local slots = { { species = "CATERPIE", level = 4 } }
+  local always = function(a, b) if a then return a end return 0 end
+  local never = function(a, b) if a then return a end return 0.99 end
+  local r2 = { { species = "MANKEY", hpFrac = 1 } }
+  eq(Bots.rollCatch(r2, 2, slots, always), "CATERPIE", "a dwell can catch")
+  eq(#r2, 2, "and the team grew")
+  eq(r2[2].hpFrac, 1, "a fresh catch is healthy")
+  eq(Bots.rollCatch(r2, 2, slots, always), nil, "the cap is the cap")
+  eq(Bots.rollCatch({ {} }, 6, slots, never), nil, "most dwells catch nothing")
+  eq(Bots.rollCatch({ {} }, 6, {}, always), nil, "no grass table, no catch")
+
+  -- ------- the records fight (POK-158 M3)
+
+  local sim = { pokemon = {
+    BIG = { baseStats = { hp = 100, attack = 100, defense = 100,
+                          speed = 100, special = 100 } },
+    SMALL = { baseStats = { hp = 20, attack = 20, defense = 20,
+                            speed = 20, special = 20 } },
+  } }
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 1 } }, sim), 500,
+     "power is the base-stat total")
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 0.5 },
+                        { species = "SMALL", hpFrac = 0 } }, sim), 250,
+     "wounds scale it and faints zero it")
+  eq(Bots.recordPower({ { species = "WHO", hpFrac = 1 } }, nil), 300,
+     "an unplaceable species gets the middling default")
+
+  local recA = { { species = "BIG", hpFrac = 1 } }
+  local recB = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA, recB, sim, function() return 0.5 end), "a",
+     "the stronger team usually wins")
+  eq(recA[1].hpFrac, 0.8, "and pays a fifth of itself for a small win")
+  local recA2 = { { species = "BIG", hpFrac = 1 } }
+  local recB2 = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA2, recB2, sim, function() return 0.9 end), "b",
+     "an upset stays possible")
+  eq(recB2[1].hpFrac, 0.1, "and the underdog barely stands")
+  ok(Bots.recordAlive(recB2), "a winner is never wiped by its own win")
+
+  -- who wants the nurse (POK-158 M2)
+  ok(Bots.wantsHeal({ { hpFrac = 0.4 } }), "half a team down wants healing")
+  ok(Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0 } }), "a faint always does")
+  ok(not Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0.8 } }),
+     "scratches walk it off")
+  ok(not Bots.wantsHeal({}), "an empty record wants nothing")
+
+  -- ...and the errand ladder honours it
+  local sick = { x = 5, y = 5 }
+  local g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
+                                    items = { { x = 6, y = 5 } } },
+                            function() return 0 end)
+  eq(g.kind, "heal", "a hurt team walks to the Centre before the loot")
+  eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
+                     function() return 0 end).kind, "seam",
+     "but never into the fog")
 end
 
 -- ------- the endgame hunt (POK-95)
