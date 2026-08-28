@@ -48,7 +48,23 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 9, "a room that can name a build mismatch is PROTOCOL 9")
+  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+
+  -- botrec (POK-158): the record on the wire
+  local br = Wire.decode(Wire.botrec(1001, {
+    { species = "PIDGEY", hpFrac = 1 }, { species = "EKANS", hpFrac = 0.4 },
+  }))
+  ok(br ~= nil, "botrec round-trips")
+  eq(br and #br.record, 2, "both mons arrive")
+  eq(br and br.record[2].hpFrac, 0.4, "the wound arrives with them")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = {} }) == nil,
+     "an empty record is refused")
+  ok(Wire.decode({ t = "botrec", id = 1001,
+                   mons = { { s = "A", f = "x" } } }) == nil,
+     "a wordy hp fraction is refused")
+  local clampR = Wire.decode({ t = "botrec", id = 1001,
+                               mons = { { s = "MEW", f = 7 } } })
+  eq(clampR and clampR.record[1].hpFrac, 1, "fractions clamp to [0,1]")
 
   -- ------- the room door (POK-142)
   --
@@ -2033,6 +2049,55 @@ do
   end
   ok(prizes >= 20 and prizes <= 100,
      "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
+
+  -- ------- the record (POK-158 M1): a team a bot BUILDS, not a synth
+
+  local rec = Bots.newRecord(4242, 1001, nil)
+  eq(#rec, 1, "one mon at the drop, whatever the tier")
+  eq(rec[1].hpFrac, 1, "and it is healthy")
+  eq(Bots.newRecord(4242, 1001, nil)[1].species, rec[1].species,
+     "the drop mon is derived: two lazy creations agree")
+
+  for _, tier in ipairs(Bots.TIERS) do
+    eq(Bots.recordCap(tier), tier.maxParty, tier.id .. " caps at its tier")
+  end
+
+  local team = {
+    { species = "PIDGEY", hpFrac = 1 },
+    { species = "RATTATA", hpFrac = 0 },     -- fainted last fight
+    { species = "EKANS", hpFrac = 0.4 },
+  }
+  local rows, idx = Bots.fightRows(team, 30)
+  eq(#rows, 2, "a fainted mon does not fight")
+  eq(rows[1].species, "PIDGEY", "record order holds")
+  eq(rows[2].species, "EKANS", "the hurt one still answers the bell")
+  eq(rows[1].level, 30, "every fight is at the rung")
+  eq(idx[2], 3, "idx maps each row back to its record slot")
+  eq(#Bots.spillRows(team, 30), 3, "the spill counts the fallen too")
+
+  -- the fight ends; the enemyParty rows land back on the right mons
+  Bots.scarRecord(team, idx, {
+    { hp = 12, stats = { hp = 48 } },        -- PIDGEY down to a quarter
+    { hp = 0, stats = { hp = 40 } },         -- EKANS fainted
+  })
+  eq(team[1].hpFrac, 0.25, "damage carries out of the fight")
+  eq(team[2].hpFrac, 0, "an untouched fainted mon stays fainted")
+  eq(team[3].hpFrac, 0, "a mon lost in the fight is recorded lost")
+  ok(Bots.recordAlive(team), "one healthy mon is still a trainer")
+  ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
+     "a wiped record is not")
+
+  -- catches: capped by tier, paced by chance, drawn from the map's table
+  local slots = { { species = "CATERPIE", level = 4 } }
+  local always = function(a, b) if a then return a end return 0 end
+  local never = function(a, b) if a then return a end return 0.99 end
+  local r2 = { { species = "MANKEY", hpFrac = 1 } }
+  eq(Bots.rollCatch(r2, 2, slots, always), "CATERPIE", "a dwell can catch")
+  eq(#r2, 2, "and the team grew")
+  eq(r2[2].hpFrac, 1, "a fresh catch is healthy")
+  eq(Bots.rollCatch(r2, 2, slots, always), nil, "the cap is the cap")
+  eq(Bots.rollCatch({ {} }, 6, slots, never), nil, "most dwells catch nothing")
+  eq(Bots.rollCatch({ {} }, 6, {}, always), nil, "no grass table, no catch")
 end
 
 -- ------- the endgame hunt (POK-95)

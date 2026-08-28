@@ -687,6 +687,106 @@ function Bots.dealTowns(count, n, rng)
   return out
 end
 
+-- ------------------------------------------------ THE RECORD (POK-158)
+--
+-- A bot's PERSISTENT team.  Bots.party synthesizes a fresh, full-HP team
+-- at the moment a fight opens, which is the central cheat POK-158 names:
+-- a bot never catches anything, never carries a wound out of a fight,
+-- never needs healing.  The record replaces that: a list of
+-- { species=, hpFrac= } rows that is CREATED identically on every client
+-- (derived from the seed at the floor rung, so lazy creation needs no
+-- message) and then MUTATED only by broadcast events -- the host's catch
+-- rolls, and the scars reported by whichever client just fought it.
+--
+-- Levels are deliberately not stored: every fight is at the rung, exactly
+-- as before, so `hpFrac` is the only thing that has to survive a rung
+-- change and it survives it by construction.
+
+-- How often a grass dwell actually catches (M1 tuning knob).  The dwell
+-- cadence -- walk, six seconds in the grass, twenty-second goal clock --
+-- paces the team build the way steps pace a player's.
+Bots.CATCH_CHANCE = 0.5
+
+-- ONE mon at the drop, whatever the tier (the POK-121 rule, kept).
+-- Derived at the FLOOR rung so two clients creating the record lazily at
+-- different rungs still agree byte-for-byte.
+function Bots.newRecord(seed, id, data)
+  local first = Bots.party(seed, id, data, 5)[1]
+  return { { species = first.species, hpFrac = 1 } }
+end
+
+-- The record's ceiling is the tier's, directly: ROOKIE stops at two, an
+-- ACE builds to six.  The old partySize curve rode the rung because a
+-- synthesized team materialized at its cap instantly; a caught team is
+-- paced by the catching, which is the arc the curve was faking.
+function Bots.recordCap(tier)
+  return (tier and tier.maxParty) or 1
+end
+
+-- The rows a FIGHT is built from: healthy mons only, at the rung, in
+-- record order.  Also returns idx -- the record index behind each row --
+-- so the fight's outcome can be carried back (Bots.scarRecord).
+function Bots.fightRows(record, rung)
+  local rows, idx = {}, {}
+  for i, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then
+      rows[#rows + 1] = { species = m.species, level = rung }
+      idx[#idx + 1] = i
+    end
+  end
+  return rows, idx
+end
+
+-- The rows a SPILL is built from: the whole team, fainted included --
+-- "the team hits the ground where you fell" counts the fallen.
+function Bots.spillRows(record, rung)
+  local rows = {}
+  for _, m in ipairs(record or {}) do
+    rows[#rows + 1] = { species = m.species, level = rung }
+  end
+  return rows
+end
+
+-- Carry a finished fight's damage back into the record.  `idx` is
+-- fightRows' mapping; `enemyParty` the engine's post-battle mons in the
+-- same order.  Fractions round to hundredths so the wire copy and the
+-- local copy cannot drift.
+function Bots.scarRecord(record, idx, enemyParty)
+  for k, recI in ipairs(idx or {}) do
+    local mon = enemyParty and enemyParty[k]
+    local m = record and record[recI]
+    if mon and m then
+      local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp
+      if maxHp and maxHp > 0 then
+        local frac = math.max(0, math.min(1, (tonumber(mon.hp) or 0) / maxHp))
+        m.hpFrac = math.floor(frac * 100 + 0.5) / 100
+      end
+    end
+  end
+  return record
+end
+
+function Bots.recordAlive(record)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then return true end
+  end
+  return false
+end
+
+-- The catch a grass dwell earns: a species off the map's own grass table
+-- (data.encounters[map].grass.slots), the same table the player's
+-- encounters roll on.  nil when the team is full, the map has no grass
+-- table, or the roll misses -- a dwell is a hunt, not a vending machine.
+function Bots.rollCatch(record, cap, slots, rng)
+  if not (record and slots and #slots > 0) then return nil end
+  if #record >= (cap or 1) then return nil end
+  if rng() >= Bots.CATCH_CHANCE then return nil end
+  local pick = slots[rng(1, #slots)]
+  if not (pick and pick.species) then return nil end
+  record[#record + 1] = { species = pick.species, hpFrac = 1 }
+  return pick.species
+end
+
 -- The TM in a bot's bag (POK-62).  Machine moves are only teachable FROM
 -- the bag (POK-58), and nothing in a match sold TMs -- so a fallen bot is
 -- where they enter the economy at all.  Mostly utility, one time in four

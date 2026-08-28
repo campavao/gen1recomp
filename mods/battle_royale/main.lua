@@ -326,6 +326,7 @@ return function(mod)
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
+    botRecords = {},      -- id -> persistent team, POK-158 (see botRecord)
     botParty = nil,       -- handed to the trainer.party hook for one battle
     ring = nil,           -- { phase, center = {x,y,id,name}, radius }
     matchStartedAt = nil, -- host only: when the shared clock started
@@ -990,7 +991,9 @@ return function(mod)
     self.matchSeed = nil
     self.botFight = nil
     self.botFightPos = nil
+    self.botFightIdx = nil
     self.botParty = nil
+    self.botRecords = {}
     self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
@@ -1841,6 +1844,12 @@ return function(mod)
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
 
+    elseif msg.t == "botrec" then
+      -- a bot's team changed: a catch (the host) or a fight's scars (the
+      -- client who fought it).  Applied verbatim -- the record is owned
+      -- by whoever last touched it, like the bots' movement is
+      self.botRecords[msg.id] = msg.record
+
     elseif msg.t == "peek" then
       self:answerPeek(fromId)
 
@@ -2292,6 +2301,39 @@ return function(mod)
     return hit
   end
 
+  -- The bot's persistent team (POK-158 M1).  Created lazily and
+  -- IDENTICALLY on every client -- Bots.newRecord derives the one drop
+  -- mon from the seed at the floor rung -- so no message is needed until
+  -- the record actually changes; every change after that arrives as a
+  -- botrec broadcast and replaces the copy wholesale.
+  function BR:botRecord(id)
+    local rec = self.botRecords[id]
+    if not rec then
+      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
+      self.botRecords[id] = rec
+    end
+    return rec
+  end
+
+  -- A grass dwell DOES the thing it used to pretend to (POK-158): the six
+  -- seconds standing in the grass are a catch roll against the map's own
+  -- encounter table.  Host only, like everything that moves a bot; the
+  -- catch rides a botrec broadcast so every client's copy of the team
+  -- grows together.
+  function BR:botCatch(id, p)
+    local data = self.game and self.game.data
+    local enc = data and data.encounters and data.encounters[p.map]
+    local slots = enc and enc.grass and enc.grass.slots
+    local tier = p.tier or Bots.tier(self.matchSeed, id)
+    local rec = self:botRecord(id)
+    local caught = Bots.rollCatch(rec, Bots.recordCap(tier), slots, p.rng)
+    if caught then
+      log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
+              tostring(caught), #rec)
+      if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
   function BR:pickBotGoal(p, now)
     local g = Bots.chooseGoal(p, {
@@ -2325,6 +2367,10 @@ return function(mod)
       if now and now < p.dwellUntil then return nil end
       p.dwellUntil = nil
       self:markBot(id, p, nil)
+      -- the dwell pays out as it ends: six seconds in the grass was a
+      -- hunt, and sometimes the hunt works (POK-158)
+      if p.dwellKind == "grass" then self:botCatch(id, p) end
+      p.dwellKind = nil
     end
 
     local goal = p.goal
@@ -2340,6 +2386,7 @@ return function(mod)
       local dwell = Bots.DWELL[goal.kind] or 0
       if dwell > 0 then
         p.dwellUntil = (now or 0) + dwell
+        p.dwellKind = goal.kind
         -- What the room sees over their head while they stand there
         -- (POK-113's marks, POK-121's errands).  Grass reads as a FIGHT,
         -- because that is what standing in grass for six seconds is; a
@@ -3461,7 +3508,8 @@ return function(mod)
         local data = self.game and self.game.data
         local bag = self:botBag(id)   -- the TM shows in the peek too (POK-62)
         self.peeked = { id = id, bot = true,
-                        party = Peek.botParty(Bots, self.matchSeed, id, data, self:level()),
+                        party = Peek.botParty(Bots, self.matchSeed, id, data,
+                                              self:level(), self:botRecord(id)),
                         items = bag.items, money = bag.money }
       end
       return
@@ -4323,7 +4371,9 @@ return function(mod)
   function BR:spillBot(id, p)
     local data = self.game and self.game.data
     if not (data and p and p.map and p.x and p.y) then return end
-    local party = Bots.party(self.matchSeed, id, data, self:level())
+    -- the team it actually built (POK-158), fainted included -- what hits
+    -- the ground is the record, not a synth
+    local party = Bots.spillRows(self:botRecord(id), self:level())
     local bag = self:botBag(id)
     bag.name = p.name
     local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
@@ -4365,8 +4415,20 @@ return function(mod)
     broadcastPlace()
 
     -- the party is handed to BattleState through the trainer.party hook
-    -- below, which is the engine's own seam for exactly this
-    self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
+    -- below, which is the engine's own seam for exactly this.  The rows
+    -- come from the bot's RECORD (POK-158) -- the team it has actually
+    -- built and the wounds it is actually carrying -- not a fresh synth.
+    local rec = self:botRecord(botId)
+    local rows, idx = Bots.fightRows(rec, self:level())
+    if #rows == 0 then
+      -- cannot happen short of a desynced record (a wiped team is an
+      -- eliminated bot); heal it rather than opening an unwinnable fight
+      mod.log:warn("bot %s had no healthy mon; record reset", tostring(botId))
+      for _, m in ipairs(rec) do m.hpFrac = 1 end
+      rows, idx = Bots.fightRows(rec, self:level())
+    end
+    self.botParty = rows
+    self.botFightIdx = idx
     local look = self.players[botId]
     local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
@@ -4379,6 +4441,7 @@ return function(mod)
       self.status = "alive"
       self.botFight = nil
       self.botFightPos = nil
+      self.botFightIdx = nil
       return
     end
     -- Overlay the bot's own name on the class chassis, the engine's own
@@ -4747,6 +4810,24 @@ return function(mod)
     -- the fog is not ticking, and both watchdogs only ever hold OFF while
     -- one is set.
     if BR:inSession() and ev and ev.battle then BR.localBattle = ev.battle end
+    -- A bot walks in with the wounds it walked out with (POK-158).  The
+    -- engine builds the trainer party at full HP; the record says how much
+    -- of each mon is actually left, so clamp before the first turn.  Never
+    -- below 1: fightRows only sends healthy mons, and a mon at 1 HP is
+    -- exactly what "barely standing" should mean.
+    if BR.botFight and ev and ev.battle and ev.battle.enemyParty then
+      local rec = BR:botRecord(BR.botFight)
+      for k, recI in ipairs(BR.botFightIdx or {}) do
+        local mon = ev.battle.enemyParty[k]
+        local m = rec[recI]
+        if mon and m and (m.hpFrac or 1) < 1 then
+          local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp or mon.hp
+          if maxHp and maxHp > 0 then
+            mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
+          end
+        end
+      end
+    end
     -- a PvP lockstep battle: RUN on our side goes through the flee roll
     -- (POK-24); the other side only ever sees a run we actually submitted
     local opponent = BR.battle and BR.battle.opponentId
@@ -4844,8 +4925,18 @@ return function(mod)
     local botId = BR.botFight
     if not botId then return end
     local fightPos = BR.botFightPos
-    BR.botFight, BR.botFightPos = nil, nil
+    local fightIdx = BR.botFightIdx
+    BR.botFight, BR.botFightPos, BR.botFightIdx = nil, nil, nil
     if BR.status == "battle" then BR.status = "alive" end
+    if ev.result ~= "win" and not ev.skipped and ev.battle
+       and ev.battle.enemyParty then
+      -- The fight is over and the bot lived: it keeps its wounds
+      -- (POK-158).  Whoever fought it is the one client that knows the
+      -- outcome, so this client writes the scars and tells the room.
+      local rec = BR:botRecord(botId)
+      Bots.scarRecord(rec, fightIdx, ev.battle.enemyParty)
+      if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
+    end
     if ev.result == "win" then
       local bot = BR.players[botId]
       -- `alive` guards the race where the host already put this bot out
@@ -6410,6 +6501,17 @@ return function(mod)
                           -- a stalled sweep is diagnosable from outside
                           fogTicks = p.fogTicks or 0 }
       end
+    end
+    return out
+  end
+  -- a bot's persistent team, for drivers (POK-158).  Reads through the
+  -- lazy accessor, so asking is the same as any client's first look.
+  mod.exports.botRecord = function(id)
+    local rec = BR.matchSeed and BR.players[id] and BR:botRecord(id)
+    if not rec then return nil end
+    local out = {}
+    for i, m in ipairs(rec) do
+      out[i] = { species = m.species, hpFrac = m.hpFrac }
     end
     return out
   end
