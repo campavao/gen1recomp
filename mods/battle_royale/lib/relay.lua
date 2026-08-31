@@ -147,6 +147,13 @@ function Relay:join(code, name)
   return self:_open({ type = "join_room", code = code, name = name })
 end
 
+-- The one shared DAILY GAME room (POK-161): join it, or become its host.
+-- The relay answers room_joined or room_hosted, both already handled; a
+-- daily match already running answers match_in_progress like quick play.
+function Relay:dailyJoin(name)
+  return self:_open({ type = "daily_join", name = name })
+end
+
 -- Enter a LOCKED room as a watcher who plays the next match (POK-133).
 -- Sent raw, not through _open: the one caller already holds the live
 -- connection quick_join answered on.
@@ -344,10 +351,23 @@ function Relay:_receive(msg)
         if #rows >= 3 then break end
       end
     end
+    local daily
+    if type(msg.daily) == "table" and tonumber(msg.daily.secs) then
+      -- the receipt clock rides along so a countdown can be computed
+      -- without another round trip (POK-161)
+      daily = { secs = tonumber(msg.daily.secs),
+                label = type(msg.daily.label) == "string"
+                  and msg.daily.label:sub(1, 17) or nil,
+                at = now() }
+    end
     self.serverInfo = { motdRows = rows,
                         rooms = tonumber(msg.rooms) or 0,
-                        conns = tonumber(msg.conns) or 0 }
-    self:_fire("info", self.serverInfo)
+                        conns = tonumber(msg.conns) or 0,
+                        daily = daily }
+    -- (relay, info), like "running": the daily smoke caught this firing
+    -- with info alone while its one consumer read the second argument --
+    -- the start clock was never armed and the hour sailed past
+    self:_fire("info", self, self.serverInfo)
   end
 end
 
