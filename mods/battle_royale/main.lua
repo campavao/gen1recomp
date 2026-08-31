@@ -7170,6 +7170,10 @@ return function(mod)
     return out
   end
   mod.exports.code = function() return BR.relay and BR.relay.code end
+  -- what the server said about itself (POK-161), for drivers and the menu
+  mod.exports.serverInfo = function()
+    return BR.relay and BR.relay.serverInfo or nil
+  end
   -- the cold-start batch's handles (POK-129/130/133), for drivers
   mod.exports.kick = function(id) return BR:kick(id) end
   mod.exports.watchNext = function() return BR:watchNext() end
