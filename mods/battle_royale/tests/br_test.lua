@@ -2784,6 +2784,25 @@ do
        "CODE ABCDEF|- RED*|- LATE NEXT|MATCH RUNNING|YOU PLAY NEXT|LEAVE",
        "a spectator knows the deal, and the roster marks them")
     BR.isSpectating = nil
+
+    -- POK-161: the empty lobby says what the server knows
+    BR.relay = room(true, { members = { { id = 1, name = "RED" } },
+                            serverInfo = { motdRows = { "GAME NIGHT DAILY",
+                                                        "7PM CENTRAL" },
+                                           conns = 1, rooms = 1 } })
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "GAME NIGHT DAILY") ~= nil and find(items, "7PM CENTRAL") ~= nil,
+       "an empty lobby carries the server's game-time line")
+    BR.relay.serverInfo.conns = 3
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "2 TRAINERS ONLINE") ~= nil, "presence outranks the schedule")
+    ok(find(items, "GAME NIGHT DAILY") == nil, "...which stands down")
+    BR.relay = room(true)  -- two members: the roster is its own answer
+    BR.relay.serverInfo = { motdRows = { "GAME NIGHT DAILY" }, conns = 5 }
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "GAME NIGHT DAILY") == nil
+       and not labels(items):find("ONLINE", 1, true),
+       "a filling roster needs no info line")
     BR.relay = room(false)
 
     -- the match report, with the Safari clock while it runs

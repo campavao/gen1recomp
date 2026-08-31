@@ -190,6 +190,22 @@ function Menu.items(mod, BR, game)
         setting("OPEN: " .. (BR:isOpen() and "YES" or "NO"),
                 function() BR:setOpen(not BR:isOpen()) end)
       end
+      -- The empty lobby answers the question every recorded bounce was
+      -- asking (POK-161): is anybody out there?  Live presence outranks
+      -- the schedule -- somebody online NOW beats a promise about 7pm --
+      -- and the schedule itself is served by the relay (BR_MOTD), so
+      -- changing game night never ships a release.  Only while alone: a
+      -- filling roster is its own answer.
+      if #relay.members <= 1 then
+        local info = relay.serverInfo
+        local others = info and math.max(0, (info.conns or 0) - 1) or 0
+        if others >= 1 then
+          row(others == 1 and "1 TRAINER ONLINE"
+              or (others .. " TRAINERS ONLINE"))
+        elseif info then
+          for _, l in ipairs(info.motdRows or {}) do row(l) end
+        end
+      end
     end
     if host then
       -- steps the ladder 0,1,2,3,5,8,...,30 and wraps

@@ -33,6 +33,10 @@
 //   {type:"to", id, m}                 unicast m to one member
 //   {type:"all", m}                    m to every other member
 //   {type:"ping"}                      -> pong
+//   {type:"info"}                      -> info {motd, rooms, conns}: the
+//                                      BR_MOTD env var as bounded rows
+//                                      (the official game time, POK-161)
+//                                      plus live counts
 // Server -> client
 //   {type:"roster", code, host, members:[{id,name,spectate?}]}  on every change
 //   {type:"recv", from, m}
@@ -96,6 +100,24 @@ function human(bytes) {
   if (bytes < 1048576) return (bytes / 1024).toFixed(1) + "KB";
   if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + "MB";
   return (bytes / 1073741824).toFixed(2) + "GB";
+}
+
+// The message of the day, served to any client that asks (POK-161): the
+// official game time, authored as the BR_MOTD env var so changing the
+// schedule edits one Railway variable and never ships a mod release.
+// Bounded here, not trusted there: the Gen 1 text box is 17 cells wide
+// and three rows is all the lobby can spare, and an env var is still
+// input.  Rows split on real newlines or a literal backslash-n, since
+// env editors rarely take the real thing.
+export function cleanMotd(text) {
+  if (typeof text !== "string" || !text) return [];
+  const rows = [];
+  for (const line of text.split(/\\n|\n/)) {
+    const clean = line.replace(/[^ -~]/g, "").trim().slice(0, 17);
+    if (clean) rows.push(clean);
+    if (rows.length >= 3) break;
+  }
+  return rows;
 }
 
 function cleanName(name) {
@@ -238,6 +260,7 @@ class Conn {
 export function createRelay(options = {}) {
   const limits = { ...DEFAULT_LIMITS, ...(options.limits || {}) };
   const log = options.log || (() => {});
+  const motd = cleanMotd(options.motd ?? process.env.BR_MOTD);
   const rooms = new Map();
   const conns = new Set();
   const perIp = new Map();
@@ -297,6 +320,13 @@ export function createRelay(options = {}) {
     switch (msg.type) {
       case "ping":
         conn.send({ type: "pong", t: msg.t });
+        return;
+
+      // "Is anybody out there?" answered honestly (POK-161): the motd
+      // (the official game time) and the live counts.  Presence beats
+      // any schedule line, so both travel together and the client picks.
+      case "info":
+        conn.send({ type: "info", motd, rooms: rooms.size, conns: conns.size });
         return;
 
       case "host_room": {
