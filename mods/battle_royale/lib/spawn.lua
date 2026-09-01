@@ -111,11 +111,40 @@ function Spawn.floodEscapable(w, h, isWalkable, seeds)
   return seen
 end
 
+-- Does a step off this map's edge at (x, y) through `conn` actually land?
+-- crossConnection bumps on the neighbour strip's tile exactly like an
+-- in-map wall (OverworldState:crossConnection), so an edge cell facing the
+-- neighbour's trees is a wall, not an exit -- which is how a player got
+-- sealed in Vermilion's fenced sign pocket: its only edges face Route 6
+-- and Route 11 solids.  Landing math mirrors connectionLanding
+-- (destX = curX - offset*2), minus the clamp: a landing outside the
+-- neighbour's bounds is refused rather than slid to a corner.
+--
+-- Without the world's map data (old callers, unit tests) every edge cell
+-- on a connected side counts, as before.
+local function connExit(conn, maps, tilesets, dir, x, y)
+  if not (maps and tilesets) then return true end
+  local dest = maps[conn.map]
+  local ts = dest and tilesets[dest.tileset]
+  if not (dest and ts) then return true end
+  local dw, dh = dest.width * 2, dest.height * 2
+  local dx, dy
+  if dir == "north" then dx, dy = x - conn.offset * 2, dh - 1
+  elseif dir == "south" then dx, dy = x - conn.offset * 2, 0
+  elseif dir == "west" then dx, dy = dw - 1, y - conn.offset * 2
+  else dx, dy = 0, y - conn.offset * 2 end
+  if dx < 0 or dy < 0 or dx >= dw or dy >= dh then return false end
+  return Map.defIsWalkableCell(dest, ts, dx, dy)
+     and not Map.defIsWaterCell(dest, ts, dx, dy)
+end
+
 -- One map's escapable region: seeded beside every warp (stepping onto the
 -- warp is the way out) and along the walkable edge of every side with a
--- connection.  A ledge-hop-only hollow never joins the region -- ledge
--- tiles are not walkable, so nothing floods across them.
-function Spawn.escapableSet(def, tilesetDef)
+-- connection -- but only where the landing cell on the neighbouring map is
+-- itself walkable, when `maps`/`tilesets` are supplied to check it against.
+-- A ledge-hop-only hollow never joins the region -- ledge tiles are not
+-- walkable, so nothing floods across them.
+function Spawn.escapableSet(def, tilesetDef, maps, tilesets)
   if not (def and tilesetDef) then return {} end
   local w, h = def.width * 2, def.height * 2
   local function walk(x, y)
@@ -130,20 +159,153 @@ function Spawn.escapableSet(def, tilesetDef)
     seeds[#seeds + 1] = { x = wp.x, y = wp.y - 1 }
   end
   local conns = def.connections or {}
-  if conns.north then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = 0 } end end
-  if conns.south then for x = 0, w - 1 do seeds[#seeds + 1] = { x = x, y = h - 1 } end end
-  if conns.west then for y = 0, h - 1 do seeds[#seeds + 1] = { x = 0, y = y } end end
-  if conns.east then for y = 0, h - 1 do seeds[#seeds + 1] = { x = w - 1, y = y } end end
+  local function edge(dir, x, y)
+    if connExit(conns[dir], maps, tilesets, dir, x, y) then
+      seeds[#seeds + 1] = { x = x, y = y }
+    end
+  end
+  if conns.north then for x = 0, w - 1 do edge("north", x, 0) end end
+  if conns.south then for x = 0, w - 1 do edge("south", x, h - 1) end end
+  if conns.west then for y = 0, h - 1 do edge("west", 0, y) end end
+  if conns.east then for y = 0, h - 1 do edge("east", w - 1, y) end end
   return Spawn.floodEscapable(w, h, walk, seeds)
 end
 
+-- The whole outdoor world's escapable regions in ONE flood.
+--
+-- The per-map flood lies at the seams: Vermilion's fenced sign pocket
+-- (cells 24..39 x 0..2) exits only north onto ROUTE_6's own walled-off
+-- corner (11..19 x 33..35), whose only exit is back south into the
+-- Vermilion pocket.  Each map's edge check vouched for the other, so both
+-- kept their spawn cells -- and a player dropped there sat softlocked
+-- behind the town sign.  Escape means reaching a DOOR somewhere in Kanto,
+-- so seed beside every warp on every outdoor map and flood across seam
+-- crossings validated the way crossConnection validates them.
+--
+-- A region ABOVE a ledge escapes by hopping down it, so `ledges`
+-- (data.field.ledges: standing tile + ledge tile + direction, the rows
+-- checkLedgeHop matches) feeds one-way edges INTO the flood: when a cell
+-- is escapable, the cell two up the hop is too.  Without the rows the
+-- flood is merely conservative -- a plateau loses its spawn cells, nobody
+-- gets stranded.  (A hop whose landing is on the CONNECTED map -- Route
+-- 4's plaza onto Route 3 -- is not modelled; those plazas all hold a door
+-- and are seeded anyway.)
+--
+-- Returns { [mapId] = set keyed y * 4096 + x } for every outdoor map.
+-- Pure over the data; cached per maps table.
+local LEDGE_VEC = { up = { 0, -1 }, down = { 0, 1 },
+                    left = { -1, 0 }, right = { 1, 0 } }
+local worldCache = setmetatable({}, { __mode = "k" })
+function Spawn.escapableSets(maps, tilesets, ledges)
+  local hit = worldCache[maps]
+  if hit and hit.ledges == (ledges or false) then return hit.sets end
+
+  local sets, defs, tsOf = {}, {}, {}
+  for _, id in ipairs(Spawn.outdoorMaps(maps)) do
+    local def = maps[id]
+    local ts = tilesets and tilesets[def.tileset]
+    if ts then
+      sets[id], defs[id], tsOf[id] = {}, def, ts
+    end
+  end
+
+  local function walk(id, x, y)
+    local def = defs[id]
+    if not def then return false end
+    if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then
+      return false
+    end
+    return Map.defIsWalkableCell(def, tsOf[id], x, y)
+       and not Map.defIsWaterCell(def, tsOf[id], x, y)
+  end
+
+  local queue, qi = {}, 1
+  local function push(id, x, y)
+    local set = sets[id]
+    if not set then return end
+    local k = y * 4096 + x
+    if set[k] or not walk(id, x, y) then return end
+    set[k] = true
+    queue[#queue + 1] = { id = id, x = x, y = y }
+  end
+
+  for id, def in pairs(defs) do
+    for _, wp in ipairs(def.warps or {}) do
+      push(id, wp.x + 1, wp.y)
+      push(id, wp.x - 1, wp.y)
+      push(id, wp.x, wp.y + 1)
+      push(id, wp.x, wp.y - 1)
+    end
+  end
+
+  while queue[qi] do
+    local c = queue[qi]
+    qi = qi + 1
+    local def = defs[c.id]
+    local w, h = def.width * 2, def.height * 2
+    push(c.id, c.x + 1, c.y)
+    push(c.id, c.x - 1, c.y)
+    push(c.id, c.x, c.y + 1)
+    push(c.id, c.x, c.y - 1)
+    -- up the ledges: any cell whose hop lands here escapes through here
+    for _, ledge in ipairs(ledges or {}) do
+      local v = LEDGE_VEC[ledge.facing]
+      if v and ledge.input == ledge.facing
+         and (ledge.tileset or "OVERWORLD") == def.tileset then
+        local mx, my = c.x - v[1], c.y - v[2]
+        local sx, sy = c.x - 2 * v[1], c.y - 2 * v[2]
+        if Map.defCellTile(def, tsOf[c.id], mx, my) == ledge.ledgeTile
+           and Map.defCellTile(def, tsOf[c.id], sx, sy) == ledge.standingTile then
+          push(c.id, sx, sy)
+        end
+      end
+    end
+    -- across the seams: landing math mirrors connectionLanding
+    -- (destX = curX - offset*2), minus the clamp -- a landing outside the
+    -- neighbour's bounds is a bump, not an exit
+    local conns = def.connections or {}
+    local function cross(conn, dx, dy)
+      if conn and walk(conn.map, dx, dy) then push(conn.map, dx, dy) end
+    end
+    if c.y == 0 and conns.north then
+      local d = defs[conns.north.map]
+      if d then cross(conns.north, c.x - conns.north.offset * 2, d.height * 2 - 1) end
+    end
+    if c.y == h - 1 and conns.south then
+      cross(conns.south, c.x - conns.south.offset * 2, 0)
+    end
+    if c.x == 0 and conns.west then
+      local d = defs[conns.west.map]
+      if d then cross(conns.west, d.width * 2 - 1, c.y - conns.west.offset * 2) end
+    end
+    if c.x == w - 1 and conns.east then
+      cross(conns.east, 0, c.y - conns.east.offset * 2)
+    end
+  end
+
+  worldCache[maps] = { sets = sets, ledges = ledges or false }
+  return sets
+end
+
 -- Every cell a player could be dropped on for one map, in row-major order
--- -- walkable, unoccupied, and with a way off the map (POK-23).
-function Spawn.cellsOf(def, tilesetDef)
+-- -- walkable, unoccupied, and with a way off the map (POK-23).  With the
+-- world's `maps`/`tilesets` in hand, "a way off" is answered by the world
+-- flood above; without them (unit tests over toy defs) the per-map flood
+-- answers as before.
+function Spawn.cellsOf(def, tilesetDef, maps, tilesets, ledges)
   local out = {}
   if not (def and tilesetDef) then return out end
   local skip = blocked(def)
-  local escape = Spawn.escapableSet(def, tilesetDef)
+  local escape
+  if maps and tilesets then
+    for id, d in pairs(maps) do
+      if d == def then
+        escape = Spawn.escapableSets(maps, tilesets, ledges)[id]
+        break
+      end
+    end
+  end
+  escape = escape or Spawn.escapableSet(def, tilesetDef, maps, tilesets)
   local w, h = def.width * 2, def.height * 2
   for cy = 0, h - 1 do
     for cx = 0, w - 1 do
@@ -165,10 +327,11 @@ end
 -- rather than a crowded room failing to drop.
 --
 -- Returns an array of { map=, x=, y= } of length n, or nil + reason.
-function Spawn.pickIn(maps, tilesets, mapId, n, rng)
+function Spawn.pickIn(maps, tilesets, mapId, n, rng, ledges)
   rng = rng or Spawn.rng(os.time())
   local def = maps and maps[mapId]
-  local cells = Spawn.cellsOf(def, def and tilesets and tilesets[def.tileset])
+  local cells = Spawn.cellsOf(def, def and tilesets and tilesets[def.tileset],
+                              maps, tilesets, ledges)
   if #cells == 0 then return nil, "no free cells on " .. tostring(mapId) end
   for i = #cells, 2, -1 do
     local j = rng(1, i)
@@ -188,7 +351,7 @@ end
 --
 -- Returns an array of { map=, x=, y= } of length n, or nil + reason when the
 -- data has nowhere to drop anyone.
-function Spawn.pick(maps, tilesets, n, rng)
+function Spawn.pick(maps, tilesets, n, rng, ledges)
   rng = rng or Spawn.rng(os.time())
   local ids = Spawn.outdoorMaps(maps)
   if #ids == 0 then return nil, "no outdoor maps" end
@@ -203,7 +366,8 @@ function Spawn.pick(maps, tilesets, n, rng)
   local function cells(id)
     if not cellCache[id] then
       local def = maps[id]
-      cellCache[id] = Spawn.cellsOf(def, tilesets and tilesets[def.tileset])
+      cellCache[id] = Spawn.cellsOf(def, tilesets and tilesets[def.tileset],
+                                    maps, tilesets, ledges)
     end
     return cellCache[id]
   end
