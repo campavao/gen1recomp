@@ -714,8 +714,12 @@ do
               "a match that moved on abandons the walk-up")
       T.check(walk:find("return finish()", 1, true) == nil,
               "...and nothing still calls the old one-exit finish()")
-      T.check(walk:find("Bots.WALKUP_STEPS then return arrived()", 1, true) ~= nil,
+      T.check(walk:find("return arrived()", 1, true) ~= nil,
               "while the walk that ARRIVES still opens the fight (POK-85)")
+      -- ...onto a quiet screen only (POK-162): a bot standing beside a
+      -- player in a menu waits, and does not push its battle over it
+      T.check(walk:find("if not self:screenIsQuiet() then return end\n      return arrived()", 1, true) ~= nil,
+              "...and waits beside a player whose screen is busy")
       T.check(walk:find("self.pending = nil", 1, true) ~= nil,
               "an abandoned walk-up clears the pending challenge with it")
     end
@@ -859,6 +863,97 @@ do
                      1, true) ~= nil,
             "a battle that opens at \"over\" is recorded, so the funnel can "
             .. "close what no guard could refuse")
+  end
+end
+
+-- ------- the event queue's wiring (POK-162), read off the source
+--
+-- onChallenge, onAccept, tickEvents and tickPending are closures over a
+-- relay and a stack, so what can be pinned headless is that each gate is
+-- still there.  Every line below is the exact shape of the wedge: an
+-- answer given under an occupied stack, a pending nothing could clear, a
+-- lockstep nobody joined.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the event-queue scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local function body(fn)
+      return src:match("function BR:" .. fn .. "%(.-\n  end\n")
+    end
+
+    local chal = body("onChallenge")
+    T.check(chal ~= nil, "found BR:onChallenge")
+    T.check(chal and chal:find('Events.push(self.events, { kind = "challenge"', 1, true) ~= nil,
+            "a challenge that lands on a busy screen is queued, not answered")
+    T.check(chal and chal:find("if not self:screenIsQuiet() then", 1, true) ~= nil,
+            "...and the gate is the one the parade and the exit wait on")
+    T.check(chal and chal:find("Engage.answer", 1, true) == nil,
+            "onChallenge itself no longer answers; answerChallenge does")
+
+    local acc = body("onAccept")
+    T.check(acc ~= nil, "found BR:onAccept")
+    T.check(acc and acc:find("pend.nonce == nonce", 1, true) ~= nil,
+            "an accept has to name the challenge it answers")
+    T.check(acc and acc:find('Events.push(self.events, { kind = "begin"', 1, true) ~= nil,
+            "an accept that lands on a busy screen queues the opening")
+    T.check(acc and acc:find('Wire.decline(nonce, "timeout")', 1, true) ~= nil,
+            "a late accept is declined so the accepter's lockstep closes")
+    T.check(acc and acc:find("self.battle.opponentId == fromId then return end", 1, true) ~= nil,
+            "...but never during the battle it crossed (a mutual sighting)")
+
+    local dec = body("onDecline")
+    T.check(dec ~= nil, "found BR:onDecline")
+    T.check(dec and dec:find('Events.drop(self.events, "challenge", fromId)', 1, true) ~= nil,
+            "a decline pulls that challenger's held challenge")
+    T.check(dec and dec:find("b.nonce == nonce", 1, true) ~= nil
+            and dec:find("not b.channel.heard", 1, true) ~= nil
+            and dec:find("b.channel:peerGone()", 1, true) ~= nil,
+            "...and closes a lockstep opened on that nonce that nobody joined")
+
+    local tick = body("tickPending")
+    T.check(tick ~= nil, "found BR:tickPending")
+    T.check(tick and tick:find("Engage.stale(pend, now, Engage.PENDING_SECONDS)", 1, true) ~= nil,
+            "a pending challenge times out")
+    T.check(tick and tick:find("self.walkUp and self.walkUp.id == pend.to", 1, true) ~= nil,
+            "...except while a bot is walking over on it (POK-85)")
+    T.check(tick and tick:find("Engage.LINK_OPEN_SECONDS", 1, true) ~= nil
+            and tick:find("not b.channel.heard", 1, true) ~= nil,
+            "a lockstep whose peer never spoke is closed")
+
+    local ev = body("tickEvents")
+    T.check(ev ~= nil, "found BR:tickEvents")
+    T.check(ev and ev:find("Events.expire(q, now, Events.HOLD_SECONDS)", 1, true) ~= nil
+            and ev:find('Wire.decline(ev.nonce, "held")', 1, true) ~= nil,
+            "a challenge held too long is declined, not forgotten")
+    T.check(ev and ev:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "the queue drains onto a quiet screen only")
+
+    -- and the tick runs both, next to the walk-up
+    T.check(src:find("BR:tickWalkUp()\n    -- the challenges waiting for a quiet screen", 1, true) ~= nil
+            and src:find("    BR:tickEvents()\n    BR:tickPending()\n", 1, true) ~= nil,
+            "the tick drains the queue and runs the nets every frame")
+
+    -- the eyeline holds off a trainer in a menu; the mark now covers a
+    -- dialog too, which is the nurse
+    local try = body("tryEngage")
+    T.check(try and try:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "tryEngage fires from a quiet screen only")
+    T.check(try and try:find("(p.busy ~= nil and not Bots.isBot(id))", 1, true) ~= nil,
+            "...and does not challenge a trainer in a menu (a bot has no menu)")
+    local bot = body("tryBotEngage")
+    T.check(bot and bot:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
+            "a bot does not spot a player whose screen is busy")
+    local busy = src:match("local function myBusy%(%).-\n  end\n")
+    T.check(busy and busy:find("ow.runner:isRunning()", 1, true) ~= nil,
+            "a running dialog is broadcast as a menu")
+
+    -- resetMatch drops the queue with the rest of the match
+    T.check(src:find("    self.pendingSays = {}\n    Events.clear(self.events)\n", 1, true) ~= nil,
+            "resetMatch clears the queue")
   end
 end
 

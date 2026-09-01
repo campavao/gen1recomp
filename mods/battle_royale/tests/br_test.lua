@@ -1217,6 +1217,86 @@ do
      "a challenge from the one we are challenging is accepted")
 end
 
+-- ------- the event queue (POK-162)
+--
+-- A challenge that lands while the screen is busy waits for the screen;
+-- one that waits too long is handed back so the challenger can be told;
+-- a challenge is not held forever either side.  Driven with a fake clock.
+
+do
+  local Events = require("mods.battle_royale.lib.events")
+  local Channel = require("mods.battle_royale.lib.channel")
+
+  local q = Events.new()
+  eq(Events.count(q), 0, "a new queue is empty")
+  ok(Events.pop(q) == nil, "...and pops nothing")
+
+  Events.push(q, { kind = "challenge", from = 7, nonce = 1 }, 10)
+  Events.push(q, { kind = "challenge", from = 9, nonce = 5 }, 11)
+  eq(Events.count(q), 2, "two challengers, two events")
+  eq(Events.peek(q).from, 7, "oldest first")
+
+  -- a re-issued challenge replaces the old one IN PLACE: their nonce
+  -- moved on, and answering the old nonce answers a challenge they no
+  -- longer hold -- but it does not queue-jump the trainer behind them
+  Events.push(q, { kind = "challenge", from = 7, nonce = 2 }, 12)
+  eq(Events.count(q), 2, "a second challenge from the same trainer replaces the first")
+  eq(Events.peek(q).nonce, 2, "...with the new nonce")
+  eq(Events.peek(q).from, 7, "...and keeps its place in the line")
+  eq(Events.find(q, "challenge", 9).nonce, 5, "find by kind and sender")
+  ok(Events.find(q, "begin", 9) == nil, "...and not by the wrong kind")
+
+  -- expiry hands back what has waited too long and keeps the rest
+  local gone = Events.expire(q, 12 + Events.HOLD_SECONDS - 0.5)
+  eq(#gone, 1, "only the one held the full hold expires")
+  eq(gone[1].from, 9, "...the older wait")
+  eq(Events.count(q), 1, "the fresher one is still queued")
+  gone = Events.expire(q, 12 + Events.HOLD_SECONDS)
+  eq(#gone, 1, "and at the hold, exactly at it, the other goes too")
+  eq(Events.count(q), 0, "queue drained by expiry")
+
+  -- a decline from the challenger pulls their challenge out of the line
+  Events.push(q, { kind = "challenge", from = 7, nonce = 3 }, 20)
+  Events.push(q, { kind = "begin", from = 7, nonce = 3 }, 20)
+  Events.push(q, { kind = "challenge", from = 9, nonce = 6 }, 20)
+  eq(#Events.drop(q, "challenge", 7), 1, "drop by kind and sender")
+  eq(Events.count(q), 2, "...leaves the other kind and the other sender")
+  eq(#Events.drop(q, "begin"), 1, "drop by kind alone")
+  eq(Events.pop(q).from, 9, "what is left pops")
+  Events.push(q, { kind = "challenge", from = 9, nonce = 7 }, 30)
+  eq(#Events.clear(q), 1, "clear hands everything back")
+  eq(Events.count(q), 0, "...and empties the queue (resetMatch)")
+
+  -- the pending timeout: made at 100, stale at 100 + PENDING_SECONDS
+  local pend = { to = 7, nonce = 1, at = 100 }
+  ok(not Engage.stale(pend, 100 + Engage.PENDING_SECONDS - 1), "a fresh challenge is not stale")
+  ok(Engage.stale(pend, 100 + Engage.PENDING_SECONDS), "...and past the limit it is")
+  ok(not Engage.stale({ to = 7, nonce = 1 }, 500), "one nobody timed is not stale (it gets stamped)")
+  ok(not Engage.stale(nil, 500), "no pending, nothing stale")
+  ok(Engage.stale(pend, 103, 3), "the limit can be passed in")
+
+  -- the three clocks nest: a held challenge is answered (either way)
+  -- before the challenger gives up on it, with room for the flash and
+  -- the relay; and a lockstep nobody joined outlives both
+  ok(Events.HOLD_SECONDS + 2 < Engage.PENDING_SECONDS,
+     "a hold expires well before the challenger's patience does")
+  ok(Engage.PENDING_SECONDS + Events.HOLD_SECONDS <= Engage.LINK_OPEN_SECONDS,
+     "and the open-lockstep net sits under both")
+
+  -- the channel remembers whether the peer ever spoke: that is what tells
+  -- a lockstep nobody joined from a real fight a stray decline must not end
+  local sent = {}
+  local relay = { send = function(_, id, m) sent[#sent + 1] = { id, m } return true end }
+  local ch = Channel.new(relay, 7)
+  ok(not ch.heard, "a new channel has heard nothing")
+  ch:push({ type = "hello" })
+  ok(ch.heard, "...until the peer says something")
+  eq(#ch:poll(), 1, "which is still delivered")
+  ch:peerGone()
+  ch:push({ type = "late" })
+  eq(#ch:poll(), 0, "nothing is heard through a closed channel")
+end
+
 -- ------- the bag obeys the doorway rule too (POK-94)
 --
 -- The balls go through placeAround and its predicate; the BAG lands on the

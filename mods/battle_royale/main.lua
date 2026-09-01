@@ -45,6 +45,7 @@ local Fame = require("mods.battle_royale.lib.fame")
 local Gyms = require("mods.battle_royale.lib.gyms")
 local Peek = require("mods.battle_royale.lib.peek")
 local BRMenu = require("mods.battle_royale.lib.menu")
+local Events = require("mods.battle_royale.lib.events")
 local Machines = require("mods.battle_royale.lib.machines")
 local Career = require("mods.battle_royale.lib.career")
 local Coexist = require("mods.battle_royale.lib.coexist")
@@ -312,6 +313,7 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    events = Events.new(), -- challenges waiting for a quiet screen (POK-162)
     despawns = Despawn.new(),  -- beaten trainers, hidden on a quiet frame
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
     pendingParade = nil,  -- when the champion's ending should start (POK-47)
@@ -454,8 +456,16 @@ return function(mod)
     end
     local ow = mod.world:overworld()
     local top = game.stack and game.stack:top()
-    if not (ow and top) or top == ow then return nil end
-    return "menu"
+    if not (ow and top) then return nil end
+    if top ~= ow then return "menu" end
+    -- A dialog is a menu too (POK-162): the nurse's script runs INSIDE
+    -- the overworld state, so `top == ow` alone called a trainer mid-heal
+    -- free -- and a challenge to somebody mid-heal is the one that wedged
+    -- a match.  Somebody reading is not about to run either.
+    if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then
+      return "menu"
+    end
+    return nil
   end
 
   -- Edge-triggered: a frame goes out only when the answer CHANGES, so a
@@ -1088,6 +1098,7 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
+    Events.clear(self.events)
     self.despawns:clear()
     self.runnerBusySince, self.lastAutoA = nil, nil
     self.stats = nil
@@ -1907,17 +1918,10 @@ return function(mod)
       self:onChallenge(fromId, msg.nonce)
 
     elseif msg.t == "accept" then
-      if self.pending and self.pending.to == fromId then
-        local nonce = self.pending.nonce
-        self.pending = nil
-        self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
-      end
+      self:onAccept(fromId, msg.nonce)
 
     elseif msg.t == "decline" then
-      if self.pending and self.pending.to == fromId then
-        self.pending = nil
-        say("...They ran off.")
-      end
+      self:onDecline(fromId, msg.nonce, msg.why)
 
     elseif msg.t == "bt" then
       if self.battle and self.battle.opponentId == fromId then
@@ -2015,6 +2019,12 @@ return function(mod)
                  onDone = onDone }
   end
 
+  -- An answer is owed on the overworld (POK-162).  A challenge that lands
+  -- while anything else owns the screen -- the nurse's dialog, the PACK,
+  -- a wild battle -- is queued in BR.events and answered by tickEvents
+  -- the moment the screen is quiet again, the same gate the parade and
+  -- the exit wait on.  Answering on the spot is what opened a lockstep
+  -- under an occupied stack and wedged a match at 5 LEFT.
   function BR:onChallenge(fromId, nonce)
     -- nobody fights before the drop (POK-21): a peer whose clock ran ahead
     -- of ours is told we are busy, which is true
@@ -2022,6 +2032,24 @@ return function(mod)
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
     end
+    if not self:screenIsQuiet() then
+      log:say("challenge from %s queued behind the screen (nonce %s)",
+              self:nameOf(fromId), tostring(nonce))
+      Events.push(self.events, { kind = "challenge", from = fromId, nonce = nonce },
+                  clock() or 0)
+      return
+    end
+    self:answerChallenge(fromId, nonce)
+  end
+
+  -- a trainer's name for the log, id when the roster has none
+  function BR:nameOf(id)
+    local p = self.players[id]
+    return (p and p.name) and (tostring(p.name) .. "#" .. tostring(id)) or tostring(id)
+  end
+
+  -- The answer itself, on a quiet screen.
+  function BR:answerChallenge(fromId, nonce)
     -- a challenge from the player we are already challenging is an accept
     if self.pending and self.pending.to == fromId then
       self.pending = nil
@@ -2032,6 +2060,8 @@ return function(mod)
     local decision = Engage.answer(
       { status = self.status, inBattle = self.battle ~= nil }, fromId, self.pending,
       self:fleeAvoid(false))
+    log:say("challenge from %s (nonce %s): %s", self:nameOf(fromId),
+            tostring(nonce), decision)
     if decision ~= "accept" then
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
@@ -2039,7 +2069,7 @@ return function(mod)
     -- the beat over the challenger's ghost, THEN the accept -- both
     -- machines start after the flash (POK-55)
     self.pending = { to = fromId, nonce = nonce,
-                     host = Engage.isHost(self.myId, fromId) }
+                     host = Engage.isHost(self.myId, fromId), at = clock() or 0 }
     engageFlash(self.ghosts:npcOf(fromId), function()
       if not (BR.pending and BR.pending.to == fromId
               and BR.pending.nonce == nonce) then return end
@@ -2047,9 +2077,143 @@ return function(mod)
       if BR.battle or BR.status ~= "alive" then return end
       local challenger = BR.players[fromId]
       if not (challenger and challenger.status == "alive") then return end
+      -- a screen opened during the flash: no battle can open under it
+      -- (POK-162), and the challenger asks again once we are back
+      if not BR:screenIsQuiet() then
+        BR.relay:send(fromId, Wire.decline(nonce, "held"))
+        return
+      end
       BR.relay:send(fromId, Wire.accept(nonce))
       BR:beginBattle(fromId, Engage.isHost(BR.myId, fromId), nonce)
     end)
+  end
+
+  -- They accepted.  Ours to open -- unless the screen is not ours right
+  -- now, in which case the opening is queued the way an inbound challenge
+  -- is: the accepter's lockstep waits for our hello, and tickPending's
+  -- nets close it if we never come.
+  function BR:onAccept(fromId, nonce)
+    local pend = self.pending
+    log:say("%s accepted (nonce %s); %s", self:nameOf(fromId), tostring(nonce),
+            (pend and pend.to == fromId and pend.nonce == nonce)
+              and (self:screenIsQuiet() and "opening" or "queued behind the screen")
+              or "not waited for")
+    if pend and pend.to == fromId and pend.nonce == nonce then
+      if not self:canOpenBattle() then
+        -- we cannot fight any more (the fog got us while the challenge
+        -- flew): say so now, not after the hold
+        self.pending = nil
+        self.relay:send(fromId, Wire.decline(nonce, "held"))
+      elseif self:screenIsQuiet() then
+        self.pending = nil
+        self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
+      else
+        Events.push(self.events, { kind = "begin", from = fromId, nonce = nonce },
+                    clock() or 0)
+      end
+      return
+    end
+    -- An accept we are not waiting for: the challenge it answers timed
+    -- out here already.  The accepter has opened a lockstep on it, so it
+    -- is told -- a decline naming the nonce closes exactly that battle
+    -- (onDecline) and nothing that has really started.  Never during our
+    -- own battle with them: a mutual sighting crosses two challenges and
+    -- lands an accept each side is right to ignore.
+    if self.battle and self.battle.opponentId == fromId then return end
+    if self.relay then self.relay:send(fromId, Wire.decline(nonce, "timeout")) end
+  end
+
+  function BR:onDecline(fromId, nonce, why)
+    log:say("%s declined (nonce %s, %s)", self:nameOf(fromId), tostring(nonce),
+            tostring(why))
+    if self.pending and self.pending.to == fromId then
+      self.pending = nil
+      Events.drop(self.events, "begin", fromId)
+      -- "held" and "timeout" are the queue's own housekeeping (POK-162):
+      -- the pair meets again on the next tick they are both free
+      if why ~= "held" and why ~= "timeout" then say("...They ran off.") end
+    end
+    -- the challenger gave up while we were holding their challenge...
+    Events.drop(self.events, "challenge", fromId)
+    -- ...or after we accepted it: the lockstep we opened on that nonce has
+    -- nobody coming.  Only a battle in which the peer has never spoken --
+    -- one that has is a real fight, and a stray decline is not its end.
+    local b = self.battle
+    if b and b.opponentId == fromId and b.nonce ~= nil and b.nonce == nonce
+       and not b.channel.heard then
+      log:say("%s declined the battle we had opened; closing it", tostring(fromId))
+      b.channel:peerGone()
+    end
+  end
+
+  -- Drain the queue (POK-162): expired events are answered with a decline
+  -- so nobody is left waiting on us; the rest wait for a quiet screen and
+  -- go one per tick, oldest first.
+  function BR:tickEvents()
+    local q = self.events
+    if not (q and q.queue[1]) then return end
+    local now = clock() or 0
+    local gone = Events.expire(q, now, Events.HOLD_SECONDS)
+    if self.phase ~= "match" then
+      for _, ev in ipairs(Events.clear(q)) do gone[#gone + 1] = ev end
+    end
+    for _, ev in ipairs(gone) do
+      if ev.kind == "begin" and self.pending and self.pending.to == ev.from then
+        self.pending = nil
+      end
+      if self.relay then self.relay:send(ev.from, Wire.decline(ev.nonce, "held")) end
+    end
+    if not q.queue[1] then return end
+    if not self:screenIsQuiet() then return end
+    local ev = Events.pop(q)
+    if ev.kind == "challenge" then
+      self:answerChallenge(ev.from, ev.nonce)
+    elseif ev.kind == "begin" then
+      local pend = self.pending
+      if pend and pend.to == ev.from and pend.nonce == ev.nonce then
+        self.pending = nil
+        if self:canOpenBattle() then
+          self:beginBattle(ev.from, Engage.isHost(self.myId, ev.from), ev.nonce)
+        elseif self.relay then
+          self.relay:send(ev.from, Wire.decline(ev.nonce, "held"))
+        end
+      end
+    end
+  end
+
+  -- The nets under the exchange (POK-162).  A challenge is not held
+  -- forever: past Engage.PENDING_SECONDS with no answer it is dropped and
+  -- the other side told, so one lost reply cannot gate every battle path
+  -- on this client for the rest of the match.  And a lockstep is not
+  -- held open forever either: LinkState says hello the moment it opens
+  -- (src/link/LinkState.lua:217), so a peer who has not said a word in
+  -- Engage.LINK_OPEN_SECONDS is never coming, and the battle is closed
+  -- the way a pulled cable closes one.
+  function BR:tickPending()
+    local now = clock()
+    if not now then return end
+    local pend = self.pending
+    if pend then
+      if not pend.at then pend.at = now end
+      -- a walk-up holds pending for as long as the bot takes to arrive
+      -- (POK-85), and tickWalkUp has its own abandon
+      local walking = self.walkUp and self.walkUp.id == pend.to
+      if not walking and Engage.stale(pend, now, Engage.PENDING_SECONDS) then
+        self.pending = nil
+        Events.drop(self.events, "begin", pend.to)
+        log:say("the challenge to %s went unanswered; dropping it", tostring(pend.to))
+        if pend.nonce ~= -1 and self.relay and not Bots.isBot(pend.to) then
+          self.relay:send(pend.to, Wire.decline(pend.nonce, "timeout"))
+        end
+      end
+    end
+    local b = self.battle
+    if b and b.at and b.channel and not b.channel.heard
+       and (now - b.at) >= Engage.LINK_OPEN_SECONDS then
+      log:say("nobody joined the battle with %s; closing it", tostring(b.opponentId))
+      b.at = nil   -- once
+      b.channel:peerGone()
+    end
   end
 
   -- The world view along one axis, in pixels, for POK-96's eyeline cap.
@@ -2066,6 +2230,8 @@ return function(mod)
 
   function BR:tryEngage()
     if self.status ~= "alive" or self.battle or self.pending then return end
+    -- only from a quiet screen (POK-162): a fight cannot open under a menu
+    if not self:screenIsQuiet() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) then return end
@@ -2094,7 +2260,12 @@ return function(mod)
         others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
                                 facing = p.facing, moving = false,
                                 status = p.status,
-                                busy = p.status == "battle" }
+                                -- somebody in a fight OR a menu (POK-162):
+                                -- the challenge waits until they are back
+                                -- on the map, where they can answer it.
+                                -- A bot has no screen to be in.
+                                busy = p.status == "battle"
+                                  or (p.busy ~= nil and not Bots.isBot(id)) }
       end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
@@ -2118,7 +2289,7 @@ return function(mod)
     local ow = mod.world:overworld()
     if Bots.isBot(target) then
       -- you are the aggressor: the ! over your own head, then the fight
-      self.pending = { to = target, nonce = -1, host = true }
+      self.pending = { to = target, nonce = -1, host = true, at = clock() or 0 }
       engageFlash(ow and ow.player, function()
         -- ...and then it walks over (POK-85).  pending is held until it
         -- arrives, so nothing else can start in the meantime.
@@ -2133,7 +2304,8 @@ return function(mod)
     end
     self.nonceSeq = self.nonceSeq + 1
     self.pending = { to = target, nonce = self.nonceSeq,
-                     host = Engage.isHost(self.myId, target) }
+                     host = Engage.isHost(self.myId, target), at = clock() or 0 }
+    log:say("challenging %s on sight (nonce %d)", self:nameOf(target), self.nonceSeq)
     self.relay:send(target, Wire.challenge(self.nonceSeq))
     -- and the challenger flashes while the challenge flies (POK-55)
     if ow then
@@ -2155,6 +2327,9 @@ return function(mod)
   function BR:tryBotEngage()
     if self.status ~= "alive" or self.battle or self.pending
        or self.botFight then return end
+    -- only onto a quiet screen (POK-162): a bot that spots you in a menu
+    -- would push its battle on top of it
+    if not self:screenIsQuiet() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) or ow.transitioning then return end
@@ -2184,7 +2359,7 @@ return function(mod)
              { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
                moving = false, status = "alive", busy = p.busy and true },
              me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
-          self.pending = { to = id, nonce = -1, host = true }
+          self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
           engageFlash(self.ghosts:npcOf(id), function()
             BR:walkUpThen(id, function()
               if BR.pending and BR.pending.to == id then BR.pending = nil end
@@ -2431,7 +2606,14 @@ return function(mod)
     w.at = now
     -- re-aimed every step: you are free to move, and it follows
     local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
-    if not dir or w.steps >= Bots.WALKUP_STEPS then return arrived() end
+    if not dir or w.steps >= Bots.WALKUP_STEPS then
+      -- It is here; the fight opens when the screen is ours (POK-162).  A
+      -- menu or a dialog up at this moment used to get a battle pushed on
+      -- top of it.  Now the bot waits beside you, and pending is held for
+      -- as long as it waits (tickPending skips a walk-up).
+      if not self:screenIsQuiet() then return end
+      return arrived()
+    end
     w.steps = w.steps + 1
     local d = Bots.DELTA[dir]
     p.facing = dir
@@ -5429,7 +5611,7 @@ return function(mod)
     broadcastPlace()
   end)
 
-  function BR:beginBattle(opponentId, isHost, _nonce)
+  function BR:beginBattle(opponentId, isHost, nonce)
     -- POK-145: the `accept` message handler had no phase check at all, and
     -- onChallenge's own is spent when the challenge ARRIVES, not when the
     -- flash that follows it opens the fight.
@@ -5437,7 +5619,11 @@ return function(mod)
     local channel = Channel.new(self.relay, opponentId, {
       onClose = function() BR:onBattleClosed(opponentId) end,
     })
-    self.battle = { channel = channel, opponentId = opponentId, isHost = isHost }
+    -- the nonce names the challenge this fight answers, so a decline
+    -- carrying it can close a lockstep nobody joined (POK-162); `at` is
+    -- when the peer's hello clock started
+    self.battle = { channel = channel, opponentId = opponentId, isHost = isHost,
+                    nonce = nonce, at = clock() }
     self.lastOpponent = opponentId
     self.status = "battle"
     self.pending = nil
@@ -5654,6 +5840,10 @@ return function(mod)
 
     -- a bot walking over to fight you, one step per beat (POK-85)
     BR:tickWalkUp()
+    -- the challenges waiting for a quiet screen, and the nets under the
+    -- exchange (POK-162)
+    BR:tickEvents()
+    BR:tickPending()
 
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
@@ -6272,7 +6462,7 @@ return function(mod)
        and not BR.battle and not BR.pending and not BR.botFight then
       local owE = mod.world:overworld()
       if Bots.isBot(id) then
-        BR.pending = { to = id, nonce = -1, host = true }
+        BR.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
         engageFlash(owE and owE.player, function()
           -- you walked into THIS one, so its stride is already over and
           -- Bots.approach returns nil on the first beat (POK-85)
@@ -6287,7 +6477,8 @@ return function(mod)
       end
       BR.nonceSeq = BR.nonceSeq + 1
       BR.pending = { to = id, nonce = BR.nonceSeq,
-                     host = Engage.isHost(BR.myId, id) }
+                     host = Engage.isHost(BR.myId, id), at = clock() or 0 }
+      log:say("challenging %s by walking up (nonce %d)", BR:nameOf(id), BR.nonceSeq)
       BR.relay:send(id, Wire.challenge(BR.nonceSeq))
       if owE then
         owE.emote = { npc = owE.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
@@ -7026,6 +7217,29 @@ return function(mod)
     p.busy = kind
     return true
   end
+  -- A challenge from outside the eyeline (POK-162).  The harness needs a
+  -- challenge to LAND while the other screen is busy, and the eyeline
+  -- will not fire one at a trainer marked busy any more -- so the driver
+  -- sends it by hand, the same way tryEngage would have.
+  mod.exports.debugChallenge = function(id)
+    if not (BR.relay and BR.relay:isOpen() and BR.players[id]) then return false end
+    if BR.phase ~= "match" or BR.status ~= "alive" or BR.battle or BR.pending then
+      return false
+    end
+    BR.nonceSeq = BR.nonceSeq + 1
+    BR.pending = { to = id, nonce = BR.nonceSeq,
+                   host = Engage.isHost(BR.myId, id), at = clock() or 0 }
+    log:say("challenging %s by hand (nonce %d)", BR:nameOf(id), BR.nonceSeq)
+    BR.relay:send(id, Wire.challenge(BR.nonceSeq))
+    return true
+  end
+  -- ...what this side is holding, and what it has queued (POK-162)
+  mod.exports.pending = function()
+    local p = BR.pending
+    if not p then return nil end
+    return { to = p.to, nonce = p.nonce, host = p.host }
+  end
+  mod.exports.queued = function() return Events.count(BR.events) end
   -- ...and one on the walk over (POK-85): a smoke needs to know the
   -- stride began, not just that a battle eventually happened
   mod.exports.walkUp = function()
