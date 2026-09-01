@@ -957,5 +957,40 @@ do
   end
 end
 
+-- ------- the route trainers' sight lines stay down (POK-163)
+--
+-- POK-150's lever is a talk table per map, filled at onStart.  A playtest
+-- saw the sight lines come back mid-match and nothing reproduces it, so
+-- the lever is now re-checked every TRAINER_TALK_TICKS and ranked above
+-- any other mod's talk table.  What can be pinned headless: the
+-- registration carries the rank, the re-check exists and runs from the
+-- tick, and a re-arm that finds something missing says so in the log.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the trainer-talk scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    T.check(src:find("local contribution = { onInteract = fieldMoveInteract, priority = 50 }", 1, true) ~= nil,
+            "the map-script contribution outranks the default priority")
+    local tick = src:match("function BR:tickTrainerTalk%(.-\n  end\n")
+    T.check(tick ~= nil, "found BR:tickTrainerTalk")
+    T.check(tick and tick:find("self:armTrainerTalk()", 1, true) ~= nil,
+            "the re-check re-arms")
+    T.check(tick and tick:find("log:warn(", 1, true) ~= nil
+            and tick:find("re-armed (POK-163)", 1, true) ~= nil,
+            "...and a re-arm that found something missing is logged")
+    T.check(src:find("    BR:tickPending()\n    -- ...and the route trainers' sight lines stay down (POK-163)\n    BR:tickTrainerTalk()\n", 1, true) ~= nil,
+            "the tick runs the re-check")
+    local arm = src:match("function BR:armTrainerTalk%(.-\n  end\n")
+    T.check(arm and arm:find("return armed, maps", 1, true) ~= nil,
+            "armTrainerTalk reports what it installed")
+    T.check(src:find('log:say("route trainers stand down: %d talk handlers on %d maps"', 1, true) ~= nil,
+            "onStart logs the arm count")
+  end
+end
+
 run.release()
 T.finish("br_load")

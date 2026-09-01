@@ -66,6 +66,9 @@ local DEFAULT_RELAY = "maglev.proxy.rlwy.net:55436"
 -- is insurance against a dropped message and against a peer moving in a way
 -- we do not model (a warp).  5 seconds at 60 Hz.
 local RESYNC_TICKS = 300
+-- (TRAINER_TALK_TICKS, POK-163, lives beside tickTrainerTalk: the mod's
+-- main closure is at LuaJIT's 60-upvalue ceiling, and one more file-level
+-- local it reads is a load error, not a warning)
 
 -- How often a bot takes a beat, in REAL seconds (it may still stand still).
 --
@@ -1478,8 +1481,11 @@ return function(mod)
     -- the new phase ahead of the guard that reads it.
     armScriptWrap()
     -- ...and route trainers go opt-in for the same window (POK-150):
-    -- their sight lines stand down, their talk still fights
-    self:armTrainerTalk()
+    -- their sight lines stand down, their talk still fights.  Counted in
+    -- the log (POK-163), so a match where they did not is visible.
+    local armedTalk, armedMaps = self:armTrainerTalk()
+    log:say("route trainers stand down: %d talk handlers on %d maps",
+            armedTalk, armedMaps)
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -5844,6 +5850,8 @@ return function(mod)
     -- exchange (POK-162)
     BR:tickEvents()
     BR:tickPending()
+    -- ...and the route trainers' sight lines stay down (POK-163)
+    BR:tickTrainerTalk()
 
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
@@ -6263,7 +6271,13 @@ return function(mod)
     -- get their live talk table.
     local okD, EngineData = pcall(require, "src.core.Data")
     for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
-      local contribution = { onInteract = fieldMoveInteract }
+      -- Ranked above the default (POK-163): MapScripts merges talk tables
+      -- first-wins by priority, ties to the LATER registration, so any
+      -- other mod that names a route trainer's TEXT -- even with `false`
+      -- -- would outrank this one and hand the trainer its sight line
+      -- back for the length of a match.  Out of a session the table is
+      -- empty, so the rank changes nothing for a real playthrough.
+      local contribution = { onInteract = fieldMoveInteract, priority = 50 }
       for _, o in ipairs(def.objects or {}) do
         if o.trainerClass and o.text then
           trainerTalk[mapId] = {}
@@ -6290,11 +6304,15 @@ return function(mod)
     game.stack:push(TextBox.new(game, after, done))
   end
 
+  -- Returns how many handlers this call installed and on how many maps:
+  -- the whole roster at onStart, and nothing at all on a re-check that
+  -- found the tables intact.
   function BR:armTrainerTalk()
     local data = self.game and self.game.data
-    if not data or not data.maps then return end
+    if not data or not data.maps then return 0, 0 end
     local okMS, MapScripts = pcall(require, "src.script.MapScripts")
-    if not okMS then return end
+    if not okMS then return 0, 0 end
+    local armed, maps = 0, 0
     for mapId, T in pairs(trainerTalk) do
       local touched = false
       local def = data.maps[mapId]
@@ -6303,9 +6321,41 @@ return function(mod)
            and not MapScripts.baseTalk(mapId, o.text) then
           T[o.text] = trainerTalkHandler
           touched = true
+          armed = armed + 1
         end
       end
-      if touched then MapScripts.invalidate(mapId) end
+      if touched then
+        maps = maps + 1
+        MapScripts.invalidate(mapId)
+      end
+    end
+    return armed, maps
+  end
+
+  -- The lever, re-checked (POK-163).  A playtest saw route trainers
+  -- engage on sight in a Quick Play match, and nothing reproduces it: the
+  -- POK-150 smoke, the standard flow, and a relay-hosted quick play with
+  -- the default Safari all count every generic trainer armed at every
+  -- milestone and stand in a sight line unbothered.  Whatever emptied the
+  -- tables on that client, the cheap answer is to keep asking:
+  -- armTrainerTalk skips what is already armed, so re-running it costs a
+  -- walk over the roster and nothing else -- and a re-arm that FOUND
+  -- something missing is logged, which turns the next sighting into
+  -- evidence rather than a report.
+  -- how often a match re-checks; armTrainerTalk skips what is armed
+  local TRAINER_TALK_TICKS = 120
+  function BR:tickTrainerTalk()
+    if not self:inSession() then
+      self.talkCheck = nil
+      return
+    end
+    self.talkCheck = (self.talkCheck or 0) + 1
+    if self.talkCheck < TRAINER_TALK_TICKS then return end
+    self.talkCheck = 0
+    local armed, maps = self:armTrainerTalk()
+    if armed > 0 then
+      log:warn("route trainers: %d talk handler(s) on %d map(s) were missing "
+               .. "mid-session and have been re-armed (POK-163)", armed, maps)
     end
   end
 
