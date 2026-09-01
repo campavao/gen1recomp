@@ -259,10 +259,24 @@ function Menu.items(mod, BR, game)
       -- has to learn that the room they are looking at is the one they
       -- just played in.
       local start = BR.lastResult and "PLAY AGAIN" or "START MATCH"
-      items[#items + 1] = {
-        label = countdown and (start .. " (" .. countdown .. ")") or start,
-        onSelect = function() BR:startMatch() end,
-      }
+      if BR.quick and BR.lastResult and not countdown then
+        -- READY UP (POK-167): a quick room's second match is ARMED, not
+        -- started.  The first lobby counted itself down because Quick
+        -- Play promised a game now; the match after it is the one nobody
+        -- asked for, so the host says so, and the sixty seconds that
+        -- follow are every guest's window to read the result, check the
+        -- party, or leave.  Once armed this row is PLAY AGAIN (N) again,
+        -- and pressing it starts now.
+        items[#items + 1] = {
+          label = "READY UP",
+          onSelect = function() BR:readyUp() end,
+        }
+      else
+        items[#items + 1] = {
+          label = countdown and (start .. " (" .. countdown .. ")") or start,
+          onSelect = function() BR:startMatch() end,
+        }
+      end
     elseif BR.isSpectating and BR:isSpectating() then
       -- the POK-133 seat: the match is running without us, and the relay
       -- makes us a player the moment it ends and the room unlocks

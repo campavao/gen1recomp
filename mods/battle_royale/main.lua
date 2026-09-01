@@ -894,6 +894,21 @@ return function(mod)
 
   function BR:isOpen() return self.relay and self.relay.open == true end
 
+  -- READY UP (POK-167): after a match, a quick room does not count down on
+  -- its own -- the host arms the next one.  Quick Play's promise is a game
+  -- NOW, and the first lobby keeps it; the second match is the one nobody
+  -- asked for, so it waits for the host to say so, and then gives the
+  -- room the same sixty seconds the first lobby had, which is the window
+  -- a guest has to read their result, check their party, or leave.
+  function BR:readyUp()
+    local relay = self.relay
+    if not (relay and relay:isHost() and relay:isOpen()) then return false end
+    if self.phase ~= "lobby" or self.autoStartAt then return false end
+    self.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
+    log:say("ready: the next match starts in %ds", QUICK_START_SECONDS)
+    return true
+  end
+
   -- seconds left on the quick-play countdown, or nil when nothing is counting
   function BR:startsIn()
     if not self.autoStartAt then return nil end
@@ -1362,6 +1377,14 @@ return function(mod)
   function BR:startMatch()
     local relay = self.relay
     if not (relay and relay:isHost()) then return end
+    -- Any start CONSUMES the quick-play countdown (POK-167).  Only the
+    -- tick's own firing used to clear it, so a quick host who pressed
+    -- START ahead of the sixty seconds carried the armed clock into the
+    -- match, where phase ~= "lobby" hid it -- and the moment the room
+    -- came back to the lobby the tick found a countdown hours expired and
+    -- started the next match on the same frame.  "The room just went
+    -- again": no result read, no party checked, no way out.
+    self.autoStartAt = nil
     -- A solo match is the one nothing else can see: it runs on a LocalRoom
     -- and never opens a socket (POK-124).  This is a counter bump and a
     -- local file write -- deliberately NOT a connection, because
@@ -7040,6 +7063,8 @@ return function(mod)
   mod.exports.setFill = function(n) return BR:setFill(n) end
   mod.exports.botsAtStart = function() return BR:botsAtStart() end
   mod.exports.startsIn = function() return BR:startsIn() end
+  mod.exports.readyUp = function() return BR:readyUp() end
+  mod.exports.isQuick = function() return BR.quick == true end
   mod.exports.join = function(code) return BR:join(code) end
   mod.exports.start = function() return BR:startMatch() end
   mod.exports.leave = function() return BR:teardown() end

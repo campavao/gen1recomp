@@ -992,5 +992,39 @@ do
   end
 end
 
+-- ------- a quick room does not roll into the next match (POK-167)
+--
+-- The countdown is host-local clock state, so what a headless run can
+-- pin is the wiring: every start consumes it, the READY UP lever exists,
+-- and the lobby offers it in a quick room after a match instead of the
+-- instant start.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  local m = io.open("mods/battle_royale/lib/menu.lua", "r")
+  if not (f and m) then
+    io.write("  (skipping the quick-again scan: sources not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local menu = m:read("*a")
+    m:close()
+    local start = src:match("function BR:startMatch%(.-\n  end\n")
+    T.check(start ~= nil, "found BR:startMatch")
+    T.check(start and start:find("self.autoStartAt = nil", 1, true) ~= nil,
+            "a start consumes the quick-play countdown")
+    local ready = src:match("function BR:readyUp%(.-\n  end\n")
+    T.check(ready ~= nil, "found BR:readyUp")
+    T.check(ready and ready:find("QUICK_START_SECONDS", 1, true) ~= nil,
+            "...which arms the same sixty seconds the first lobby had")
+    T.check(ready and ready:find('self.phase ~= "lobby" or self.autoStartAt then return false', 1, true) ~= nil,
+            "...only from a lobby that is not already counting")
+    T.check(menu:find('if BR.quick and BR.lastResult and not countdown then', 1, true) ~= nil
+            and menu:find('label = "READY UP"', 1, true) ~= nil
+            and menu:find("BR:readyUp()", 1, true) ~= nil,
+            "a quick room after a match offers READY UP, not an instant start")
+  end
+end
+
 run.release()
 T.finish("br_load")
