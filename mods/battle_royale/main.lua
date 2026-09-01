@@ -367,6 +367,7 @@ return function(mod)
     solo = false,         -- hosting a room of one, with no server
     quick = false,        -- came in through QUICK PLAY, so it self-starts
     fellAt = nil,         -- where a whiteout caught us, to spectate from
+    breatherUntil = nil,  -- no automatic fight until this clock (POK-174)
     autoStartAt = nil,    -- quick play starts itself at this clock time
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
@@ -1100,6 +1101,7 @@ return function(mod)
       self.battle = nil
     end
     self.fellAt = nil
+    self.breatherUntil = nil
     self.refusedBattle = nil
     self.players = {}
     -- the door's findings go with the room they were about (POK-142): the
@@ -2270,10 +2272,29 @@ return function(mod)
     return (facing == "up" or facing == "down") and vh or vw
   end
 
+  -- The breather after a fight (POK-174): true while nothing automatic
+  -- may start another one.
+  function BR:inBreather(now)
+    local until_ = self.breatherUntil
+    if not until_ then return false end
+    now = now or clock() or 0
+    if now >= until_ then
+      self.breatherUntil = nil
+      return false
+    end
+    return true
+  end
+
+  function BR:startBreather()
+    self.breatherUntil = (clock() or 0) + Bots.BREATHER
+  end
+
   function BR:tryEngage()
     if self.status ~= "alive" or self.battle or self.pending then return end
     -- only from a quiet screen (POK-162): a fight cannot open under a menu
     if not self:screenIsQuiet() then return end
+    -- ...and not in the breather after a fight (POK-174)
+    if self:inBreather() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) then return end
@@ -2376,6 +2397,9 @@ return function(mod)
     -- only onto a quiet screen (POK-162): a bot that spots you in a menu
     -- would push its battle on top of it
     if not self:screenIsQuiet() then return end
+    -- ...and not in the breather after a fight (POK-174): the bot parked
+    -- beside your last fight does not get the next one for free
+    if self:inBreather() then return end
     local ow = mod.world:overworld()
     local player = ow and ow.player
     if not (player and ow.map) or ow.transitioning then return end
@@ -3058,7 +3082,12 @@ return function(mod)
     -- so the host's own trainer was invisible to every same-map hunt: on a
     -- solo match no bot ever walked at the player at all, and "hunt the
     -- nearest trainer, bot or human" only ever meant remote humans.
-    local meHere = (self.phase == "match" and self.status == "alive")
+    --
+    -- Not in the breather after a fight (POK-174): a player who just
+    -- came out of one is not prey for the length of it, so the bots on
+    -- the map walk at each other instead.
+    local meHere = (self.phase == "match" and self.status == "alive"
+                    and not self:inBreather(now))
       and here() or nil
     for id, p in pairs(self.players) do
       -- a bot on its way over is not also strolling somewhere (POK-85),
@@ -3128,13 +3157,22 @@ return function(mod)
           -- own the next beat.  tickBotFights stays ungated: two bots
           -- that blunder into each other still fight, or nobody thins
           -- the roster.
+          --
+          -- A trainer who is FIGHTING is not prey (POK-174).  The bot in
+          -- our battle stands frozen beside us, and every other bot on the
+          -- map used to pick it as the nearest trainer, walk up, and park
+          -- -- excluded from tickBotFights as the one we are fighting, so
+          -- nothing resolved them -- until the fight ended and the parked
+          -- bot took us on the spot.  Skipping it (and a peer marked
+          -- mid-fight) sends them at each other.
           local prey
           if not Bots.wantsHeal(self:botRecord(id)) then
             if meHere and meHere.mapId == p.map then
               prey = { x = meHere.x, y = meHere.y }
             end
             for otherId, o in pairs(self.phase == "match" and self.players or {}) do
-              if otherId ~= id and o.status == "alive" and o.map == p.map then
+              if otherId ~= id and o.status == "alive" and o.map == p.map
+                 and otherId ~= self.botFight and o.busy ~= "battle" then
                 if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
                    < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
                   prey = o
@@ -4537,6 +4575,24 @@ return function(mod)
     press("a")
   end
 
+  -- THE LAST TURN'S TEXT DOES NOT FLASH OVER THIS ONE (POK-173).
+  --
+  -- An engine bug, worked around here because the engine a player runs
+  -- is not one we ship.  BattleState draws the text area during
+  -- "messages" while `current`, `animPlaying` OR `msgHold` is set, and
+  -- msgHold -- "keep the typed page behind the move animation" (#296) --
+  -- is set by every auto page (the "X used MOVE!" line) and cleared only
+  -- by the NEXT startMessage.  It survives the return to the move menu,
+  -- so the first frames of the next turn -- a queued fn, a hold, before
+  -- any text starts -- draw the STALE lines: "PONYTA used EMBER" flashing
+  -- before "CUBONE used TACKLE".  The hold's job is over the moment the
+  -- battle is at the menu, so it is dropped there, every tick, and the
+  -- next turn opens on a clean box.
+  function BR:tickBattleText()
+    local lb = self.localBattle
+    if lb and lb.phase == "menu" and lb.msgHold then lb.msgHold = nil end
+  end
+
   function BR:tickLevels()
     if not (self.phase == "match" and self.game) then return end
     -- an OUT player's party is a record of the fall, not a combatant --
@@ -5653,6 +5709,10 @@ return function(mod)
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
+    -- a breather after any fight in a match (POK-174): a bot's, a route
+    -- trainer's, a wild one's -- the queue of bots outside does not care
+    -- which kind you just had
+    if BR.phase == "match" then BR:startBreather() end
     -- A battle that never ran is not a defeat (POK-134).  The engine
     -- refuses a wild battle against an empty party -- BattleState marks it
     -- dead and emits `lose` with `skipped` set, then forces the blackout --
@@ -5824,6 +5884,7 @@ return function(mod)
       end
     end
     BR.fleeing = nil
+    BR:startBreather()   -- POK-174, the link battle's turn
     -- No "a refused battle is not a defeat" guard here on purpose: a
     -- refusal cannot reach this event.  LinkState builds this payload by
     -- hand -- { result, myParty, theirParty, peerName, role } -- so there
@@ -6133,6 +6194,7 @@ return function(mod)
     -- and neither they nor the engine's own lines may hold the match:
     -- five silent seconds presses any dialog through (POK-54)
     BR:tickAutoResolve(game)
+    BR:tickBattleText()
 
     if relay and relay:isOpen() and BR:inRound() then
       -- The mark goes out ABOVE the position block (POK-113), not inside

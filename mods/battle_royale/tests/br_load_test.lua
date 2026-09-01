@@ -1062,5 +1062,41 @@ do
   end
 end
 
+-- ------- the last turn's text does not flash (POK-173) and the bots do
+-- not queue up on the player (POK-174), read off the source
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the POK-173/174 scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local tb = src:match("function BR:tickBattleText%(.-\n  end\n")
+    T.check(tb ~= nil and tb:find('lb.phase == "menu" and lb.msgHold then lb.msgHold = nil', 1, true) ~= nil,
+            "a battle at the menu drops the stale text hold (POK-173)")
+    T.check(src:find("    BR:tickAutoResolve(game)\n    BR:tickBattleText()\n", 1, true) ~= nil,
+            "...every tick")
+    local Bots = require("mods.battle_royale.lib.bots")
+    T.check(type(Bots.BREATHER) == "number" and Bots.BREATHER >= 5 and Bots.BREATHER <= Bots.FIGHT_COOLDOWN,
+            "the player's breather is real and no longer than the bots' own")
+    T.check(src:find('if BR.phase == "match" then BR:startBreather() end', 1, true) ~= nil
+            and src:find("BR:startBreather()   -- POK-174, the link battle's turn", 1, true) ~= nil,
+            "every fight's end starts the breather")
+    local try = src:match("function BR:tryEngage%(.-\n  end\n")
+    local bot = src:match("function BR:tryBotEngage%(.-\n  end\n")
+    T.check(try and try:find("if self:inBreather() then return end", 1, true) ~= nil
+            and bot and bot:find("if self:inBreather() then return end", 1, true) ~= nil,
+            "neither eyeline fires inside it")
+    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle" then', 1, true) ~= nil,
+            "a fighting trainer is not prey, so bots walk at each other")
+    T.check(src:find("and not self:inBreather(now))", 1, true) ~= nil,
+            "...and neither is a player in the breather")
+    local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")
+    T.check(chal and chal:find("inBreather", 1, true) == nil,
+            "a deliberate bump or talk still fights: the breather is a shield, not a cage")
+  end
+end
+
 run.release()
 T.finish("br_load")

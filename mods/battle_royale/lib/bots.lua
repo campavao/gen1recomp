@@ -297,6 +297,15 @@ end
 -- map does not resolve its whole roster in a couple of ticks.
 Bots.FIGHT_COOLDOWN = 12
 
+-- ...and so does the PLAYER (POK-174).  Bots stalking a trainer who is
+-- already fighting used to park beside the fight and take the winner the
+-- frame it ended -- a queue of fights with no way out of it.  For this
+-- long after a fight ends nothing AUTOMATIC starts one: not a bot's
+-- sight, not the player's own eyeline, and the bots do not prey on the
+-- player either -- they prey on each other instead.  A deliberate bump
+-- or walk-up talk still fights: the breather is a shield, not a cage.
+Bots.BREATHER = 8
+
 -- Two bots notice each other about as far off as a player would.
 Bots.NOTICE = 3
 
