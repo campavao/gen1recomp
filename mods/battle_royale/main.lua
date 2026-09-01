@@ -214,6 +214,19 @@ local STORY_FLAGS = {
   "EVENT_AUTOWALKED_INTO_LORELEIS_ROOM",
   "EVENT_AUTOWALKED_INTO_BRUNOS_ROOM",
   "EVENT_AUTOWALKED_INTO_AGATHAS_ROOM",
+  -- POK-164 (POK-159 §2): SAFFRON is liberated before the buzzer.  Seven
+  -- street ROCKETs stand on the cells below the GYM, SILPH CO, the DOJO
+  -- and every house door, so an occupied Saffron is a town with no
+  -- Centre, no mart, no gym and no loot -- "Team Rocket still occupies
+  -- the city and every building is locked".  M.SAFFRON_CITY.onEnter
+  -- (data/scripts/story4.lua) reads this one flag and hides all nine
+  -- rockets and shows the six civilians on every entry.  What it costs:
+  -- the SILPH CO 11F Giovanni trigger (story.lua) stands down -- he is a
+  -- talk-only statue for the match -- and the Silph workers speak their
+  -- "saved" lines.  The Silph floors' own trainers and the ROCKET
+  -- HIDEOUT (its Giovanni gates on EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI)
+  -- are untouched, so the PvE crawls stay on the board.
+  "EVENT_BEAT_SILPH_CO_GIOVANNI",
 }
 
 return function(mod)

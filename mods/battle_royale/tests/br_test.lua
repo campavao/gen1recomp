@@ -4288,5 +4288,61 @@ do
   end
 end
 
+-- ------- Saffron is liberated by the flag the match sets (POK-164)
+--
+-- Seven street ROCKETs stand on the cells below Saffron's doors, so an
+-- occupied Saffron is a town with nothing to enter.  The lever is the
+-- engine's own: M.SAFFRON_CITY.onEnter (data/scripts/story4.lua) reads
+-- EVENT_BEAT_SILPH_CO_GIOVANNI and hides every rocket / shows every
+-- civilian.  Drive the VANILLA handler with a recording Commands, so the
+-- pin is on what the flag really does -- and then check the loadout sets
+-- exactly that flag, and not the hideout's.
+
+do
+  package.loaded["src.render.TextBox"] = package.loaded["src.render.TextBox"]
+    or { new = function(_, _, done) if done then done() end return {} end }
+  local S4 = require("data.scripts.story4")
+  local real = package.loaded["src.script.Commands"]
+  local calls = {}
+  package.loaded["src.script.Commands"] = {
+    hide_object = function(_, map, name) calls[#calls + 1] = "hide " .. map .. " " .. name end,
+    show_object = function(_, map, name) calls[#calls + 1] = "show " .. map .. " " .. name end,
+  }
+  local function enter(flags)
+    calls = {}
+    S4.SAFFRON_CITY.onEnter({ save = { flags = flags } },
+                            { map = { id = "SAFFRON_CITY" } })
+    local hid, shown = 0, 0
+    for _, c in ipairs(calls) do
+      if c:find("^hide SAFFRON_CITY SAFFRONCITY_ROCKET") then hid = hid + 1
+      elseif c:find("^show ") then shown = shown + 1 end
+    end
+    return hid, shown
+  end
+  local hid, shown = enter({})
+  eq(hid, 0, "a vanilla save keeps the rockets on the streets")
+  eq(shown, 0, "...and the civilians hidden")
+  hid, shown = enter({ EVENT_BEAT_SILPH_CO_GIOVANNI = true })
+  eq(hid, 9, "the flag hides all nine street rockets")
+  eq(shown, 6, "...and shows the six civilians")
+  hid, shown = enter({ EVENT_RESCUED_MR_FUJI = true })
+  eq(hid, 1, "Fuji alone only swaps the Silph door guard")
+  package.loaded["src.script.Commands"] = real
+
+  -- ...and the match arms exactly that flag, read off the loadout like
+  -- the other story flags are
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    local block = src:match("local STORY_FLAGS = {.-\n}\n")
+    ok(block ~= nil, "found STORY_FLAGS")
+    ok(block and block:find('"EVENT_BEAT_SILPH_CO_GIOVANNI"', 1, true) ~= nil,
+       "the match arms with Saffron liberated (POK-164)")
+    ok(block and block:find('"EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"', 1, true) == nil,
+       "...but not the hideout: its Giovanni stays a boss")
+  end
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
