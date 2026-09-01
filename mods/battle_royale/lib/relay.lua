@@ -28,13 +28,22 @@ local SILENT_FOR = 25.0
 local CONTROL = {
   room_hosted = true, room_joined = true, room_error = true, roster = true,
   recv = true, room_closed = true, pong = true, no_open_rooms = true,
+  match_in_progress = true, info = true,
 }
+
+-- how often a connected client re-asks for the server's info line
+-- (POK-161): the motd never changes mid-session, but `conns` is the
+-- "somebody else is online" signal and it should not go stale in the
+-- lobby where it matters
+local INFO_EVERY = 15.0
 
 local ERRORS = {
   not_found = "That code wasn't\nfound.",
   full = "That game is\nfull.",
   locked = "That game has\nalready started.",
   already_in_room = "Already in a\ngame.",
+  -- the host showed you out (POK-130); the room will not take you back
+  removed = "The host removed\nyou from that\ngame.",
   -- the relay is at its room ceiling: not the player's fault, and
   -- SOLO VS BOTS still works, so say something that points at the way out
   server_full = "That server is\nbusy. Try SOLO\nor try again\nlater.",
@@ -136,6 +145,27 @@ end
 
 function Relay:join(code, name)
   return self:_open({ type = "join_room", code = code, name = name })
+end
+
+-- The one shared DAILY GAME room (POK-161): join it, or become its host.
+-- The relay answers room_joined or room_hosted, both already handled; a
+-- daily match already running answers match_in_progress like quick play.
+function Relay:dailyJoin(name)
+  return self:_open({ type = "daily_join", name = name })
+end
+
+-- Enter a LOCKED room as a watcher who plays the next match (POK-133).
+-- Sent raw, not through _open: the one caller already holds the live
+-- connection quick_join answered on.
+function Relay:spectate(code, name)
+  return self:_raw({ type = "join_room", code = code, name = name,
+                     spectate = true })
+end
+
+-- Show a member the door (POK-130).  Host only, and the relay enforces
+-- that too; their IP stays out for the life of the room.
+function Relay:kick(id)
+  return self:_raw({ type = "kick", id = id })
 end
 
 function Relay:isOpen() return self.status == "lobby" end
@@ -252,6 +282,12 @@ function Relay:update()
     self.pingSentAt = t
     self:_raw({ type = "ping", t = t })
   end
+  -- the info line rides the same cadence machinery (POK-161); an old
+  -- relay ignores the unknown type and serverInfo simply stays nil
+  if self.status == "lobby" and t - (self.lastInfo or 0) >= INFO_EVERY then
+    self.lastInfo = t
+    self:_raw({ type = "info" })
+  end
   if t - self.lastHeard >= SILENT_FOR then
     self:_close("Lost the relay.")
   end
@@ -262,7 +298,10 @@ local function cleanMembers(list)
   for _, m in ipairs(type(list) == "table" and list or {}) do
     if type(m) == "table" and type(m.id) == "number" then
       out[#out + 1] = { id = math.floor(m.id),
-                        name = type(m.name) == "string" and m.name or "PLAYER" }
+                        name = type(m.name) == "string" and m.name or "PLAYER",
+                        -- a watcher of this match, a player of the next
+                        -- one (POK-133); cleared by the relay at unlock
+                        spectate = m.spectate == true or nil }
     end
   end
   return out
@@ -283,6 +322,11 @@ function Relay:_receive(msg)
   elseif t == "no_open_rooms" then
     -- not an error: nobody is hosting yet, so the caller gets to be first
     self:_fire("noopen", self)
+  elseif t == "match_in_progress" then
+    -- quick_join's third answer (POK-133): nothing joinable, but a match
+    -- is live -- the caller may enter it as a spectator and play the next
+    self:_fire("running", self, msg.code,
+                type(msg.members) == "number" and msg.members or nil)
   elseif t == "roster" then
     if type(msg.host) == "number" then self.hostId = msg.host end
     if type(msg.open) == "boolean" then self.open = msg.open end
@@ -297,6 +341,33 @@ function Relay:_receive(msg)
                 or "The host\ndisconnected.")
   elseif t == "pong" then
     if self.pingSentAt then self.rtt = now() - self.pingSentAt end
+  elseif t == "info" then
+    -- the server's own line (POK-161): the motd rows come pre-bounded,
+    -- but a client trusts nothing it renders into a 17-cell box
+    local rows = {}
+    for _, l in ipairs(type(msg.motd) == "table" and msg.motd or {}) do
+      if type(l) == "string" and l ~= "" then
+        rows[#rows + 1] = l:sub(1, 17)
+        if #rows >= 3 then break end
+      end
+    end
+    local daily
+    if type(msg.daily) == "table" and tonumber(msg.daily.secs) then
+      -- the receipt clock rides along so a countdown can be computed
+      -- without another round trip (POK-161)
+      daily = { secs = tonumber(msg.daily.secs),
+                label = type(msg.daily.label) == "string"
+                  and msg.daily.label:sub(1, 17) or nil,
+                at = now() }
+    end
+    self.serverInfo = { motdRows = rows,
+                        rooms = tonumber(msg.rooms) or 0,
+                        conns = tonumber(msg.conns) or 0,
+                        daily = daily }
+    -- (relay, info), like "running": the daily smoke caught this firing
+    -- with info alone while its one consumer read the second argument --
+    -- the start clock was never armed and the hour sailed past
+    self:_fire("info", self, self.serverInfo)
   end
 end
 

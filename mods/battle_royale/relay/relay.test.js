@@ -360,12 +360,30 @@ test("quick_join skips private, locked and full rooms", async () => {
     await shut.until("room_hosted");
     shut.send({ type: "lock_room", locked: true });
 
+    // ...but an open room that is LOCKED is a match in progress, and since
+    // POK-133 that is its own answer: the seeker is not seated, but they
+    // are told where to watch.
     const seeker = await connect(port);
     seeker.send({ type: "quick_join", name: "SEEK" });
-    assert.equal((await seeker.next()).type, "no_open_rooms");
+    const answer = await seeker.next();
+    assert.equal(answer.type, "match_in_progress");
+    assert.equal(typeof answer.code, "string");
 
     priv.end(); shut.end(); seeker.end();
   }, { members: 2 });
+});
+
+test("quick_join with nothing open and nothing running says no_open_rooms", async () => {
+  await withRelay(async (port) => {
+    const priv = await connect(port);
+    priv.send({ type: "host_room", name: "PRIV" });   // private, unlocked
+    await priv.until("room_hosted");
+    const seeker = await connect(port);
+    seeker.send({ type: "quick_join", name: "SEEK" });
+    // a private lobby is not a match in progress: it is invisible, full stop
+    assert.equal((await seeker.next()).type, "no_open_rooms");
+    priv.end(); seeker.end();
+  });
 });
 
 test("quick_join gathers strangers into the fullest room, not the first", async () => {
@@ -529,4 +547,188 @@ test("a stat needs no room, which is the whole point", async () => {
     assert.equal(stats().statSolo, before.statSolo + 12, "counted without a room");
     a.end();
   });
+});
+
+// ------- POK-130: the host can show somebody the door
+
+// the roster arrives once per change, so a test that hosted then joined has
+// two of them queued; wait for the one that matches
+async function rosterWhere(client, pred) {
+  for (;;) {
+    const roster = await client.until("roster");
+    if (pred(roster)) return roster;
+  }
+}
+
+test("kick removes a member, tells them, and their IP stays out", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    const joined = await guest.until("room_joined");
+    await host.until("roster");
+
+    host.send({ type: "kick", id: joined.id });
+    const closed = await guest.until("room_closed");
+    assert.equal(closed.reason, "removed");
+    const roster = await rosterWhere(host, (r) => r.members.length === 1);
+    assert.equal(roster.members[0].name, "HOST", "the roster is the host alone");
+
+    // the same IP cannot come back through either door
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    assert.equal((await guest.until("room_error")).reason, "removed");
+    const again = await connect(port);   // a fresh connection, same IP
+    again.send({ type: "quick_join", name: "GUEST" });
+    assert.equal((await again.next()).type, "no_open_rooms");
+
+    host.end(); guest.end(); again.end();
+  });
+});
+
+test("only the host kicks, and never themselves", async () => {
+  await withRelay(async (port, relay) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    const guest = await connect(port);
+    guest.send({ type: "join_room", code, name: "GUEST" });
+    await guest.until("room_joined");
+    await host.until("roster");
+
+    // a guest asking is ignored; so is a host aiming at their own id
+    guest.send({ type: "kick", id: 1 });
+    await guest.settled();
+    host.send({ type: "kick", id: 1 });
+    await host.settled();
+    assert.equal(relay.rooms.get(code).members.size, 2, "nobody went anywhere");
+
+    host.end(); guest.end();
+  });
+});
+
+// ------- POK-133: watch the running match, play the next one
+
+test("a spectator enters a locked room and is seated at the unlock", async () => {
+  await withRelay(async (port) => {
+    const host = await connect(port);
+    host.send({ type: "host_room", name: "HOST", open: true });
+    const code = (await host.until("room_hosted")).code;
+    host.send({ type: "lock_room", locked: true });
+
+    // a player is barred; a watcher is not
+    const player = await connect(port);
+    player.send({ type: "join_room", code, name: "LATE" });
+    assert.equal((await player.until("room_error")).reason, "locked");
+    const watcher = await connect(port);
+    watcher.send({ type: "join_room", code, name: "LATE", spectate: true });
+    await watcher.until("room_joined");
+    let roster = await rosterWhere(host,
+      (r) => r.members.some((m) => m.name === "LATE"));
+    const seat = roster.members.find((m) => m.name === "LATE");
+    assert.equal(seat.spectate, true, "the roster marks the watcher");
+
+    // the match ends, the room unlocks, the watcher becomes a player
+    host.send({ type: "lock_room", locked: false });
+    roster = await rosterWhere(watcher,
+      (r) => r.members.some((m) => m.name === "LATE" && !m.spectate));
+    const seated = roster.members.find((m) => m.name === "LATE");
+    assert.equal(seated.spectate, undefined, "the unlock seats them");
+
+    host.end(); player.end(); watcher.end();
+  });
+});
+
+// ------- POK-161: the official game time, served not shipped
+
+test("info answers with the bounded motd and live counts", async () => {
+  const { createRelay: mk } = await import("./server.js");
+  const relay = mk({ motd: "GAME NIGHT DAILY\n7PM CENTRAL" });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    const a = await connect(addr.port);
+    a.send({ type: "info" });
+    const info = await a.until("info");
+    assert.deepEqual(info.motd, ["GAME NIGHT DAILY", "7PM CENTRAL"]);
+    assert.equal(info.conns, 1);
+    assert.equal(info.rooms, 0);
+    // needs no room, like stat: the empty lobby is exactly who asks
+    a.send({ type: "host_room", name: "A" });
+    await a.until("room_hosted");
+    a.send({ type: "info" });
+    const again = await a.until("info");
+    assert.equal(again.rooms, 1);
+    a.end();
+  } finally {
+    await relay.close();
+  }
+});
+
+test("the motd is bounded: 17 cells, 3 rows, printable only", async () => {
+  const { cleanMotd } = await import("./server.js");
+  assert.deepEqual(cleanMotd(undefined), []);
+  assert.deepEqual(cleanMotd(""), []);
+  assert.deepEqual(cleanMotd("A ROW THAT RUNS FAR PAST THE BOX"),
+    ["A ROW THAT RUNS F"]);
+  assert.deepEqual(cleanMotd("ONE\nTWO\nTHREE\nFOUR"),
+    ["ONE", "TWO", "THREE"]);
+  assert.deepEqual(cleanMotd("G\u00c9M\u00c9  SOIR\u00c9E  "), ["GM  SOIRE"]);
+});
+
+// ------- POK-161 v2: the DAILY GAME
+
+test("daily config parses, bounds, and counts down", async () => {
+  const { parseDaily, dailySecondsUntil } = await import("./server.js");
+  assert.equal(parseDaily(undefined), null);
+  assert.equal(parseDaily("nonsense"), null);
+  assert.equal(parseDaily("19:00|Not/AZone|X"), null);
+  const d = parseDaily("19:00|America/Chicago|7PM CENTRAL");
+  assert.equal(d.hour, 19);
+  assert.equal(d.label, "7PM CENTRAL");
+  const secs = dailySecondsUntil(d);
+  assert.ok(secs > 0 && secs <= 86400, "within a day: " + secs);
+  // a label past the box is trimmed like any motd row
+  assert.equal(parseDaily("07:30|UTC|A LABEL THAT RUNS PAST THE BOX").label,
+    "A LABEL THAT RUNS");
+});
+
+test("daily_join shares one room, and quick_join never seats there", async () => {
+  const relay = createRelay({ daily: "19:00|America/Chicago|7PM CENTRAL" });
+  const addr = await relay.listen(0, "127.0.0.1");
+  try {
+    const a = await connect(addr.port);
+    a.send({ type: "info" });
+    const info = await a.until("info");
+    assert.ok(info.daily && info.daily.secs > 0, "info carries the schedule");
+    assert.equal(info.daily.label, "7PM CENTRAL");
+
+    // first press creates it, second press joins the SAME room
+    a.send({ type: "daily_join", name: "EARLY" });
+    const hosted = await a.until("room_hosted");
+    const b = await connect(addr.port);
+    b.send({ type: "daily_join", name: "ALSO" });
+    assert.equal((await b.until("room_joined")).code, hosted.code);
+
+    // quick play walks straight past the waiting daily room
+    const q = await connect(addr.port);
+    q.send({ type: "quick_join", name: "NOW" });
+    assert.equal((await q.next()).type, "no_open_rooms");
+
+    // ...but once its match runs, it is the POK-133 answer for everyone
+    a.send({ type: "lock_room", locked: true });
+    await a.settled();
+    const late = await connect(addr.port);
+    late.send({ type: "daily_join", name: "LATE" });
+    const running = await late.next();
+    assert.equal(running.type, "match_in_progress");
+    assert.equal(running.code, hosted.code);
+    const q2 = await connect(addr.port);
+    q2.send({ type: "quick_join", name: "NOW2" });
+    assert.equal((await q2.until("match_in_progress")).code, hosted.code);
+
+    a.end(); b.end(); q.end(); late.end(); q2.end();
+  } finally {
+    await relay.close();
+  }
 });

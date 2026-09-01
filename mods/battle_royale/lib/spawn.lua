@@ -80,6 +80,18 @@ function Spawn.walkable(maps, tilesets, mapId, x, y)
      and not Map.defIsWaterCell(def, tilesetDef, x, y)
 end
 
+-- Can a SURFING actor stand on this cell (POK-158 M4)?  Water tiles are
+-- NOT in the tileset's walkable list -- the engine's surf logic is what
+-- lets a player onto them -- so this is simply the in-bounds water test,
+-- the same `defIsWaterCell` trySurf asks before mounting.
+function Spawn.swimmable(maps, tilesets, mapId, x, y)
+  local def = maps and maps[mapId]
+  local tilesetDef = def and tilesets and tilesets[def.tileset]
+  if not (def and tilesetDef) then return false end
+  if x < 0 or y < 0 or x >= def.width * 2 or y >= def.height * 2 then return false end
+  return Map.defIsWaterCell(def, tilesetDef, x, y)
+end
+
 -- Walkable is not escapable (POK-23).  An island behind Surf water, a
 -- Cut-fenced pocket and a ledge-locked hollow all pass the walkable test,
 -- and all of them strand a Lv5 drop with no way off the map.  One
@@ -111,39 +123,27 @@ function Spawn.floodEscapable(w, h, isWalkable, seeds)
   return seen
 end
 
--- Does a step off this map's edge at (x, y) through `conn` actually land?
--- crossConnection bumps on the neighbour strip's tile exactly like an
--- in-map wall (OverworldState:crossConnection), so an edge cell facing the
--- neighbour's trees is a wall, not an exit -- which is how a player got
--- sealed in Vermilion's fenced sign pocket: its only edges face Route 6
--- and Route 11 solids.  Landing math mirrors connectionLanding
--- (destX = curX - offset*2), minus the clamp: a landing outside the
--- neighbour's bounds is refused rather than slid to a corner.
---
--- Without the world's map data (old callers, unit tests) every edge cell
--- on a connected side counts, as before.
-local function connExit(conn, maps, tilesets, dir, x, y)
-  if not (maps and tilesets) then return true end
-  local dest = maps[conn.map]
-  local ts = dest and tilesets[dest.tileset]
-  if not (dest and ts) then return true end
-  local dw, dh = dest.width * 2, dest.height * 2
-  local dx, dy
-  if dir == "north" then dx, dy = x - conn.offset * 2, dh - 1
-  elseif dir == "south" then dx, dy = x - conn.offset * 2, 0
-  elseif dir == "west" then dx, dy = dw - 1, y - conn.offset * 2
-  else dx, dy = 0, y - conn.offset * 2 end
-  if dx < 0 or dy < 0 or dx >= dw or dy >= dh then return false end
-  return Map.defIsWalkableCell(dest, ts, dx, dy)
-     and not Map.defIsWaterCell(dest, ts, dx, dy)
-end
-
 -- One map's escapable region: seeded beside every warp (stepping onto the
 -- warp is the way out) and along the walkable edge of every side with a
--- connection -- but only where the landing cell on the neighbouring map is
--- itself walkable, when `maps`/`tilesets` are supplied to check it against.
--- A ledge-hop-only hollow never joins the region -- ledge tiles are not
--- walkable, so nothing floods across them.
+-- connection.  A ledge-hop-only hollow never joins the region -- ledge
+-- tiles are not walkable, so nothing floods across them.
+--
+-- An edge cell is only a seed if a step off it actually CROSSES.  The
+-- engine's rule (OverworldState:connectionLanding): the landing cell on
+-- the neighbour is our coordinate shifted by the connection's offset,
+-- CLAMPED into the neighbour's bounds, and the step happens only when
+-- that cell is passable.  Seeding the whole edge instead called Pewter's
+-- fenced south-east corner escapable -- it touches the south edge, but
+-- ROUTE_2 is half Pewter's width and every landing from that stretch
+-- clamps onto a tree, so a player dropped there could not leave at all.
+-- `maps`/`tilesets` may be nil (a caller without the world in hand), and
+-- the edge then keeps the old benefit of the doubt.
+--
+-- This per-map answer is the fallback for maps OUTSIDE the outdoor world
+-- (the Safari opening) and for callers without the world in hand; outdoor
+-- spawns use Spawn.escapableSets below, which floods all of Kanto at once
+-- and cannot be fooled by two sealed pockets vouching for each other
+-- across a seam.
 function Spawn.escapableSet(def, tilesetDef, maps, tilesets)
   if not (def and tilesetDef) then return {} end
   local w, h = def.width * 2, def.height * 2
@@ -158,16 +158,51 @@ function Spawn.escapableSet(def, tilesetDef, maps, tilesets)
     seeds[#seeds + 1] = { x = wp.x, y = wp.y + 1 }
     seeds[#seeds + 1] = { x = wp.x, y = wp.y - 1 }
   end
+  -- does a step off the edge at this coordinate land on a passable cell?
+  -- lx/ly may be huge: the clamp is the engine's own.
+  local function landOk(conn, lx, ly)
+    local dest = maps and maps[conn.map]
+    local ts = dest and tilesets and tilesets[dest.tileset]
+    if not (dest and ts) then return true end
+    local dw, dh = dest.width * 2, dest.height * 2
+    lx = math.max(0, math.min(dw - 1, lx))
+    ly = math.max(0, math.min(dh - 1, ly))
+    return Map.defIsWalkableCell(dest, ts, lx, ly)
+       and not Map.defIsWaterCell(dest, ts, lx, ly)
+  end
   local conns = def.connections or {}
-  local function edge(dir, x, y)
-    if connExit(conns[dir], maps, tilesets, dir, x, y) then
-      seeds[#seeds + 1] = { x = x, y = y }
+  if conns.north then
+    local off = (tonumber(conns.north.offset) or 0) * 2
+    for x = 0, w - 1 do
+      if landOk(conns.north, x - off, math.huge) then
+        seeds[#seeds + 1] = { x = x, y = 0 }
+      end
     end
   end
-  if conns.north then for x = 0, w - 1 do edge("north", x, 0) end end
-  if conns.south then for x = 0, w - 1 do edge("south", x, h - 1) end end
-  if conns.west then for y = 0, h - 1 do edge("west", 0, y) end end
-  if conns.east then for y = 0, h - 1 do edge("east", w - 1, y) end end
+  if conns.south then
+    local off = (tonumber(conns.south.offset) or 0) * 2
+    for x = 0, w - 1 do
+      if landOk(conns.south, x - off, 0) then
+        seeds[#seeds + 1] = { x = x, y = h - 1 }
+      end
+    end
+  end
+  if conns.west then
+    local off = (tonumber(conns.west.offset) or 0) * 2
+    for y = 0, h - 1 do
+      if landOk(conns.west, math.huge, y - off) then
+        seeds[#seeds + 1] = { x = 0, y = y }
+      end
+    end
+  end
+  if conns.east then
+    local off = (tonumber(conns.east.offset) or 0) * 2
+    for y = 0, h - 1 do
+      if landOk(conns.east, 0, y - off) then
+        seeds[#seeds + 1] = { x = w - 1, y = y }
+      end
+    end
+  end
   return Spawn.floodEscapable(w, h, walk, seeds)
 end
 
@@ -289,9 +324,9 @@ end
 
 -- Every cell a player could be dropped on for one map, in row-major order
 -- -- walkable, unoccupied, and with a way off the map (POK-23).  With the
--- world's `maps`/`tilesets` in hand, "a way off" is answered by the world
--- flood above; without them (unit tests over toy defs) the per-map flood
--- answers as before.
+-- world's `maps`/`tilesets` in hand an OUTDOOR map's "way off" is answered
+-- by the world flood above; anything else (the Safari opening, unit tests
+-- over toy defs) falls back to the per-map flood.
 function Spawn.cellsOf(def, tilesetDef, maps, tilesets, ledges)
   local out = {}
   if not (def and tilesetDef) then return out end

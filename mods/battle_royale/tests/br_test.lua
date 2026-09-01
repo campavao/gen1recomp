@@ -48,7 +48,32 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 9, "a room that can name a build mismatch is PROTOCOL 9")
+  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+
+  -- botrec (POK-158): the record on the wire
+  local br = Wire.decode(Wire.botrec(1001, {
+    { species = "PIDGEY", hpFrac = 1 }, { species = "EKANS", hpFrac = 0.4 },
+  }))
+  ok(br ~= nil, "botrec round-trips")
+  eq(br and #br.record, 2, "both mons arrive")
+  eq(br and br.record[2].hpFrac, 0.4, "the wound arrives with them")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = {} }) == nil,
+     "an empty record is refused")
+  ok(Wire.decode({ t = "botrec", id = 1001,
+                   mons = { { s = "A", f = "x" } } }) == nil,
+     "a wordy hp fraction is refused")
+  local clampR = Wire.decode({ t = "botrec", id = 1001,
+                               mons = { { s = "MEW", f = 7 } } })
+  eq(clampR and clampR.record[1].hpFrac, 1, "fractions clamp to [0,1]")
+  -- the bag rides as a field on the record table itself
+  local recBag = { { species = "PIDGEY", hpFrac = 1 } }
+  recBag.bag = { items = { { id = "POTION", n = 2 } }, money = 750 }
+  local withBag = Wire.decode(Wire.botrec(1001, recBag))
+  ok(withBag and withBag.record.bag, "the bag rides the record")
+  eq(withBag and withBag.record.bag.money, 750, "money intact")
+  eq(withBag and withBag.record.bag.items[1].n, 2, "stacks intact")
+  ok(Wire.decode({ t = "botrec", id = 1001, mons = { { s = "A", f = 1 } },
+                   bag = "nope" }) == nil, "a wordy bag is refused")
 
   -- ------- the room door (POK-142)
   --
@@ -764,6 +789,32 @@ do
      "everything is in at phase 1")
   ok(Fog.isSafe(locations, "NOWHERE", center, 1.5),
      "a map with no square is never punished")
+
+  -- ------- the town map overlay's own geometry (POK-146)
+  --
+  -- The location grid sits 2 tiles in and 1 down on the 20x18 screen
+  -- (pokered TownMapCoordsToOAMCoords; TownMap.markerXY).  Comparing raw
+  -- screen tiles against the ring's centre drew the safe region a town up
+  -- and left: the fog announced PEWTER CITY (2,3) and the bright square
+  -- sat over INDIGO PLATEAU (0,2) -- whose SCREEN cell is exactly (2,3).
+  do
+    -- Pewter as the eye: its own screen cell is clear, Indigo's is not
+    local pewter = { x = 2, y = 3 }
+    ok(not Fog.shadesTile(pewter, 2, 2 + Fog.MAP_OX, 3 + Fog.MAP_OY),
+       "the announced eye's own screen square stays bright")
+    ok(Fog.shadesTile(pewter, 2, 2, 3),
+       "the square the bug used to brighten (Indigo's) is shaded")
+    -- the 2026-08-27 log's known-good ring: eye LAVENDER TOWN (14,5)
+    local lavender = { x = 14, y = 5 }
+    ok(not Fog.shadesTile(lavender, 9, 14 + Fog.MAP_OX, 5 + Fog.MAP_OY),
+       "Lavender's screen square is bright when Lavender is the eye")
+    ok(Fog.shadesTile(lavender, 9, 0, 0),
+       "the far corner is fog")
+    ok(Fog.shadesTile(lavender, Fog.EVERYWHERE, 14 + Fog.MAP_OX, 5 + Fog.MAP_OY),
+       "a closed ring shades even the eye")
+    ok(not Fog.shadesTile(lavender, Fog.NOWHERE, 0, 0),
+       "the opening radius shades nothing on screen")
+  end
 
   -- ------- which map the ring is asked about, indoors (POK-140)
   --
@@ -1980,6 +2031,98 @@ do
   ok(not none[key(0, 0)], "no seeds, no region")
   local edge = Spawn.floodEscapable(8, 6, isWalk, { { x = -3, y = 99 } })
   ok(not edge[key(0, 0)], "an out-of-bounds seed seeds nothing")
+
+  -- An edge is only a way out where the step actually CROSSES.  Pewter's
+  -- fenced south-east corner touches the south edge, but ROUTE_2 is half
+  -- Pewter's width and every landing from that stretch clamps onto a
+  -- tree -- a real player was dropped there with no Fly and no way out.
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  if okData and okTs and maps and tilesets and maps.PEWTER_CITY then
+    local def = maps.PEWTER_CITY
+    local ts = tilesets[def.tileset]
+    local pocket = {}
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if c.x >= 36 and c.y >= 26 then pocket[#pocket + 1] = c.x .. "," .. c.y end
+    end
+    eq(#pocket, 0, "nobody drops in Pewter's fenced corner ("
+       .. table.concat(pocket, " ") .. ")")
+    ok(#Spawn.cellsOf(def, ts, maps, tilesets) > 500,
+       "the town square is still a drop zone")
+  else
+    print("skip: Pewter corner pin (no generated Kanto data)")
+  end
+
+  -- POK-158 M4: water is swimmable, not walkable, and a SURF team's path
+  -- crosses it.  Pallet's south strip is the pin: its pond leads out to
+  -- ROUTE_21 and has no land route across.
+  if okData and okTs and maps and tilesets and maps.PALLET_TOWN then
+    local Bots = require("mods.battle_royale.lib.bots")
+    local Map = require("src.world.Map")
+    local def = maps.PALLET_TOWN
+    local ts = tilesets[def.tileset]
+    local water
+    for y = 0, def.height * 2 - 1 do
+      for x = 0, def.width * 2 - 1 do
+        if Map.defIsWaterCell(def, ts, x, y) then
+          water = { x = x, y = y }
+          break
+        end
+      end
+      if water then break end
+    end
+    ok(water ~= nil, "Pallet has water")
+    ok(Spawn.swimmable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "a water cell is swimmable")
+    ok(not Spawn.walkable(maps, tilesets, "PALLET_TOWN", water.x, water.y),
+       "...and still not walkable")
+    ok(not Spawn.swimmable(maps, tilesets, "PALLET_TOWN", -1, water.y),
+       "out of bounds swims nowhere")
+    -- a shore cell one step up from the water, and a path onto the water
+    -- that exists only for a swimmer
+    local shore
+    for _, c in ipairs(Spawn.cellsOf(def, ts, maps, tilesets)) do
+      if Map.defIsWaterCell(def, ts, c.x, c.y + 1) then shore = c break end
+    end
+    ok(shore ~= nil, "Pallet has a reachable shore")
+    local walkOnly = function(x, y)
+      return Spawn.walkable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    local swimToo = function(x, y)
+      return walkOnly(x, y)
+        or Spawn.swimmable(maps, tilesets, "PALLET_TOWN", x, y)
+    end
+    -- as far out to sea below the shore as the pond goes
+    local target = { x = shore.x, y = shore.y + 1 }
+    while Spawn.swimmable(maps, tilesets, "PALLET_TOWN",
+                          target.x, target.y + 1) do
+      target.y = target.y + 1
+    end
+    eq(Bots.path(walkOnly, shore, target), nil,
+       "no SURF, no path onto the water")
+    ok(Bots.path(swimToo, shore, target) ~= nil,
+       "a SURF team's path crosses the water")
+  else
+    print("skip: Pallet water pin (no generated Kanto data)")
+  end
+end
+
+-- POK-158 M4: the capability itself comes off the record, healthy mons
+-- only, by the species' own machine list
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local data = { pokemon = {
+    PSYDUCK = { tmhm = { "SURF", "STRENGTH" } },
+    RATTATA = { tmhm = { "DIG" } },
+  } }
+  ok(Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0.4 } }, data),
+     "a healthy SURF learner carries the team across")
+  ok(not Bots.canSurf({ { species = "PSYDUCK", hpFrac = 0 } }, data),
+     "a fainted swimmer carries nobody")
+  ok(not Bots.canSurf({ { species = "RATTATA", hpFrac = 1 } }, data),
+     "no SURF learner, no crossing")
+  ok(not Bots.canSurf({}, data), "an empty record stays ashore")
+  ok(not Bots.canSurf(nil, nil), "no record, no data, no crash")
 end
 
 -- ------- bots that hunt (POK-42, POK-43)
@@ -2011,6 +2154,30 @@ do
   ok(not dup, "no two bots share a town while towns remain")
   eq(#Bots.dealTowns(3, 7, Spawn.rng(7)), 7, "more bots than towns still all land")
 
+  -- POK-147: the deal only avoids sharing WHILE MAPS REMAIN, so the pool
+  -- has to be at least the roster.  Eleven fly towns under thirty bots
+  -- wrapped into 2-3 per town, all in sight-line at t=0, and 18 of 31
+  -- trainers were gone before the player met anybody.  The bot deal now
+  -- draws from every outdoor map the Town Map can place (BR:botDropSpots);
+  -- this pins that Kanto actually offers Bots.MAX of them.
+  do
+    local okData, maps = pcall(dofile, "data/generated/maps.lua")
+    local okField, field = pcall(dofile, "data/generated/field.lua")
+    local locs = okField and field and field.townMap and field.townMap.locations
+    if okData and maps and locs then
+      local Map = require("src.world.Map")
+      local spots = 0
+      for id, def in pairs(maps) do
+        if Map.isOutdoor(def) and locs[id] then spots = spots + 1 end
+      end
+      ok(spots >= Bots.MAX,
+         "enough placeable outdoor maps that a full deal never wraps ("
+         .. spots .. " for " .. Bots.MAX .. " bots)")
+    else
+      print("skip: bot drop pool (no generated Kanto data)")
+    end
+  end
+
   -- POK-62: the TM in the bag
   local inPool = {}
   for _, id in ipairs(Bots.TM_COMMON) do inPool[id] = true end
@@ -2030,6 +2197,135 @@ do
   end
   ok(prizes >= 20 and prizes <= 100,
      "roughly one bag in four holds a prize (" .. prizes .. "/" .. total .. ")")
+
+  -- ------- the record (POK-158 M1): a team a bot BUILDS, not a synth
+
+  local rec = Bots.newRecord(4242, 1001, nil)
+  eq(#rec, 1, "one mon at the drop, whatever the tier")
+  eq(rec[1].hpFrac, 1, "and it is healthy")
+  eq(Bots.newRecord(4242, 1001, nil)[1].species, rec[1].species,
+     "the drop mon is derived: two lazy creations agree")
+
+  eq(Bots.recordCap(), 6, "every bot builds to a full six, like a player")
+
+  local team = {
+    { species = "PIDGEY", hpFrac = 1 },
+    { species = "RATTATA", hpFrac = 0 },     -- fainted last fight
+    { species = "EKANS", hpFrac = 0.4 },
+  }
+  local rows, idx = Bots.fightRows(team, 30)
+  eq(#rows, 2, "a fainted mon does not fight")
+  eq(rows[1].species, "PIDGEY", "record order holds")
+  eq(rows[2].species, "EKANS", "the hurt one still answers the bell")
+  eq(rows[1].level, 30, "every fight is at the rung")
+  eq(idx[2], 3, "idx maps each row back to its record slot")
+  eq(#Bots.spillRows(team, 30), 3, "the spill counts the fallen too")
+
+  -- the fight ends; the enemyParty rows land back on the right mons
+  Bots.scarRecord(team, idx, {
+    { hp = 12, stats = { hp = 48 } },        -- PIDGEY down to a quarter
+    { hp = 0, stats = { hp = 40 } },         -- EKANS fainted
+  })
+  eq(team[1].hpFrac, 0.25, "damage carries out of the fight")
+  eq(team[2].hpFrac, 0, "an untouched fainted mon stays fainted")
+  eq(team[3].hpFrac, 0, "a mon lost in the fight is recorded lost")
+  ok(Bots.recordAlive(team), "one healthy mon is still a trainer")
+  ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
+     "a wiped record is not")
+
+  -- catches: capped by tier, paced by chance, drawn from the map's table
+  local slots = { { species = "CATERPIE", level = 4 } }
+  local always = function(a, b) if a then return a end return 0 end
+  local never = function(a, b) if a then return a end return 0.99 end
+  local r2 = { { species = "MANKEY", hpFrac = 1 } }
+  eq(Bots.rollCatch(r2, 2, slots, always), "CATERPIE", "a dwell can catch")
+  eq(#r2, 2, "and the team grew")
+  eq(r2[2].hpFrac, 1, "a fresh catch is healthy")
+  eq(Bots.rollCatch(r2, 2, slots, always), nil, "the cap is the cap")
+  eq(Bots.rollCatch({ {} }, 6, slots, never), nil, "most dwells catch nothing")
+  eq(Bots.rollCatch({ {} }, 6, {}, always), nil, "no grass table, no catch")
+
+  -- ------- the records fight (POK-158 M3)
+
+  local sim = { pokemon = {
+    BIG = { baseStats = { hp = 100, attack = 100, defense = 100,
+                          speed = 100, special = 100 } },
+    SMALL = { baseStats = { hp = 20, attack = 20, defense = 20,
+                            speed = 20, special = 20 } },
+  } }
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 1 } }, sim), 500,
+     "power is the base-stat total")
+  eq(Bots.recordPower({ { species = "BIG", hpFrac = 0.5 },
+                        { species = "SMALL", hpFrac = 0 } }, sim), 250,
+     "wounds scale it and faints zero it")
+  eq(Bots.recordPower({ { species = "WHO", hpFrac = 1 } }, nil), 300,
+     "an unplaceable species gets the middling default")
+
+  local recA = { { species = "BIG", hpFrac = 1 } }
+  local recB = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA, recB, sim, function() return 0.5 end), "a",
+     "the stronger team usually wins")
+  eq(recA[1].hpFrac, 0.8, "and pays a fifth of itself for a small win")
+  local recA2 = { { species = "BIG", hpFrac = 1 } }
+  local recB2 = { { species = "SMALL", hpFrac = 1 } }
+  eq(Bots.resolveFight(recA2, recB2, sim, function() return 0.9 end), "b",
+     "an upset stays possible")
+  eq(recB2[1].hpFrac, 0.1, "and the underdog barely stands")
+  ok(Bots.recordAlive(recB2), "a winner is never wiped by its own win")
+
+  -- who wants the nurse (POK-158 M2)
+  ok(Bots.wantsHeal({ { hpFrac = 0.4 } }), "half a team down wants healing")
+  ok(Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0 } }), "a faint always does")
+  ok(not Bots.wantsHeal({ { hpFrac = 1 }, { hpFrac = 0.8 } }),
+     "scratches walk it off")
+  ok(not Bots.wantsHeal({}), "an empty record wants nothing")
+
+  -- ...and the errand ladder honours it
+  local sick = { x = 5, y = 5 }
+  local g = Bots.chooseGoal(sick, { heal = { x = 9, y = 9 },
+                                    items = { { x = 6, y = 5 } } },
+                            function() return 0 end)
+  eq(g.kind, "heal", "a hurt team walks to the Centre before the loot")
+  eq(Bots.chooseGoal(sick, { inFog = true, heal = { x = 9, y = 9 } },
+                     function() return 0 end).kind, "seam",
+     "but never into the fog")
+
+  -- ------- the bag lives (POK-158 M2/M4)
+
+  local hurtRec = { { species = "A", hpFrac = 0.3 },
+                    { species = "B", hpFrac = 0.5 } }
+  local bag = { items = { { id = "POKE_BALL", n = 2 },
+                          { id = "SUPER_POTION", n = 1 },
+                          { id = "POTION", n = 1 } }, money = 500 }
+  local used, onto = Bots.quaff(hurtRec, bag)
+  eq(used, "POTION", "the weakest potion that helps goes first")
+  eq(onto and onto.species, "A", "onto the most-hurt mon standing")
+  eq(hurtRec[1].hpFrac, 0.6, "and it helps")
+  eq(#bag.items, 2, "the empty bottle leaves the bag")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0.9 } }, bag), nil,
+     "nobody hurt, nothing drunk")
+  eq(Bots.quaff({ { species = "A", hpFrac = 0 } }, bag), nil,
+     "a potion cannot raise the fainted")
+  local drained = { { species = "A", hpFrac = 0.2 } }
+  eq(Bots.quaff(drained, { items = { { id = "POKE_BALL", n = 9 } } }), nil,
+     "no medicine, no gulp")
+
+  Bots.bagMerge(bag, { items = { { id = "POKE_BALL", n = 3 },
+                                 { id = "TM_ICE_BEAM", n = 1 } },
+                       money = 250 })
+  eq(bag.money, 750, "the money adds")
+  local counts = {}
+  for _, it in ipairs(bag.items) do counts[it.id] = it.n end
+  eq(counts.POKE_BALL, 5, "stacks merge by id")
+  eq(counts.TM_ICE_BEAM, 1, "new items append")
+
+  eq(Bots.tmMove("TM_ICE_BEAM"), "ICE_BEAM", "a TM names its move")
+  eq(Bots.tmMove("POTION"), nil, "a potion does not")
+  ok(Bots.canLearn({ tmhm = { [13] = "ICE_BEAM", [15] = "SWIFT" } },
+                   "ICE_BEAM"), "tmhm says yes")
+  ok(not Bots.canLearn({ tmhm = { [15] = "SWIFT" } }, "ICE_BEAM"),
+     "and no")
+  ok(not Bots.canLearn(nil, "ICE_BEAM"), "an unknown species learns nothing")
 end
 
 -- ------- the endgame hunt (POK-95)
@@ -2434,14 +2730,8 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|v9.9.9",
-       "the first face, in order")
-    -- the stamp is read off the loader's own mod.version, never written
-    -- here, so it cannot drift from the manifest
-    eq(labels(BRMenu.items({ version = "1.2.3" }, fakeBR(), {})):match("[^|]+$"),
-       "v1.2.3", "the row reports whatever version the loader handed the mod")
-    eq(labels(BRMenu.items({}, fakeBR(), {})):match("[^|]+$"), "v?",
-       "and says so plainly when there is no version to read")
+    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "the first face, in order -- no SERVER row, no version row (POK-161)")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
     ok(allOpen, "and every row keeps the screen open")
@@ -2480,13 +2770,86 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL TO: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
+       "CODE ABCDEF|- RED*|- BLUE|OPEN: NO|BOTS: 3|FOG: 120s|SAFARI: 120s|DEBUG LOG: OFF|SEND STATS: ON|FILL: OFF|TRAINERS: 5|START MATCH (12)|LEAVE",
        "hosting: code, roster, OPEN, BOTS, the clocks, FILL TO, the total, the countdown")
 
     -- a guest waits
     BR.relay = room(false)
     items = BRMenu.items({}, BR, {})
     eq(labels(items), "CODE ABCDEF|- RED*|- BLUE|WAIT FOR HOST|LEAVE", "a guest waits for the host")
+
+    -- POK-130: the host's roster rows arm, then remove
+    BR.relay = room(true)
+    BR.kicked = nil
+    BR.kick = function(self, id) self.kicked = id self.armKick = nil return true end
+    items = BRMenu.items({}, BR, {})
+    find(items, "- BLUE").onSelect()
+    eq(BR.armKick, 2, "A on a guest arms the question")
+    items = BRMenu.items({}, BR, {})
+    ok(find(items, "REMOVE BLUE?") ~= nil, "which the next frame asks")
+    find(items, "REMOVE BLUE?").onSelect()
+    eq(BR.kicked, 2, "and A again removes them")
+    ok(find(BRMenu.items({}, BR, {}), "REMOVE") == nil, "the question is gone")
+    find(BRMenu.items({}, BR, {}), "- RED*").onSelect()
+    ok(BR.armKick ~= 1, "the host's own row never arms")
+    BR.armKick = 2
+    BR.relay = room(true, { members = { { id = 1, name = "RED" } } })
+    BRMenu.items({}, BR, {})
+    eq(BR.armKick, nil, "an arm on somebody who left is dropped")
+
+    -- POK-133: the offer face, and the seated watcher
+    BR.relay = room(true, { status = "connecting",
+                            isOpen = function() return false end })
+    BR.runningMatch = { code = "ABCDEF", members = 3 }
+    items, view = BRMenu.items({}, BR, {})
+    eq(view, "running", "a running match is its own face")
+    eq(labels(items),
+       "MATCH IN PROGRESS|3 TRAINERS IN IT|JOIN NEXT MATCH|SOLO VS BOTS|LEAVE",
+       "the offer: watch-and-play-next, or bots right now")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17, ("offer row fits (%d): %s"):format(#it.label, it.label))
+    end
+    BR.runningMatch = nil
+
+    -- ...and the watcher's lobby says what they are waiting for
+    BR.relay = room(false, { members = { { id = 1, name = "RED" },
+                                         { id = 2, name = "LATE", spectate = true } } })
+    BR.isSpectating = function() return true end
+    items = BRMenu.items({}, BR, {})
+    eq(labels(items),
+       "CODE ABCDEF|- RED*|- LATE NEXT|MATCH RUNNING|YOU PLAY NEXT|LEAVE",
+       "a spectator knows the deal, and the roster marks them")
+    BR.isSpectating = nil
+
+    -- POK-161 v2: the DAILY GAME lobby is a card, not a control panel
+    BR.relay = room(true, { serverInfo = { daily = { secs = 7500,
+                                                     label = "7PM CENTRAL",
+                                                     at = 0 } } })
+    BR.dailyLobby = true
+    BR.dailyStartsIn = function() return 2 * 3600 + 5 * 60 end
+    items = BRMenu.items({}, BR, {})
+    local card = labels(items)
+    eq(card, "STARTS IN 2H05M|- RED*|- BLUE|LEAVE",
+       "the daily lobby: countdown first, then players, then the way out")
+    ok(find(items, "OPEN:") == nil and find(items, "CODE") == nil
+       and find(items, "FOG:") == nil and find(items, "START MATCH") == nil,
+       "...no code, no rules rows, nothing pressable: the clock starts it")
+    -- information is not a control: plain rows carry the dead mark the
+    -- cursor slides past, and the actionable rows never do
+    ok(find(items, "STARTS IN").dead == true, "the countdown is not a cursor stop")
+    ok(find(items, "LEAVE").dead == nil, "...and LEAVE is")
+    for _, it in ipairs(items) do
+      ok(#it.label <= 17,
+         ("daily row fits the box (%d): %s"):format(#it.label, it.label))
+    end
+    BR.dailyStartsIn = function() return 154 end
+    ok(labels(BRMenu.items({}, BR, {})):find("STARTS IN 2:34", 1, true) ~= nil,
+       "under an hour the countdown ticks in minutes and seconds")
+    BR.dailyStartsIn = nil
+    ok(labels(BRMenu.items({}, BR, {})):find("AWAITING TIME...", 1, true) ~= nil,
+       "no schedule from the server yet reads as waiting, not as broken")
+    BR.dailyLobby = nil
+    BR.relay = room(false)
 
     -- the match report, with the Safari clock while it runs
     BR.phase = "safari"
@@ -2560,25 +2923,21 @@ do
     --
     -- The version here is the WIDEST this mod can realistically stamp, not
     -- a round "9.9.9": the folded row is "YOU LOST v" plus the version, so
-    -- the fixture is what decides whether the 17-character assertion below
-    -- means anything at all.  "0.36.10" makes it exactly 17 -- the last one
-    -- that fits.  One more character and fit() sizes the box to 21 tiles on
-    -- a 20-tile canvas and clips the build number off the right, which is
-    -- the whole reason the row exists.
-    local WIDEST = "0.36.10"
+    -- the version row is gone (POK-161), so the result gets a row of its
+    -- own -- the eighth, free exactly when there is a result to say
     BR.lastResult = { won = false, name = "SAM", at = 0 }
-    items, view = BRMenu.items({ version = WIDEST }, BR, {})
+    items, view = BRMenu.items({ version = "0.36.10" }, BR, {})
     eq(view, "menu", "no room left is the first face")
     eq(labels(items),
-       "QUICK PLAY|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED|SERVER...|YOU LOST v0.36.10",
-       "the result rides ON the version row, and the winner's name is dropped")
+       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "the result leads the first face on its own row")
     ok(#items <= BRMenu.maxRows(2),
        ("the first face still fits with a result on it (%d/%d)")
        :format(#items, BRMenu.maxRows(2)))
     BR.lastResult = { won = true, at = 0 }
-    items = BRMenu.items({ version = WIDEST }, BR, {})
-    ok(labels(items):find("YOU WIN! v0.36.10", 1, true),
-       "a win reads as a win on the same row")
+    items = BRMenu.items({ version = "0.36.10" }, BR, {})
+    ok(labels(items):find("YOU WIN!", 1, true),
+       "a win reads as a win")
     eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
     for _, it in ipairs(items) do
       ok(#it.label <= 17,
@@ -3421,6 +3780,93 @@ do
   eq(thin and thin.walk, only.walk, "a thin build falls back to what it has")
   eq(Bots.look(7, Bots.idFor(3), { sprites = {}, trainers = {} }), nil,
      "and a build with none of them says so")
+
+  -- POK-160: the brain rides the tier, not the face.  An ai-tier bot may
+  -- wear any of the ten faces now, and its fight brain comes from
+  -- Bots.fightAI instead -- a cooltrainer ai_classes record for REGULAR
+  -- and ACE, nothing (GenericAI) for a ROOKIE.
+  local COOL = { OPP_COOLTRAINER_M = true, OPP_COOLTRAINER_F = true }
+  local aiFaces, seenBrain = {}, {}
+  for i = 1, 60 do
+    local id = Bots.idFor(i)
+    local tier = Bots.tier(4242, id)
+    local brain = Bots.fightAI(4242, id)
+    eq(brain, Bots.fightAI(4242, id), "a bot's brain is stable")
+    if tier.ai then
+      ok(brain and COOL[brain], tier.id .. " fights with a cooltrainer brain")
+      seenBrain[brain] = true
+      local e = Bots.look(4242, id)
+      if e and not COOL[e.class] then aiFaces[e.class] = true end
+    else
+      eq(brain, nil, "a ROOKIE fights on GenericAI")
+    end
+  end
+  ok(next(aiFaces) ~= nil, "an ai-tier bot can wear a non-cooltrainer face")
+  ok(seenBrain.OPP_COOLTRAINER_M and seenBrain.OPP_COOLTRAINER_F,
+     "both cooltrainer brains turn up across a roster")
+end
+
+-- POK-161 v2: the info event carries (relay, info) -- the daily smoke
+-- caught it firing with info alone while the one consumer that arms the
+-- start clock read the second argument, so the hour sailed past.
+do
+  local Relay = require("mods.battle_royale.lib.relay")
+  local r = Relay.new({ transport = { closed = false, send = function() end } })
+  local got
+  r:on("info", function(rl, info) got = { rl = rl, info = info } end)
+  r:_receive({ type = "info", motd = { "X" }, rooms = 1, conns = 2,
+               daily = { secs = 120, label = "TEST GAME" } })
+  ok(got ~= nil, "the info event fires")
+  eq(got.rl, r, "with the relay first")
+  eq(got.info and got.info.daily and got.info.daily.secs, 120,
+     "...and the parsed info second, daily seconds included")
+  eq(r.serverInfo.daily.label, "TEST GAME", "the cache holds the daily")
+  ok(r.serverInfo.daily.at ~= nil, "with a receipt clock for the countdown")
+end
+
+-- POK-160 item 3: the move layer plays the turn a person would.  It
+-- rides the engine's own additive scoring (base 10, minimum wins), so
+-- these pins are exact scores, not tendencies.
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local TypeChart = require("src.battle.TypeChart")
+  TypeChart.load({ type_chart = { types = {}, matchups = {
+    { attacker = "ELECTRIC", defender = "WATER",  multiplier = 20 },
+    { attacker = "ELECTRIC", defender = "GROUND", multiplier = 0 },
+    { attacker = "NORMAL",   defender = "ROCK",   multiplier = 5 },
+  } } })
+  local layer = Bots.MOVE_LAYER
+  eq(layer.kind, "layer", "the move layer is an ai_classes layer record")
+  local data = { moves = {
+    THUNDERBOLT = { power = 95, type = "ELECTRIC" },
+    TACKLE      = { power = 35, type = "NORMAL" },
+    GROWL       = { power = 0,  type = "NORMAL" },
+  } }
+  local user = { curTypes = { "ELECTRIC" }, curMoves = {
+    { id = "THUNDERBOLT", pp = 10 }, { id = "TACKLE", pp = 10 },
+    { id = "GROWL", pp = 10 } } }
+  local function fresh(targetTypes)
+    return { data = data, user = user, target = { curTypes = targetTypes } }
+  end
+  -- vs WATER: THUNDERBOLT is STAB and super-effective -- the pick
+  local v = fresh({ "WATER" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 7,
+     "the biggest expected hit is encouraged past every vanilla nudge")
+  eq(layer.score(v, data.moves.TACKLE, 10), 10, "a lesser neutral hit sits at par")
+  eq(layer.score(v, data.moves.GROWL, 10), 10, "status is left to the vanilla passes")
+  -- vs GROUND: THUNDERBOLT is immune, TACKLE becomes the best hit
+  v = fresh({ "GROUND" })
+  eq(layer.score(v, data.moves.THUNDERBOLT, 10), 20, "an immune move is never the pick")
+  eq(layer.score(v, data.moves.TACKLE, 10), 7, "...and the best remaining hit takes over")
+  -- vs ROCK: TACKLE is resisted AND not the best -- discouraged
+  v = fresh({ "ROCK" })
+  eq(layer.score(v, data.moves.TACKLE, 10), 11, "resisted filler waits its turn")
+  -- a mon whose ONLY hit is resisted still swings it rather than sitting down
+  v = { data = data, user = { curTypes = { "NORMAL" },
+                              curMoves = { { id = "TACKLE", pp = 10 } } },
+        target = { curTypes = { "ROCK" } } }
+  eq(layer.score(v, data.moves.TACKLE, 10), 7,
+     "the best available hit is the pick even when resisted")
 end
 
 -- POK-85: the walk over.  Bots.wander is a roam; this is a stride.

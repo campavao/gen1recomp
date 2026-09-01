@@ -84,10 +84,22 @@ local SOLO_BOTS = 8
 -- QUICK PLAY aims at this many trainers and lets bots make up the shortfall
 local QUICK_FILL = 8
 -- ...and starts on its own after this long, so a newcomer who quick-plays
--- into an empty relay is playing rather than staring at a roster of one
-local QUICK_START_SECONDS = 30
--- somebody arriving late deserves a moment to see the lobby before the drop
-local QUICK_START_GRACE = 10
+-- into an empty relay is playing rather than staring at a roster of one.
+-- Sixty seconds, not thirty (POK-131): thirty meant the room was locked
+-- before anybody arriving even a minute behind could see it.  Not longer,
+-- either -- four days of relay logs hold exactly one three-minute near-
+-- miss, so a two-minute wait would tax every solo arrival (which is
+-- nearly all of them) for an overlap the timer almost never buys.  The
+-- levers that actually reach are POK-133's spectate-and-seat and a
+-- stated play time (POK-161).
+local QUICK_START_SECONDS = 60
+-- the DAILY GAME fills the whole roster (POK-161): thirty trainers,
+-- humans first, bots for the shortfall -- an official match is full
+local DAILY_FILL = 30
+-- somebody arriving late deserves a moment to see the lobby before the
+-- drop -- and now a real one (POK-131): ten seconds bumped a joiner
+-- straight into a match they never saw the lobby of
+local QUICK_START_GRACE = 30
 
 -- The trainer class a bot fights as when it has no look of its own -- a
 -- build missing every sheet in Bots.LOOKS.  The class supplies the pic
@@ -250,6 +262,21 @@ return function(mod)
     end
   end
 
+  -- The move-scoring layer an ai-tier bot fights with (POK-160): a
+  -- record in the same ai_classes registry the vanilla three passes
+  -- live in, named from the trainer overlay in startBotBattle.  Inert
+  -- for every other battle -- nothing else's aiMods names it.  A
+  -- registry that will not take it degrades to the vanilla passes.
+  do
+    local ok, err = pcall(function()
+      mod.content.ai_classes:register("BR_BOT_MOVES", Bots.MOVE_LAYER)
+    end)
+    if not ok then
+      mod.log:warn("bot move layer not registered (%s); vanilla AI stands in",
+                   tostring(err))
+    end
+  end
+
   mod.options:define({
     { key = "relay", label = "RELAY", type = "text", default = DEFAULT_RELAY },
     -- seconds per ring, not minutes: a short game wants 30, a long one 300
@@ -326,6 +353,7 @@ return function(mod)
     lastRoster = 0,       -- to notice an arrival and hold the countdown open
     matchSeed = nil,      -- every client derives bot names/parties from this
     botFight = nil,       -- the bot id we are locally fighting right now
+    botRecords = {},      -- id -> persistent team, POK-158 (see botRecord)
     botParty = nil,       -- handed to the trainer.party hook for one battle
     ring = nil,           -- { phase, center = {x,y,id,name}, radius }
     matchStartedAt = nil, -- host only: when the shared clock started
@@ -662,6 +690,16 @@ return function(mod)
       if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
+    -- The DAILY GAME arms its own start from the server's clock
+    -- (POK-161): every info poll re-derives the deadline, so drift never
+    -- accumulates, and a promoted heir picks the clock up on their next
+    -- poll without being told anything.
+    relay:on("info", function(_, info)
+      if BR.dailyLobby and relay:isHost() and BR.phase == "lobby"
+         and info and info.daily then
+        BR.autoStartAt = love.timer.getTime() + info.daily.secs
+      end
+    end)
     relay:on("closed", function(reason)
       -- A room that closes under us is an exit like any other, and it has
       -- to leave the throwaway world the same way a deliberate LEAVE does.
@@ -685,7 +723,15 @@ return function(mod)
     self:reset()
     local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
     wireRelay(relay)
-    local ok, err = relay:host(myName())
+    -- Open from birth (POK-129).  A hosted room used to be private by
+    -- default, which made HOST a trap: quick_join skips private rooms, so
+    -- the host waited in a lobby nobody could discover and left -- three
+    -- players bounced inside 17 seconds on 2026-08-26, another inside 8
+    -- on 2026-08-28, and none of them ever played.  The lobby's OPEN row
+    -- is the opt-out for a private game with friends, and POK-130's
+    -- REMOVE row is the way out if the open door lets somebody in you
+    -- did not want.
+    local ok, err = relay:host(myName(), { open = true })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -736,12 +782,80 @@ return function(mod)
     relay:on("noopen", function()
       relay:host(myName(), { open = true })
     end)
+    -- quick_join's third answer (POK-133): nothing joinable, but a match
+    -- is RUNNING.  Held as an offer rather than acted on -- the player
+    -- chooses between waiting for that room's next match and a bot game
+    -- right now, because spectating must never become a toll gate on the
+    -- way to playing.
+    relay:on("running", function(_, code, members)
+      BR.runningMatch = { code = code, members = members }
+    end)
     local ok, err = relay:quickJoin(myName())
     if not ok then return false, err end
     self.relay = relay
     self.fillTo = QUICK_FILL
     self.quick = true
     return true
+  end
+
+  -- THE DAILY GAME (POK-161): one scheduled match a day.  Everyone who
+  -- presses the row lands in the same relay-side room; whoever arrived
+  -- first hosts it, and the host's start clock is armed from the
+  -- server's own seconds-until (the info handler in wireRelay), so the
+  -- match begins AT the hour whether or not anybody presses anything.
+  -- The roster fills to thirty trainers with bots, and the clocks are
+  -- the stock ones -- an official game is the same game for everyone.
+  -- Pressing the row while the daily match is RUNNING gets the POK-133
+  -- offer instead: watch it, play the next.
+  function BR:dailyPlay()
+    self:reset()
+    local relay = Relay.new({ address = self:relayAddress(), log = mod.log })
+    wireRelay(relay)
+    relay:on("running", function(_, code, members)
+      BR.runningMatch = { code = code, members = members }
+    end)
+    local ok, err = relay:dailyJoin(myName())
+    if not ok then return false, err end
+    self.relay = relay
+    self.dailyLobby = true
+    self.fillTo = DAILY_FILL
+    return true
+  end
+
+  -- Seconds until the daily hour, from the last info answer the server
+  -- gave; nil until it has said.  Everyone in the room computes this the
+  -- same way -- the host's autoStartAt is armed from the same numbers.
+  function BR:dailyStartsIn()
+    local info = self.relay and self.relay.serverInfo
+    local d = info and info.daily
+    if not d then return nil end
+    return math.max(0, math.floor(
+      d.secs - (love.timer.getTime() - (d.at or 0))))
+  end
+
+  -- Take the POK-133 offer: enter the running room as a watcher, to be
+  -- seated by the relay when its match ends and the door reopens.
+  function BR:watchNext()
+    local rm = self.runningMatch
+    if not (rm and self.relay) then return false end
+    self.runningMatch = nil
+    return self.relay:spectate(rm.code, myName())
+  end
+
+  -- Are WE the watcher?  The roster is the truth: the relay marks a
+  -- spectator on arrival and clears the mark at the unlock that seats
+  -- them, so this flips to false exactly when the next lobby begins.
+  function BR:isSpectating()
+    local relay = self.relay
+    local m = relay and relay.id and relay:member(relay.id)
+    return (m and m.spectate) == true
+  end
+
+  -- Show a member the door (POK-130); the REMOVE row's second press.
+  function BR:kick(id)
+    if not (self.relay and self.relay:isHost()) then return false end
+    self.armKick = nil
+    return self.relay:kick(id)
   end
 
   function BR:setOpen(open)
@@ -934,6 +1048,10 @@ return function(mod)
     -- ("setPhase would log a teardown as a new match") and so does BR:reset,
     -- so a disarm inside setPhase would never fire on the way out.
     disarmScriptWrap()
+    -- ...and the route trainers get their sight lines back (POK-150):
+    -- emptying the live talk tables re-exposes vanilla engagement, and
+    -- the disarm is idempotent so the save-event net may call it too
+    self:disarmTrainerTalk()
     self.ghosts:despawnAll()
     self.spills:clear()
     if self.battle then
@@ -989,7 +1107,10 @@ return function(mod)
     self.pickingTown = nil
     self.matchSeed = nil
     self.botFight = nil
+    self.botFightPos = nil
+    self.botFightIdx = nil
     self.botParty = nil
+    self.botRecords = {}
     self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
@@ -1005,6 +1126,15 @@ return function(mod)
 
   function BR:reset()
     self:resetMatch()
+    -- A connection a previous face left open -- the POK-133 offer, a
+    -- fallen-through join -- is closed here without the closed-handler
+    -- theatrics: reset IS the exit, and firing "closed" into endMatch
+    -- mid-reset would tear down the very thing being built.  Idempotent
+    -- for every caller that already left properly.
+    if self.relay then
+      self.relay.handlers = {}
+      pcall(self.relay.leave, self.relay)
+    end
     self.relay = nil
     self.solo = false
     self.quick = false
@@ -1013,6 +1143,9 @@ return function(mod)
     self.phase = "off"
     self.myId = nil
     self.wasHost = false
+    self.runningMatch = nil   -- the POK-133 offer dies with the connection
+    self.armKick = nil
+    self.dailyLobby = nil
   end
 
   function BR:teardown(message)
@@ -1333,6 +1466,9 @@ return function(mod)
     -- exit (POK-155).  Before setPhase, so no script can dispatch a row in
     -- the new phase ahead of the guard that reads it.
     armScriptWrap()
+    -- ...and route trainers go opt-in for the same window (POK-150):
+    -- their sight lines stand down, their talk still fights
+    self:armTrainerTalk()
     self:setPhase(safari > 0 and "safari" or "match",
                   safari > 0 and "the SAFARI opens" or "straight to the drop")
     self.status = "alive"
@@ -1842,6 +1978,12 @@ return function(mod)
     elseif msg.t == "again" then
       if fromId == self.relay.hostId then self:onAgain() end
 
+    elseif msg.t == "botrec" then
+      -- a bot's team changed: a catch (the host) or a fight's scars (the
+      -- client who fought it).  Applied verbatim -- the record is owned
+      -- by whoever last touched it, like the bots' movement is
+      self.botRecords[msg.id] = msg.record
+
     elseif msg.t == "peek" then
       self:answerPeek(fromId)
 
@@ -1943,11 +2085,17 @@ return function(mod)
       -- engage LATER, never earlier, and an idle ghost is snapped onto the
       -- truth by the very next sync.
       local gx, gy = self.ghosts:cellOf(id)
-      others[#others + 1] = { id = id, map = p.map, x = gx or p.x,
-                              y = gy or p.y,
-                              facing = p.facing, moving = false,
-                              status = p.status,
-                              busy = p.status == "battle" }
+      -- No drawn ghost, no engage (POK-149).  The old `gx or p.x` fallback
+      -- was the pop-in: a bot that had just crossed a seam onto this map
+      -- could be fought off its wire cell before this screen had drawn it
+      -- at all -- "I couldn't see them before the ! appeared".  Skipping it
+      -- only ever delays the engage a beat, until the ghost exists.
+      if gx then
+        others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
+                                facing = p.facing, moving = false,
+                                status = p.status,
+                                busy = p.status == "battle" }
+      end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
     -- are entities rather than map tiles (a body in the way is exactly the
@@ -1993,6 +2141,64 @@ return function(mod)
     end
   end
 
+  -- The other half of the eyeline (POK-149).  tryEngage is the player
+  -- spotting somebody; nothing ever let a bot spot the PLAYER, so the only
+  -- way a bot fight started was the player standing still, facing it, at
+  -- whatever range it had already closed to -- and the walk-up beat
+  -- (POK-85) was built for a range nobody ever engaged at.  Now a bot
+  -- whose own facing crosses you calls the fight the way a route trainer
+  -- does: the ! goes up over ITS head, it walks over, the battle opens.
+  --
+  -- Local, like every bot fight: each client tests its own player against
+  -- the bots on its map, and whoever is seen fights the team every client
+  -- derives from the seed anyway.
+  function BR:tryBotEngage()
+    if self.status ~= "alive" or self.battle or self.pending
+       or self.botFight then return end
+    local ow = mod.world:overworld()
+    local player = ow and ow.player
+    if not (player and ow.map) or ow.transitioning then return end
+    local map = ow.map
+    local blocked = function(x, y)
+      return not (map:inBounds(x, y) and map:isWalkableCell(x, y))
+    end
+    -- inbound honours a flee's grace only, like an inbound challenge
+    local avoid = self:fleeAvoid(false)
+    local me = { { id = self.myId, map = map.id, x = player.cellX,
+                   y = player.cellY, facing = player.facing, moving = false,
+                   status = "alive", busy = false } }
+    for id, p in pairs(self.players) do
+      -- A bot that wants the nurse does not call fights (POK-160): the
+      -- record every client derives (and botrec keeps in step) says when
+      -- a team is wrecked, and a wrecked bot walking up to a healthy
+      -- trainer was the engine of its own elimination.  One-way on
+      -- purpose -- the PLAYER may still jump a wounded bot via tryEngage,
+      -- which is what wounds are for.
+      if Bots.isBot(id) and p.status == "alive" and p.map == map.id
+         and not avoid[id] and not Bots.wantsHeal(self:botRecord(id)) then
+        -- its GHOST's cell, never its wire cell, for the same reason
+        -- tryEngage asks the screen (POK-96): a bot this client has not
+        -- drawn cannot call a fight
+        local gx, gy = self.ghosts:cellOf(id)
+        if gx and Engage.target(
+             { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
+               moving = false, status = "alive", busy = p.busy and true },
+             me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
+          self.pending = { to = id, nonce = -1, host = true }
+          engageFlash(self.ghosts:npcOf(id), function()
+            BR:walkUpThen(id, function()
+              if BR.pending and BR.pending.to == id then BR.pending = nil end
+              if BR.status == "alive" and not BR.battle and not BR.botFight then
+                BR:startBotBattle(id)
+              end
+            end)
+          end)
+          return
+        end
+      end
+    end
+  end
+
   -- ------- bots
   --
   -- The host walks them and relays each step with `as`; every client renders
@@ -2009,6 +2215,31 @@ return function(mod)
     -- drop its bag there when it fell.  Roam placement never could: it
     -- deals cells from Spawn.cellsOf, which has excluded warps all along.
     return not Spawn.isWarp(maps, mapId, x, y)
+  end
+
+  -- How THIS bot crosses a map (POK-158 M4): on foot, and over water
+  -- when the team it built carries a healthy SURF learner -- the same
+  -- capability test a player's party menu runs, read from the record.
+  -- Same signature as canWalk, so it drops into every path, step check
+  -- and wander a bot walks with; the surf answer is asked once per
+  -- closure (a BFS asks thousands of times).  Goals, spawns and roam
+  -- landings all stay on land -- water is TRANSIT: a route across a bay
+  -- to the prey or the errand on the far shore, not a place to live.
+  local function botCross(id)
+    local surf
+    return function(mapId, x, y)
+      if canWalk(mapId, x, y) then return true end
+      if surf == nil then
+        surf = (BR.matchSeed and Bots.canSurf(BR:botRecord(id),
+                                              BR.game and BR.game.data))
+          or false
+      end
+      if not surf then return false end
+      local data = BR.game and BR.game.data
+      return data ~= nil
+        and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
+        and not Spawn.isWarp(data.maps, mapId, x, y)
+    end
   end
 
   -- Fleeing is not free (POK-24, lib/flee.lua).  After a flee neither of
@@ -2110,7 +2341,20 @@ return function(mod)
       -- no safe-here exemption: standing still is exactly the failure
       -- being fixed.  homeward still holds when no exit is any closer.
       dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
-      if not dest then p.lastRoam = now return end
+      if not dest then
+        local hereD = hunt(p.map)
+        if hereD and hereD > 0 then
+          -- A PLATEAU, not an arrival (POK-153): the target is on another
+          -- map, yet no seam is strictly closer at town-map grain, so the
+          -- hunt had nothing to say and the bot paced here forever.  Head
+          -- for the ring's eye instead -- the user's own fallback ask --
+          -- and failing even that, any seam beats standing still.
+          dest = (dist and Bots.homeward(exits,
+                    function(m) return dist[m] end, nil, p.rng))
+            or exits[p.rng(1, #exits)]
+        end
+        if not dest then p.lastRoam = now return end
+      end
     elseif dist then
       -- holding still is only wisdom INSIDE the ring; outside it, the
       -- least-bad seam beats waiting for the fog
@@ -2223,13 +2467,158 @@ return function(mod)
     return hit
   end
 
+  -- The bot's persistent team (POK-158 M1).  Created lazily and
+  -- IDENTICALLY on every client -- Bots.newRecord derives the one drop
+  -- mon from the seed at the floor rung -- so no message is needed until
+  -- the record actually changes; every change after that arrives as a
+  -- botrec broadcast and replaces the copy wholesale.
+  function BR:botRecord(id)
+    local rec = self.botRecords[id]
+    if not rec then
+      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
+      self.botRecords[id] = rec
+    end
+    if not rec.bag then
+      -- The bag is part of the record now (POK-158 M2): the authored
+      -- staples plus the seeded TM, derived identically everywhere like
+      -- the drop mon -- and then LIVED OUT OF: potions get drunk, looted
+      -- bags fold in.  Rows are copies: BOT_LOOT is shared authored data
+      -- and a bot drinking from it would drink for every bot at once.
+      local items = {}
+      for _, it in ipairs(BOT_LOOT.items) do
+        items[#items + 1] = { id = it.id, n = it.n }
+      end
+      local tm = Bots.lootTM(self.matchSeed, id)
+      local data = self.game and self.game.data
+      if tm and data and data.items and data.items[tm] then
+        items[#items + 1] = { id = tm, n = 1 }
+      end
+      rec.bag = { items = items, money = BOT_LOOT.money }
+    end
+    return rec
+  end
+
+  -- A grass dwell DOES the thing it used to pretend to (POK-158): the six
+  -- seconds standing in the grass are a catch roll against the map's own
+  -- encounter table.  Host only, like everything that moves a bot; the
+  -- catch rides a botrec broadcast so every client's copy of the team
+  -- grows together.
+  function BR:botCatch(id, p)
+    local data = self.game and self.game.data
+    local enc = data and data.encounters and data.encounters[p.map]
+    local slots = enc and enc.grass and enc.grass.slots
+    local rec = self:botRecord(id)
+    local caught = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng)
+    if caught then
+      log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
+              tostring(caught), #rec)
+      if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
+  -- A spill under a bot's feet joins its team (POK-158 M2).  The 1.5s
+  -- item dwell used to be pure theater; now the ball it stood on is
+  -- taken -- gone for everyone, exactly as if a player had pocketed it
+  -- -- and the mon inside joins the record, fresh the way a player's
+  -- pickup is.  Bags stay on the ground: a bot has no persistent bag
+  -- yet, and eating one would erase loot a player could still use.
+  function BR:botLoot(id, p)
+    local rec = self:botRecord(id)
+    local key = self.spills and self.spills:keyAt(p.map, p.x, p.y)
+    local ball = key and self.spills:get(key)
+    if not ball then return end
+    if ball.bag then
+      -- a fallen trainer's bag folds into the bot's own (POK-158 M2):
+      -- the potions get drunk later, the TMs get taught, the money rides
+      -- to whoever finally beats it
+      Bots.bagMerge(rec.bag, ball)
+      log:say("LOOTED: %s took %s's bag", tostring(p.name),
+              tostring(ball.name or "someone"))
+    elseif ball.species and #rec < Bots.recordCap() then
+      rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+      log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
+              tostring(ball.species), #rec)
+    else
+      return
+    end
+    self.spills:take(key)
+    if self.relay then
+      self.relay:broadcast(Wire.took(key))
+      self.relay:broadcast(Wire.botrec(id, rec))
+    end
+  end
+
+  -- The Centre serves bots too (POK-158 M2).  Walking to the door and
+  -- waiting the dwell out is the whole visit -- the interior trip is
+  -- abstracted, the way the fight against another bot is -- and the rule
+  -- is the player's own: no nurse in a fogged town (POK-117/140), which
+  -- pickBotGoal enforced when it offered the errand and this re-checks,
+  -- because the ring may have moved while the bot walked over.
+  function BR:botHeal(id, p)
+    if self:fogOver(p.map) then return end
+    local rec = self:botRecord(id)
+    local healed = false
+    for _, m in ipairs(rec) do
+      if (m.hpFrac or 0) < 1 then m.hpFrac = 1 healed = true end
+    end
+    if not healed then return end
+    log:say("HEALED: %s at the %s CENTER", tostring(p.name), tostring(p.map))
+    if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+  end
+
+  -- The cell in front of this map's POKeMON CENTER door, or nil.  Doors
+  -- all face south in Gen 1, so "in front" is one cell down; a door whose
+  -- step cell is not walkable is not offered (a bot grinding at a blocked
+  -- doorway forever is worse than one that never heals).  Cached: warps
+  -- cannot move during a match.
+  function BR:centerDoorOn(mapId)
+    self.centerDoorCache = self.centerDoorCache or {}
+    local hit = self.centerDoorCache[mapId]
+    if hit ~= nil then return hit or nil end
+    local data = self.game and self.game.data
+    local def = data and data.maps and data.maps[mapId]
+    local found = false
+    for _, w in ipairs((def and def.warps) or {}) do
+      if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true)
+         and canWalk(mapId, w.x, w.y + 1) then
+        found = { x = w.x, y = w.y + 1 }
+        break
+      end
+    end
+    self.centerDoorCache[mapId] = found
+    return found or nil
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
-  function BR:pickBotGoal(p, now)
+  function BR:pickBotGoal(id, p, now)
+    local rec = self:botRecord(id)
+    -- a wrecked team walks to the Centre (POK-158 M2), under the same
+    -- rule the player's nurse serves by: not once the fog has the town
+    local door = not self:fogOver(p.map) and self:centerDoorOn(p.map) or nil
+    -- The bag where there is no nurse (POK-160).  quaff only ran as a
+    -- winner's swig after a bot-vs-bot fight, so a bot wounded any other
+    -- way -- a lost trade, the fog -- sat on a bag of potions while it
+    -- hiked toward a Centre it might never reach.  Now a hurt bot on a
+    -- map with no (unfogged) Centre drinks when it stops to think, one
+    -- sip per goal pick, and the errand below is chosen off the healed
+    -- record.  Where the nurse IS an option she wins: she is free and
+    -- heals everything, and the potions keep for the road.
+    if Bots.wantsHeal(rec) and not door then
+      local drank = Bots.quaff(rec, rec.bag)
+      if drank then
+        log:say("POTION: %s used its %s", tostring(p.name), tostring(drank))
+        if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+      end
+    end
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
       inFog = self:fogOver(p.map),
-      items = self.spills and self.spills:cellsOn(p.map) or nil,
+      heal = Bots.wantsHeal(rec) and door or nil,
+      -- loot is only an errand while something there can be taken: any
+      -- of it with room in the party, just the bags without
+      items = self.spills
+        and self.spills:cellsOn(p.map, #rec >= Bots.recordCap()) or nil,
       grass = self:grassOn(p.map),
       -- the floor under every other errand: a bot must always have
       -- somewhere it can walk HERE, or a town with no grass freezes it
@@ -2256,13 +2645,20 @@ return function(mod)
       if now and now < p.dwellUntil then return nil end
       p.dwellUntil = nil
       self:markBot(id, p, nil)
+      -- the dwell pays out as it ends: six seconds in the grass was a
+      -- hunt, a pause on a spill was picking it up, a wait at the Centre
+      -- door was the nurse (POK-158)
+      if p.dwellKind == "grass" then self:botCatch(id, p)
+      elseif p.dwellKind == "item" then self:botLoot(id, p)
+      elseif p.dwellKind == "heal" then self:botHeal(id, p) end
+      p.dwellKind = nil
     end
 
     local goal = p.goal
     local stale = not goal or goal.map ~= p.map
       or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
     if stale then
-      p.goal, p.path = self:pickBotGoal(p, now), nil
+      p.goal, p.path = self:pickBotGoal(id, p, now), nil
       goal = p.goal
     end
     if not goal then return nil end
@@ -2271,6 +2667,7 @@ return function(mod)
       local dwell = Bots.DWELL[goal.kind] or 0
       if dwell > 0 then
         p.dwellUntil = (now or 0) + dwell
+        p.dwellKind = goal.kind
         -- What the room sees over their head while they stand there
         -- (POK-113's marks, POK-121's errands).  Grass reads as a FIGHT,
         -- because that is what standing in grass for six seconds is; a
@@ -2285,8 +2682,9 @@ return function(mod)
     -- ledge is walked AROUND.  Kept on the bot and rebuilt only when it
     -- runs out or a step is refused, because the host pays for this thirty
     -- times a beat.
+    local cross = botCross(id)
     if not (p.path and p.path[1]) then
-      p.path = Bots.path(function(x, y) return canWalk(p.map, x, y) end,
+      p.path = Bots.path(function(x, y) return cross(p.map, x, y) end,
                          { x = p.x, y = p.y }, { x = goal.x, y = goal.y })
       if not p.path then
         -- Unreachable, which is a REAL answer on these maps: walkable is
@@ -2303,7 +2701,7 @@ return function(mod)
         p.pathFails = (p.pathFails or 0) + 1
         if p.pathFails >= 2 then
           p.pathFails = 0
-          return Bots.wander(p, p.rng, canWalk, nil)
+          return Bots.wander(p, p.rng, cross, nil)
         end
         return nil
       end
@@ -2312,8 +2710,52 @@ return function(mod)
 
     local dir = table.remove(p.path, 1)
     local d = dir and Bots.DELTA[dir]
-    if not (d and canWalk(p.map, p.x + d[1], p.y + d[2])) then
+    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
       p.path = nil          -- somebody moved into us; repath next beat
+      return nil
+    end
+    return dir
+  end
+
+  -- The stalk, at cell grain (POK-153).  Same-map prey used to get the
+  -- greedy Bots.wander(toward), and greedy is exactly what paces: two
+  -- blocked candidate directions at a ledge or a fence and the march
+  -- turns back into shuffling -- which a spectator at three-left watched
+  -- a bot do indefinitely.  A stalk deserves what errands already have:
+  -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
+  function BR:stepBotHunt(id, p, prey)
+    -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
+    -- not stay over its head while it walks somebody down
+    if p.busy then self:markBot(id, p, nil) end
+    p.dwellUntil = nil
+    -- adjacent is as close as a stalk gets; the eyelines do the rest
+    if math.abs(prey.x - p.x) + math.abs(prey.y - p.y) <= 1 then
+      p.huntPath, p.huntFor = nil, nil
+      return nil
+    end
+    if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    -- with SURF on the team, the path may cross the bay (POK-158 M4)
+    local cross = botCross(id)
+    local stale = not (p.huntPath and p.huntPath[1])
+      or p.huntMap ~= p.map
+      or not p.huntFor
+      or (math.abs(p.huntFor.x - prey.x) + math.abs(p.huntFor.y - prey.y)) > 2
+    if stale then
+      p.huntMap, p.huntFor = p.map, { x = prey.x, y = prey.y }
+      p.huntPath = Bots.path(function(x, y) return cross(p.map, x, y) end,
+                             { x = p.x, y = p.y },
+                             { x = prey.x, y = prey.y })
+      if not p.huntPath then
+        -- unreachable -- a Surf pocket the team cannot cross, a ledge-
+        -- locked hollow: the greedy step is still better than standing
+        -- down
+        return Bots.wander(p, p.rng, cross, prey)
+      end
+    end
+    local dir = table.remove(p.huntPath, 1)
+    local d = dir and Bots.DELTA[dir]
+    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
+      p.huntPath = nil        -- somebody moved into us; repath next beat
       return nil
     end
     return dir
@@ -2327,20 +2769,63 @@ return function(mod)
     -- roster thins (POK-95) and every bot reads the same roster -- but the
     -- TIER half is per bot (POK-121), so the multiply happens inside.
     local alive = self:aliveCount()
+    -- self.players never holds the local player (the huntDistOf lesson),
+    -- so the host's own trainer was invisible to every same-map hunt: on a
+    -- solo match no bot ever walked at the player at all, and "hunt the
+    -- nearest trainer, bot or human" only ever meant remote humans.
+    local meHere = (self.phase == "match" and self.status == "alive")
+      and here() or nil
     for id, p in pairs(self.players) do
-      -- a bot on its way over is not also strolling somewhere (POK-85)
-      if p.bot and p.status == "alive" and p.map and id ~= striding then
+      -- a bot on its way over is not also strolling somewhere (POK-85),
+      -- and the one we are FIGHTING stands its ground (POK-154): walkUp is
+      -- cleared the moment the battle opens, so without this the opponent
+      -- resumed roaming behind the battle screen and its loot spilled
+      -- wherever it had wandered to by the end
+      if p.bot and p.status == "alive" and p.map and id ~= striding
+         and id ~= self.botFight then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
         local roamEvery = Bots.roamSeconds(alive, p.tier)
-        -- every so often, walk a seam into a connected map
-        if now and (now - (p.lastRoam or 0)) >= roamEvery then
+        -- every so often, walk a seam into a connected map -- but not out
+        -- from under a walk to the nurse (POK-160): the endgame roam pull
+        -- (huntDistOf) could drag a wrecked bot off the one map with a
+        -- Centre on it, arriving at the last trainers half-dead, which is
+        -- the "pre-heal, then hunt" beat backwards.  An unreachable door
+        -- clears the goal (stepBotErrand's path failure), so this cannot
+        -- pin a bot to a map it can never heal on.
+        local nursing = (p.goal and p.goal.kind == "heal")
+          or p.dwellKind == "heal"
+        -- ...nor out from under a STALK (POK-160): the roam clock kept
+        -- running while a bot walked prey down, so every 15-25s the hunt
+        -- was teleported into a connected map and all the closing was
+        -- thrown away -- on a big map the stalk could never finish.
+        -- Roam exists so bots MEET trainers; a bot sharing a map with
+        -- one has already met theirs.
+        -- (the fog still outranks the hunt, as it does every errand:
+        -- deferring roam on a fogged map would let prey bait a bot into
+        -- the fog and camp there while it burned)
+        local preyHere = false
+        if self.phase == "match" and p.map and not self:fogOver(p.map)
+           and not Bots.wantsHeal(self:botRecord(id)) then
+          if meHere and meHere.mapId == p.map then preyHere = true end
+          if not preyHere then
+            for otherId, o in pairs(self.players) do
+              if otherId ~= id and o.status == "alive" and o.map == p.map then
+                preyHere = true
+                break
+              end
+            end
+          end
+        end
+        if now and not nursing and not preyHere
+           and (now - (p.lastRoam or 0)) >= roamEvery then
           roamBot(id, p, now)
         end
         local due = now == nil or (now - (p.lastStep or 0)) >= BOT_STEP_SECONDS
         if due then
           p.lastStep = now or 0
+          p.dueBeats = (p.dueBeats or 0) + 1
           -- one stream per bot, kept on the bot so its walk does not depend
           -- on how many other bots are in the table or what order pairs()
           -- happens to hand them back
@@ -2350,18 +2835,31 @@ return function(mod)
           -- opposite ends of it forever
           -- (not in the Safari: nobody fights there, and a ghost body
           -- closing in on you is a wall in a phase with no way past it)
+          -- ...unless ITS OWN team says no (POK-160).  A bot picks its
+          -- fights now: wrecked -- the same wantsHeal line the Centre
+          -- errand runs on -- means the stalk stands down and the errand
+          -- system takes over, whose heal goal outranks everything else
+          -- on the map.  Healed (nurse or quaff), the hunt resumes on its
+          -- own the next beat.  tickBotFights stays ungated: two bots
+          -- that blunder into each other still fight, or nobody thins
+          -- the roster.
           local prey
-          for otherId, o in pairs(self.phase == "match" and self.players or {}) do
-            if otherId ~= id and o.status == "alive" and o.map == p.map then
-              if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
-                 < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
-                prey = o
+          if not Bots.wantsHeal(self:botRecord(id)) then
+            if meHere and meHere.mapId == p.map then
+              prey = { x = meHere.x, y = meHere.y }
+            end
+            for otherId, o in pairs(self.phase == "match" and self.players or {}) do
+              if otherId ~= id and o.status == "alive" and o.map == p.map then
+                if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
+                   < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
+                  prey = o
+                end
               end
             end
           end
           -- Prey outranks any errand: a trainer on your map is what you
-          -- came for.  The hunt keeps Bots.wander, which is right for it --
-          -- a stalk should wobble.
+          -- came for.  The stalk walks a real path now (POK-153) -- see
+          -- stepBotHunt for why greedy wandering paced instead.
           --
           -- Everything else is an ERRAND now (POK-121).  The old version
           -- picked a far random walkable cell and biased wander toward it,
@@ -2372,8 +2870,10 @@ return function(mod)
           -- turned the march back into pacing, which is exactly what a
           -- watched bot must never do.
           local dir
-          if prey or self.phase ~= "match" then
-            dir = Bots.wander(p, p.rng, canWalk, prey)
+          if prey then
+            dir = self:stepBotHunt(id, p, prey)
+          elseif self.phase ~= "match" then
+            dir = Bots.wander(p, p.rng, canWalk, nil)
           else
             dir = self:stepBotErrand(id, p, now)
           end
@@ -2381,6 +2881,7 @@ return function(mod)
             local d = Bots.DELTA[dir]
             p.facing = dir
             p.x, p.y = p.x + d[1], p.y + d[2]
+            p.stepsTaken = (p.stepsTaken or 0) + 1
             self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, id))
             self.ghosts:pushStep(id, dir) -- our own copy walks it too
           end
@@ -2401,15 +2902,16 @@ return function(mod)
     return field and field.townMap and field.townMap.locations
   end
 
-  -- the named places worth closing the ring on
-  local function townList()
+  -- the named places worth closing the ring on; `all` widens it from the
+  -- fly towns to every outdoor map the Town Map can place (the routes)
+  local function townList(all)
     local locations = townLocations()
     local maps = BR.game and BR.game.data and BR.game.data.maps
     if not (locations and maps) then return {} end
     local Map = require("src.world.Map")
     local out = {}
     for id, def in pairs(maps) do
-      if Map.isOutdoor(def) and Map.isFlyTown(def) and locations[id] then
+      if Map.isOutdoor(def) and (all or Map.isFlyTown(def)) and locations[id] then
         out[#out + 1] = { id = id, x = locations[id].x, y = locations[id].y,
                           name = locations[id].name or id }
       end
@@ -2609,12 +3111,31 @@ return function(mod)
     return towns
   end
 
-  -- host only: at the buzzer the bots are DEALT towns -- the deck, not the
-  -- dice (POK-43), so no two share one while towns remain and the drop
+  -- Where a BOT can be dealt at the buzzer: the fly towns AND the routes
+  -- (POK-147).  The player's picker stays towns-only -- a town is a place
+  -- you can name -- but a thirty-bot deal over eleven towns wraps into
+  -- guaranteed pairs standing in each other's sight-line at t=0, and the
+  -- roster was resolving itself before anybody met anybody.  Kanto has 34
+  -- placeable outdoor maps, so at Bots.MAX every bot starts a map of its
+  -- own and the early fights go back to being found, not dealt.
+  function BR:botDropSpots()
+    local spots = townList(true)
+    local maps = (self.game and self.game.data and self.game.data.maps) or {}
+    table.sort(spots, function(a, b)
+      local ia = maps[a.id] and maps[a.id].index or 0
+      local ib = maps[b.id] and maps[b.id].index or 0
+      if ia ~= ib then return ia < ib end
+      return a.id < b.id
+    end)
+    return spots
+  end
+
+  -- host only: at the buzzer the bots are DEALT drop maps -- the deck, not
+  -- the dice (POK-43), so no two share one while maps remain and the drop
   -- stops resolving itself in the first minute
   function BR:dropBots()
     if not (self.relay and self.relay:isHost()) then return end
-    local towns = self:dropTowns()
+    local towns = self:botDropSpots()
     if #towns == 0 then return end
     local now = clock() or 0
     local ids = {}
@@ -2725,7 +3246,26 @@ return function(mod)
     if self.phase ~= "drop" then return end
     local game = self.game
     local ow = mod.world:overworld()
-    if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
+    if not (game and ow) then return end
+    -- THE BUZZER OUTRANKS YOUR MENU (found by POK-161's smoke mashing A
+    -- into the POKeDEX at time's-up): everything below waits for the
+    -- overworld on top, so a player idling in the dex or the START menu
+    -- at the buzzer never dropped -- their match stalled in the Safari
+    -- until they happened to back out.  The buzzer already runs out of
+    -- patience with BATTLES (POK-92); after the same kind of grace it
+    -- closes menus too, one screen a tick.  Gated on `buzzed` still
+    -- pending, so the times-up text and the town picker -- which come
+    -- AFTER it is consumed -- are never eaten; a dialog gets its five
+    -- seconds for tickAutoResolve to press through first, and a live
+    -- battle or a transition is left alone as ever.
+    if self.buzzed and game.stack:top() ~= ow
+       and not self:liveLocalBattle() and not ow.transitioning
+       and not (ow.runner and ow.runner.isRunning and ow.runner:isRunning())
+       and self.buzzedAt and (clock() or 0) - self.buzzedAt >= 6 then
+      game.stack:pop()
+      return
+    end
+    if not (game.stack:top() == ow and not ow.transitioning) then return end
     if self:liveLocalBattle() then return end
     local save = game.save
     if self.buzzed then
@@ -2859,6 +3399,9 @@ return function(mod)
   -- The FOG option: what a match started from here would run at.  The
   -- lobby row and the option cyclers all mean this one.
   function BR:fogSeconds()
+    -- the DAILY GAME plays the stock clocks (POK-161): an official match
+    -- is the same match for everyone, whatever this host's options say
+    if self.dailyLobby then return Fog.DEFAULT_PHASE_SECONDS end
     return tonumber(mod.options:get("fog")) or Fog.DEFAULT_PHASE_SECONDS
   end
 
@@ -2872,6 +3415,7 @@ return function(mod)
   end
 
   function BR:safariSeconds()
+    if self.dailyLobby then return DEFAULT_SAFARI_SECONDS end
     local n = tonumber(mod.options:get("safari"))
     if n == nil then return DEFAULT_SAFARI_SECONDS end
     return math.max(0, math.floor(n))
@@ -3316,7 +3860,8 @@ return function(mod)
         local data = self.game and self.game.data
         local bag = self:botBag(id)   -- the TM shows in the peek too (POK-62)
         self.peeked = { id = id, bot = true,
-                        party = Peek.botParty(Bots, self.matchSeed, id, data, self:level()),
+                        party = Peek.botParty(Bots, self.matchSeed, id, data,
+                                              self:level(), self:botRecord(id)),
                         items = bag.items, money = bag.money }
       end
       return
@@ -3674,6 +4219,19 @@ return function(mod)
     -- BR:startBotFight).  A WILD encounter or one of Kanto's own trainers
     -- leaves it "alive", which is how this shipped.
     if self.status == "battle" or self:liveLocalBattle() then return end
+    -- ...and the guard above still left a window (the Discord report of a
+    -- party jumping 15 -> 30 against Brock): localBattle is set by
+    -- battle.started, which BattleState emits AFTER it is pushed -- the
+    -- BattleTransition flash before it is a second or two in which the
+    -- rung can land, and the fight then OPENS on freshly-jumped mons.
+    -- Sweep the stack for either state instead of trusting the event's
+    -- timing; same test startBotBattle applies before opening a fight.
+    local BattleTransition = require("src.render.BattleTransition")
+    for _, state in ipairs((self.game.stack and self.game.stack.states) or {}) do
+      if state.awardExp or getmetatable(state) == BattleTransition then
+        return
+      end
+    end
     local now = clock()
     if not now then return end
     if (now - (self.lastLevelTick or 0)) < 1 then return end
@@ -4106,8 +4664,15 @@ return function(mod)
     if not now then return end
     local live = {}
     for id, p in pairs(self.players) do
-      if p.bot and p.status == "alive" and p.map
-         and (now - (p.lastFight or 0)) >= Bots.FIGHT_COOLDOWN then
+      -- the bot in OUR battle screen is not free to be jumped (POK-154).
+      -- The cooldown is a breather AFTER a fight; a bot that has never
+      -- fought owes nobody one.  (`or 0` here made it a clock-since-boot
+      -- gate: for the first twelve real seconds of the process no bot
+      -- could fight at all, which an accelerated driver sits entirely
+      -- inside.)
+      if p.bot and p.status == "alive" and p.map and id ~= self.botFight
+         and (not p.lastFight
+              or (now - p.lastFight) >= Bots.FIGHT_COOLDOWN) then
         live[#live + 1] = { id = id, p = p }
       end
     end
@@ -4117,12 +4682,26 @@ return function(mod)
         local a, b = live[i], live[j]
         if Bots.near(a.p, b.p) then
           a.p.lastFight, b.p.lastFight = now, now
-          -- a coin flip: both sides are one mon at the same rung, so there
-          -- is nothing to weigh.  When bots carry real teams this is where
-          -- the comparison goes.
-          local loser = (love.math.random() < 0.5) and a or b
-          local winner = (loser == a) and b or a
+          -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
+          -- times what each team has left, an upset still possible, and
+          -- the winner walks away hurt.  The loser's record is what the
+          -- spill puts on the ground; the winner's scars ride a botrec so
+          -- every client carries them into its next fight.
+          local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
+                                      self.game and self.game.data,
+                                      function() return love.math.random() end)
+          local winner = (w == "a") and a or b
+          local loser = (w == "a") and b or a
           self:eliminateBot(loser.id, loser.p, winner.p.name)
+          local wrec = self:botRecord(winner.id)
+          local drank = Bots.quaff(wrec, wrec.bag)
+          if drank then
+            log:say("POTION: %s used its %s", tostring(winner.p.name),
+                    tostring(drank))
+          end
+          if self.relay then
+            self.relay:broadcast(Wire.botrec(winner.id, wrec))
+          end
           return
         end
       end
@@ -4144,17 +4723,17 @@ return function(mod)
     self:checkWinner()
   end
 
-  -- A bot's bag: the authored staples plus its one seeded TM (POK-62),
-  -- the same answer for the spill on the ground and the spectator's peek
+  -- A bot's bag: what its RECORD is actually carrying by now (POK-158),
+  -- the same answer for the spill on the ground and the spectator's peek.
+  -- A copy, so the spill/peek plumbing (which decorates the table) never
+  -- writes into the record.
   function BR:botBag(id)
+    local bag = self:botRecord(id).bag or { items = {}, money = 0 }
     local items = {}
-    for _, it in ipairs(BOT_LOOT.items) do items[#items + 1] = it end
-    local tm = Bots.lootTM(self.matchSeed, id)
-    local data = self.game and self.game.data
-    if tm and data and data.items and data.items[tm] then
-      items[#items + 1] = { id = tm, n = 1 }
+    for _, it in ipairs(bag.items or {}) do
+      items[#items + 1] = { id = it.id, n = it.n }
     end
-    return { items = items, money = BOT_LOOT.money }
+    return { items = items, money = bag.money or 0 }
   end
 
   -- A bot's loot: its team as balls and its authored bag (botBag -- a
@@ -4164,15 +4743,82 @@ return function(mod)
   function BR:spillBot(id, p)
     local data = self.game and self.game.data
     if not (data and p and p.map and p.x and p.y) then return end
-    local party = Bots.party(self.matchSeed, id, data, self:level())
+    -- the team it actually built (POK-158), fainted included -- what hits
+    -- the ground is the record, not a synth
+    local party = Bots.spillRows(self:botRecord(id), self:level())
     local bag = self:botBag(id)
     bag.name = p.name
-    local spill = Spills.build(id, p.map, p.x, p.y, party, function(x, y)
+    -- A surfing bot can die ON the water (the fog mid-crossing), and the
+    -- BAG hard-lands on the faller's own cell -- loot only a swimmer
+    -- could ever reach.  It washes ashore instead: the nearest land cell,
+    -- scanned outward, so the spill lands where anybody can walk to it.
+    local sx, sy = p.x, p.y
+    if Spawn.swimmable(data.maps, data.tilesets, p.map, sx, sy) then
+      local found
+      for r = 1, 12 do
+        for dy = -r, r do
+          for dx = -r, r do
+            if math.abs(dx) + math.abs(dy) == r
+               and canWalk(p.map, p.x + dx, p.y + dy) then
+              found = { x = p.x + dx, y = p.y + dy }
+              break
+            end
+          end
+          if found then break end
+        end
+        if found then break end
+      end
+      if found then sx, sy = found.x, found.y end
+    end
+    local spill = Spills.build(id, p.map, sx, sy, party, function(x, y)
       return spillCellFree(data, p.map, x, y)
     end, bag, function(x, y) return Spawn.isWarp(data.maps, p.map, x, y) end)
     if spill and self.relay then
       self.relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
       self.spills:add(spill)
+    end
+  end
+
+  -- Taught ahead of time (POK-158 M4).  A bot's bag has carried a seeded
+  -- TM since POK-62; now the moves inside actually reach its mons: at
+  -- fight build, each TM in the bag is offered to the first compatible
+  -- mon (the species' own tmhm list), whose default moveset gets its
+  -- oldest move swapped for it.  BattleState honours a party slot's
+  -- `moves` list, so this rides the engine's own seam.  The TM stays in
+  -- the bag for the winner -- the teaching happened "before the match",
+  -- and eating it would starve the TM economy POK-62 built.  Two teaches
+  -- at most: a team that is nothing but machine moves reads as a hack,
+  -- not an ace.
+  function BR:teachBotMoves(rows)
+    local data = self.game and self.game.data
+    local rec = self.botFight and self:botRecord(self.botFight)
+    local bag = rec and rec.bag
+    if not (data and bag) then return end
+    local Pokemon = require("src.pokemon.Pokemon")
+    local taught = 0
+    for _, it in ipairs(bag.items or {}) do
+      if taught >= 2 then break end
+      local moveId = Bots.tmMove(it.id)
+      if moveId and data.moves and data.moves[moveId] then
+        for _, row in ipairs(rows) do
+          if not row.moves
+             and Bots.canLearn(data.pokemon and data.pokemon[row.species], moveId) then
+            local okM, built = pcall(Pokemon.new, data, row.species, row.level)
+            local ids, dup = {}, false
+            for _, mv in ipairs((okM and built and built.moves) or {}) do
+              local mid = type(mv) == "table" and mv.id or mv
+              ids[#ids + 1] = mid
+              if mid == moveId then dup = true end
+            end
+            if not dup and #ids > 0 then
+              if #ids >= 4 then ids[1] = moveId else ids[#ids + 1] = moveId end
+              row.moves = ids
+              taught = taught + 1
+            end
+            break -- one attempt per TM: taught, or it already knew it
+          end
+        end
+      end
     end
   end
 
@@ -4197,12 +4843,30 @@ return function(mod)
     self.status = "battle"
     self.botFight = botId
     self.botFightAt = clock()
+    -- Where the fight is happening, kept for the spill (POK-154).  On the
+    -- host the roam exclusion above freezes the bot anyway, but a non-host
+    -- client keeps receiving the host's steps for it, so by battle.ended
+    -- bot.map/x/y can be a seam away from where anybody fought.
+    self.botFightPos = { map = bot.map, x = bot.x, y = bot.y }
     self.pending = nil
     broadcastPlace()
 
     -- the party is handed to BattleState through the trainer.party hook
-    -- below, which is the engine's own seam for exactly this
-    self.botParty = Bots.party(self.matchSeed, botId, game.data, self:level())
+    -- below, which is the engine's own seam for exactly this.  The rows
+    -- come from the bot's RECORD (POK-158) -- the team it has actually
+    -- built and the wounds it is actually carrying -- not a fresh synth.
+    local rec = self:botRecord(botId)
+    local rows, idx = Bots.fightRows(rec, self:level())
+    if #rows == 0 then
+      -- cannot happen short of a desynced record (a wiped team is an
+      -- eliminated bot); heal it rather than opening an unwinnable fight
+      mod.log:warn("bot %s had no healthy mon; record reset", tostring(botId))
+      for _, m in ipairs(rec) do m.hpFrac = 1 end
+      rows, idx = Bots.fightRows(rec, self:level())
+    end
+    self.botParty = rows
+    self.botFightIdx = idx
+    self:teachBotMoves(rows)
     local look = self.players[botId]
     local class = (look and look.class) or BOT_TRAINER_CLASS
     local ok, battle = pcall(function()
@@ -4214,6 +4878,8 @@ return function(mod)
       mod.log:warn("couldn't start a bot battle: %s", tostring(battle))
       self.status = "alive"
       self.botFight = nil
+      self.botFightPos = nil
+      self.botFightIdx = nil
       return
     end
     -- Overlay the bot's own name on the class chassis, the engine's own
@@ -4225,15 +4891,40 @@ return function(mod)
     -- swap the baked-in class for the name rather than reformatting the
     -- string, which would drop whatever localisation Strings applied.
     local bp = self.players[botId]
-    if bp and bp.name then
+    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
+    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
+    -- with a cooltrainer's item-and-switch AI whatever face it wears --
+    -- the face stopped being the brain in Bots.look the same ticket.
+    -- aiUses (wAICount) was already baked from the face's class at
+    -- newTrainer time, so it is re-asked once the overlay is on.
+    local aiClass = Bots.fightAI(self.matchSeed, botId)
+    if bp and (bp.name or aiClass) then
       local was = battle.trainer and battle.trainer.name
-      battle.trainer = setmetatable({ name = bp.name },
-                                    { __index = battle.trainer })
-      if was and was ~= bp.name and type(battle.introText) == "string" then
+      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
+      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
+      -- top.  A ROOKIE keeps whatever move choice its face class shipped
+      -- with -- no field, so the chassis answers through __index.
+      local aiMods
+      if aiClass then
+        aiMods = {}
+        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+          aiMods[#aiMods + 1] = m
+        end
+        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      end
+      battle.trainer = setmetatable(
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { __index = battle.trainer })
+      if bp.name and was and was ~= bp.name
+         and type(battle.introText) == "string" then
         local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
         battle.introText = battle.introText:gsub(pattern,
                                                  (bp.name:gsub("%%", "%%%%")), 1)
       end
+      -- both were baked from the face's class before the overlay existed
+      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
+      battle.aiUses = battle:aiUsesFor()
+      battle.enemyAIMods = battle.trainer.aiMods
     end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
@@ -4375,6 +5066,19 @@ return function(mod)
   mod.hooks:wrap("battle.style", function(next, battle)
     if inMatch() then return "set" end
     return next(battle)
+  end)
+
+  -- No level on any screen during a round (RFC 0019).  The rung makes the
+  -- number the same for everyone and moves it on a clock, so it reads as a
+  -- threat it is not -- a Lv37 opponent looks dangerous to a player who
+  -- has not worked out their own team is Lv37 too -- and the one time it
+  -- moves visibly (a shrink paying out between fights) it reads as a bug.
+  -- All four surfaces at once: levels are simply not a thing in a match.
+  -- On an engine without the seam the hook is never called and this wrap
+  -- costs nothing, so shipping it ahead of the engine is safe.
+  mod.hooks:wrap("pokemon.level_visible", function(next, mon, ctx)
+    if inMatch() then return false end
+    return next(mon, ctx)
   end)
 
   -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
@@ -4569,6 +5273,24 @@ return function(mod)
     -- the fog is not ticking, and both watchdogs only ever hold OFF while
     -- one is set.
     if BR:inSession() and ev and ev.battle then BR.localBattle = ev.battle end
+    -- A bot walks in with the wounds it walked out with (POK-158).  The
+    -- engine builds the trainer party at full HP; the record says how much
+    -- of each mon is actually left, so clamp before the first turn.  Never
+    -- below 1: fightRows only sends healthy mons, and a mon at 1 HP is
+    -- exactly what "barely standing" should mean.
+    if BR.botFight and ev and ev.battle and ev.battle.enemyParty then
+      local rec = BR:botRecord(BR.botFight)
+      for k, recI in ipairs(BR.botFightIdx or {}) do
+        local mon = ev.battle.enemyParty[k]
+        local m = rec[recI]
+        if mon and m and (m.hpFrac or 1) < 1 then
+          local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp or mon.hp
+          if maxHp and maxHp > 0 then
+            mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
+          end
+        end
+      end
+    end
     -- a PvP lockstep battle: RUN on our side goes through the flee roll
     -- (POK-24); the other side only ever sees a run we actually submitted
     local opponent = BR.battle and BR.battle.opponentId
@@ -4665,19 +5387,44 @@ return function(mod)
     end
     local botId = BR.botFight
     if not botId then return end
-    BR.botFight = nil
+    local fightPos = BR.botFightPos
+    local fightIdx = BR.botFightIdx
+    BR.botFight, BR.botFightPos, BR.botFightIdx = nil, nil, nil
     if BR.status == "battle" then BR.status = "alive" end
+    if ev.result ~= "win" and not ev.skipped and ev.battle
+       and ev.battle.enemyParty then
+      -- The fight is over and the bot lived: it keeps its wounds
+      -- (POK-158).  Whoever fought it is the one client that knows the
+      -- outcome, so this client writes the scars and tells the room --
+      -- and the bot reaches for its own bag on the way out, the way a
+      -- player patches a lead before walking on.
+      local rec = BR:botRecord(botId)
+      Bots.scarRecord(rec, fightIdx, ev.battle.enemyParty)
+      local drank = Bots.quaff(rec, rec.bag)
+      if drank then
+        log:say("POTION: %s used its %s", tostring(BR.players[botId]
+          and BR.players[botId].name), tostring(drank))
+      end
+      if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
+    end
     if ev.result == "win" then
       local bot = BR.players[botId]
-      if bot then
-        bot.status = "out"
-        BR.ghosts:despawn(botId)
-        BR:spillBot(botId, bot)
+      -- `alive` guards the race where the host already put this bot out
+      -- while our battle screen was up -- eliminating it twice would spill
+      -- its loot twice
+      if bot and bot.status == "alive" then
+        -- the loot lands where the fight happened, beside the winner, not
+        -- wherever the tracked position drifted to mid-battle (POK-154)
+        if fightPos then
+          bot.map, bot.x, bot.y = fightPos.map, fightPos.x, fightPos.y
+        end
+        -- eliminateBot, not an inline copy of it: the copy had drifted to
+        -- omit the OUT log line, so the one elimination the player caused
+        -- was the one the log never showed
+        BR:eliminateBot(botId, bot, BR:playerName())
       end
-      if BR.relay then BR.relay:broadcast(Wire.botout(botId)) end
       if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
       say(("You beat %s!"):format((bot and bot.name) or "them"))
-      BR:checkWinner()
     end
     broadcastPlace()
   end)
@@ -5077,7 +5824,10 @@ return function(mod)
           BR.spills:sync(h.mapId)
           -- nobody fights in the Safari (POK-21), nor at the gate on the
           -- way out of it
-          if BR.phase == "match" then BR:tryEngage() end
+          if BR.phase == "match" then
+            BR:tryEngage()
+            BR:tryBotEngage()
+          end
         end
       end
       -- the Safari opening: its clock, the buzzer's patience running out
@@ -5256,6 +6006,170 @@ return function(mod)
     })
   end
 
+  -- ------- NPC trainers stop engaging on sight (POK-150)
+  --
+  -- "I had to get thru a gauntlet of trainers which I didn't want to do.
+  -- I think it actually hurts exploration."  For the length of a match a
+  -- route trainer is an OPT-IN resource: walking past one costs nothing,
+  -- talking to one still starts the vanilla fight -- the reward stays,
+  -- the toll goes.
+  --
+  -- The lever is the engine's own: checkTrainerSight skips any trainer
+  -- whose TEXT constant has a talk script (a scripted trainer runs its
+  -- own show), and talkTo hands a Lua talk handler the overworld and the
+  -- npc.  So every GENERIC trainer gets a handler that does exactly what
+  -- talkTo's own trainer branch does -- engage, or the after-text -- and
+  -- only the ambush is gone.  Trainers with a base talk script are left
+  -- alone: those are the set pieces, and gyms stay bosses (their leader
+  -- was always reached by talking).
+  --
+  -- The talk tables are LIVE and registered AT LOAD (the registry is
+  -- frozen after it): one empty table per map that has a trainer object,
+  -- filled at onStart and emptied at resetMatch, with
+  -- MapScripts.invalidate flushing the per-map view cache both ways.
+  -- Outside a session every contribution is an empty table, so vanilla
+  -- sight is untouched in real playthroughs.
+  local trainerTalk = {}   -- mapId -> the live talk table
+
+  -- ------- press A at the world (POK-141)
+  --
+  -- Gen 1 makes every field move a party-menu detour, and the fog charges
+  -- for each one.  Later generations ask at the obstacle instead -- walk
+  -- into the tree, "CUT it down?" -- so a match does too.  The engine's
+  -- side-effect-free checkers (useCutFieldMove / useSurfFieldMove) carry
+  -- the party menu's own gates, badges included, and tryCut / trySurf
+  -- play the vanilla scene; all this adds is the ask, on the map-script
+  -- onInteract seam, which the A-press dispatch consults after NPCs and
+  -- signs and before the bookshelves.  Out of a session it returns false
+  -- and vanilla is untouched -- faithfulness is only bent inside a match.
+  local function fieldMoveInteract(game, ow, fx, fy)
+    if not BR:inSession() or BR.status ~= "alive" then return false end
+    if BR.battle or BR.botFight or BR.pending then return false end
+    local move, go
+    if ow.useCutFieldMove and ow:useCutFieldMove() == "ok" then
+      move = "CUT"
+      go = function() ow:tryCut(fx, fy) end
+    elseif ow.useSurfFieldMove and ow:useSurfFieldMove() == "ok" then
+      move = "SURF"
+      go = function() ow:trySurf(fx, fy) end
+    end
+    if not move then return false end
+    local TextBox = require("src.render.TextBox")
+    local ask = move == "CUT" and "This tree can be\nCUT down.  Cut it?"
+      or "The water is calm.\nSURF across it?"
+    game.stack:push(TextBox.new(game, ask, nil, {
+      choice = function(yes)
+        if yes then go() end
+      end,
+    }))
+    return true
+  end
+
+  do
+    -- Data loads before mods, so the map roster is enumerable here (the
+    -- registry freezes after load); the per-TEXT talk choices wait for
+    -- arm time, when the base scripts are certainly attached.  Every map
+    -- gets the A-press field-move offer; maps with trainer objects also
+    -- get their live talk table.
+    local okD, EngineData = pcall(require, "src.core.Data")
+    for mapId, def in pairs((okD and EngineData and EngineData.maps) or {}) do
+      local contribution = { onInteract = fieldMoveInteract }
+      for _, o in ipairs(def.objects or {}) do
+        if o.trainerClass and o.text then
+          trainerTalk[mapId] = {}
+          contribution.talk = trainerTalk[mapId]
+          break
+        end
+      end
+      mod.content.map_scripts:register(mapId, contribution)
+    end
+  end
+
+  local function trainerTalkHandler(game, ow, npc, onDone)
+    local done = onDone or function() end
+    local d = npc and npc.def
+    if not (d and d.trainerClass) then return done() end
+    npc:facePlayer(ow.player)
+    if not ow:trainerDefeated(npc) then
+      return ow:engageTrainer(npc, done)
+    end
+    local header = game.data:trainerHeader(ow.map.def.label, d.index)
+    local after = header and header.after and game.data.text[header.after]
+    if not after then return done() end
+    local TextBox = require("src.render.TextBox")
+    game.stack:push(TextBox.new(game, after, done))
+  end
+
+  function BR:armTrainerTalk()
+    local data = self.game and self.game.data
+    if not data or not data.maps then return end
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    if not okMS then return end
+    for mapId, T in pairs(trainerTalk) do
+      local touched = false
+      local def = data.maps[mapId]
+      for _, o in ipairs((def and def.objects) or {}) do
+        if o.trainerClass and o.text and not T[o.text]
+           and not MapScripts.baseTalk(mapId, o.text) then
+          T[o.text] = trainerTalkHandler
+          touched = true
+        end
+      end
+      if touched then MapScripts.invalidate(mapId) end
+    end
+  end
+
+  function BR:disarmTrainerTalk()
+    local okMS, MapScripts = pcall(require, "src.script.MapScripts")
+    for mapId, T in pairs(trainerTalk) do
+      if next(T) then
+        for k in pairs(T) do T[k] = nil end
+        if okMS then MapScripts.invalidate(mapId) end
+      end
+    end
+  end
+
+  -- The TOWN MAP flies during a match (POK-141's third ask).  The bag's
+  -- copy is read-only in vanilla; in a session, with FLY known and the
+  -- sky reachable (the party menu's own two gates), using it opens the
+  -- fly picker instead -- one press from the bag to the departure,
+  -- because the fog is running.  Anything short of both gates falls
+  -- through to the vanilla read-only map, as does every other item.
+  mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
+                                      moveIndex, picker)
+    if id == "TOWN_MAP" and not battle
+       and BR:inSession() and BR.status == "alive" then
+      local ow = mod.world:overworld()
+      local okM, Map = pcall(require, "src.world.Map")
+      local okF, FieldDefaults = pcall(require, "src.world.FieldDefaults")
+      if ow and okM and okF and ow:partyKnows("FLY")
+         and Map.isOutside(ow.map.def,
+                           FieldDefaults.field(game.data, "outsideTilesets")) then
+        if list and list.close then list:close() end
+        local ok = pcall(function()
+          require("src.ui.Screens").push(game, "TownMap", { fly = true,
+            onFly = function(mapId) ow:flyTo(mapId) end })
+        end)
+        if ok then return end
+      end
+    end
+    return next(game, battle, id, target, list, moveIndex, picker)
+  end)
+
+  -- Hold-to-scroll in the POKeDEX (POK-109).  ListMenu grew keyRepeat
+  -- exactly so a mod could turn it on per list kind; a 151-row list is
+  -- the list that needs it.  Session-gated like everything else: a real
+  -- playthrough's dex paces exactly as the cart did.
+  mod.hooks:wrap("ui.list_menu", function(next, opts, ctx)
+    local out = next(opts, ctx)
+    if BR:inSession() and ctx and ctx.kind == "POK\195\169DEX"
+       and type(out) == "table" then
+      if out.keyRepeat == nil then out.keyRepeat = true end
+      if out.pageJump == nil then out.pageJump = true end
+    end
+    return out
+  end)
+
   mod.hooks:wrap("world.talk", function(next, ow, npc)
     -- The Cable Club receptionist is the other door to the engine's link
     -- play (POK-84).  Same reason as the START row, so the same window:
@@ -5396,7 +6310,11 @@ return function(mod)
 
   mod.hooks:wrap("render.hud", function(next, game, viewport)
     local out = next(game, viewport)
-    if not (BR.ring and BR.phase == "match" and viewport) then return out end
+    if not (BR.phase == "match" and viewport) then return out end
+    -- the fog needs a ring; the last-trainers markers (POK-151) need only
+    -- a thin roster, which in a real match arrives ring in hand anyway
+    local lastFew = BR:aliveCount() <= 4
+    if not (BR.ring or lastFew) then return out end
     local top = game.stack and game.stack:top()
     if not top then return out end
     local okTM, TownMap = pcall(require, "src.ui.TownMap")
@@ -5412,37 +6330,67 @@ return function(mod)
     local sx = (viewport.gameWidth or 160) / 160
     local sy = (viewport.gameHeight or 144) / 144
     local ox, oy = viewport.gameX or 0, viewport.gameY or 0
-    local center, radius = BR.ring.center, BR.ring.radius
+    local center = BR.ring and BR.ring.center
+    local radius = BR.ring and BR.ring.radius
 
     local g = love.graphics
     g.push("all")
-    -- one shaded square per town-map cell the fog has taken.  Walking the
-    -- grid rather than the location table: several maps share a square, and
-    -- shading it once per map would stack the alpha into a solid black blot.
-    local all = Fog.coversAll(radius)
-    g.setColor(0.25, 0.15, 0.35, 0.55)
-    -- the LOCATION grid is 16x16, but the town map SCREEN is 20x18 tiles
-    -- and the art runs to its edges -- shading only the location grid left
-    -- a bright strip down the right and along the bottom, glaring once the
-    -- fog covered everything.  A cell past the grid can never be inside the
-    -- ring, so walking the whole screen is correct in every phase.
-    for gy = 0, 17 do
-      for gx = 0, 19 do
-        local dx, dy = gx - center.x, gy - center.y
-        if all or (dx * dx + dy * dy) > (radius * radius) then
-          g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
-                      GRID * sx, GRID * sy)
+    if BR.ring then
+      -- one shaded square per town-map cell the fog has taken.  Walking
+      -- the grid rather than the location table: several maps share a
+      -- square, and shading it once per map would stack the alpha into a
+      -- solid black blot.
+      local all = Fog.coversAll(radius)
+      g.setColor(0.25, 0.15, 0.35, 0.55)
+      -- The LOCATION grid is 16x16, but the town map SCREEN is 20x18
+      -- tiles and the art runs to its edges -- shading only the location
+      -- grid left a bright strip down the right and along the bottom,
+      -- glaring once the fog covered everything.  A cell past the grid
+      -- can never be inside the ring, so walking the whole screen is
+      -- correct in every phase.  Fog.shadesTile owns the
+      -- screen-vs-location offset (POK-146): comparing raw screen tiles
+      -- against the ring's centre drew the safe region a town up and to
+      -- the left of the one the fog announced.
+      for gy = 0, 17 do
+        for gx = 0, 19 do
+          if Fog.shadesTile(center, radius, gx, gy) then
+            g.rectangle("fill", ox + gx * GRID * sx, oy + gy * GRID * sy,
+                        GRID * sx, GRID * sy)
+          end
         end
       end
+      -- and a box round the eye of it, so the safe place is named as well
+      -- as merely un-shaded.  Not once the fog has taken the eye too: a
+      -- box round a shaded square would promise a safety that is not there.
+      if not all then
+        g.setColor(1, 1, 1, 0.9)
+        g.setLineWidth(math.max(1, sx))
+        g.rectangle("line", ox + (center.x + Fog.MAP_OX) * GRID * sx,
+                    oy + (center.y + Fog.MAP_OY) * GRID * sy,
+                    GRID * sx, GRID * sy)
+      end
     end
-    -- and a box round the eye of it, so the safe place is named as well as
-    -- merely un-shaded.  Not once the fog has taken the eye too: a box round
-    -- a shaded square would promise a safety that is not there.
-    if not all then
-      g.setColor(1, 1, 1, 0.9)
-      g.setLineWidth(math.max(1, sx))
-      g.rectangle("line", ox + center.x * GRID * sx, oy + center.y * GRID * sy,
-                  GRID * sx, GRID * sy)
+    -- The last trainers standing, on the map (POK-151).  At four or fewer
+    -- alive, every OTHER living trainer -- bot or human, they are all
+    -- trainers to the roster -- gets a mark on their map's square, blinking
+    -- so it reads as live intel rather than art.  Your own square is what
+    -- the map's native cursor already shows.  Several trainers on one
+    -- square draw once: the mark says "somebody is here", and the count box
+    -- says how many are left.  An interior has no square; its trainer
+    -- simply is not on the map, which is Gen 1's own answer for buildings.
+    if lastFew and (math.floor((clock() or 0) * 2) % 2 == 0) then
+      g.setColor(1, 0.2, 0.2, 0.95)
+      local marked = {}
+      for _, p in pairs(BR.players) do
+        local loc = p.status == "alive" and p.map and locations[p.map]
+        if loc and not marked[loc.x .. ":" .. loc.y] then
+          marked[loc.x .. ":" .. loc.y] = true
+          g.rectangle("fill",
+            ox + ((loc.x + Fog.MAP_OX) * GRID + 2) * sx,
+            oy + ((loc.y + Fog.MAP_OY) * GRID + 2) * sy,
+            (GRID - 4) * sx, (GRID - 4) * sy)
+        end
+      end
     end
     g.pop()
     return out
@@ -5580,9 +6528,14 @@ return function(mod)
     local g = gbCanvas(viewport)
     g.setColor(1, 1, 1, 1)
 
-    -- top-right: the count
+    -- Top-right: the count -- dropped a row while the SAFARI clock is up
+    -- (POK-152).  The clock box is 13 tiles wide and the count up to 9 on
+    -- a 20-tile row, so they overlapped on tiles 11-12, and the clock
+    -- painted second: a full lobby read "1 LEFT" with the 3 underneath
+    -- the clock's border.  The other top-left boxes (FOG!, the watched
+    -- name) are 9 tiles at most, so row 0 is safe everywhere else.
     local left = ("%d LEFT"):format(BR:aliveCount())
-    hudBox(left, 20 - (#left + 2), 0)
+    hudBox(left, 20 - (#left + 2), BR.phase == "safari" and 3 or 0)
 
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
@@ -5760,6 +6713,7 @@ return function(mod)
     if not BR.arming then
       BR.matchWorld = false
       BR:unsuspendMods()
+      BR:disarmTrainerTalk()
     end
   end)
 
@@ -5767,6 +6721,7 @@ return function(mod)
   mod.events:on("save.loaded", function()
     BR.matchWorld = false
     BR:unsuspendMods()
+    BR:disarmTrainerTalk()
   end)
 
   -- Pick up the game handle early, and rescue a career written before
@@ -6040,11 +6995,16 @@ return function(mod)
   end
   -- what the spill table has placed, and what it could not (for drivers)
   mod.exports.spillState = function()
-    local spawned, failed = {}, {}
+    local spawned, failed, balls = {}, {}, {}
     for key, npcId in pairs(BR.spills.spawned or {}) do spawned[key] = npcId end
     for key, why in pairs(BR.spills.failed or {}) do failed[key] = why end
-    return { spawned = spawned, failed = failed, here = mod.world:current(),
-             lastSync = BR.spills.lastSync }
+    -- where each ball actually sits, so a driver can assert a spill landed
+    -- where the fight happened and not where the bot drifted to (POK-154)
+    for key, ball in pairs(BR.spills.balls or {}) do
+      balls[key] = { map = ball.map, x = ball.x, y = ball.y }
+    end
+    return { spawned = spawned, failed = failed, balls = balls,
+             here = mod.world:current(), lastSync = BR.spills.lastSync }
   end
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a
@@ -6219,7 +7179,95 @@ return function(mod)
     end
     return out
   end
+  -- the match's seed, so a driver can derive what every client derives
+  -- from it -- a bot's tier, look, or fight brain (POK-160)
+  mod.exports.matchSeed = function() return BR.matchSeed end
+  -- why tickBotFights is or is not resolving, for drivers (POK-158)
+  mod.exports.debugFightProbe = function()
+    local now = clock() or 0
+    local out = { host = (BR.relay and BR.relay:isHost()) and true or false,
+                  phase = BR.phase, now = now, bots = {} }
+    for id, p in pairs(BR.players) do
+      if p.bot then
+        out.bots[#out.bots + 1] = {
+          id = id, status = p.status, map = p.map, x = p.x, y = p.y,
+          sinceFight = now - (p.lastFight or 0),
+          -- what it is doing with its feet, for POK-160's probes
+          goal = p.goal and p.goal.kind or nil,
+          hunting = (p.huntFor and true) or false,
+          pathLeft = p.huntPath and #p.huntPath or nil,
+          beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
+          dwell = (p.dwellUntil and p.dwellUntil > now)
+            and (p.dwellUntil - now) or nil,
+        }
+      end
+    end
+    return out
+  end
+
+  -- a test hook, like debugPlaceBot: wound a bot's whole team to `frac`,
+  -- so a driver can stage "hurt enough to want the Centre" (POK-158 M2)
+  mod.exports.debugScarBot = function(id, frac)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    for _, m in ipairs(rec) do
+      m.hpFrac = math.max(0, math.min(1, tonumber(frac) or 0))
+    end
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a test hook: put a species on a bot's record, so a driver can stage
+  -- a capability the seed did not deal (a SURF learner, POK-158 M4)
+  mod.exports.debugBotMon = function(id, species)
+    if not (BR.matchSeed and BR.players[id] and type(species) == "string") then
+      return false
+    end
+    local rec = BR:botRecord(id)
+    rec[#rec + 1] = { species = species, hpFrac = 1 }
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a bot's persistent team, for drivers (POK-158).  Reads through the
+  -- lazy accessor, so asking is the same as any client's first look.
+  mod.exports.botRecord = function(id)
+    local rec = BR.matchSeed and BR.players[id] and BR:botRecord(id)
+    if not rec then return nil end
+    local out = {}
+    for i, m in ipairs(rec) do
+      out[i] = { species = m.species, hpFrac = m.hpFrac }
+    end
+    if rec.bag then
+      local items = {}
+      for i, it in ipairs(rec.bag.items or {}) do
+        items[i] = { id = it.id, n = it.n }
+      end
+      out.bag = { items = items, money = rec.bag.money or 0 }
+    end
+    return out
+  end
   mod.exports.code = function() return BR.relay and BR.relay.code end
+  -- what the server said about itself (POK-161), for drivers and the menu
+  mod.exports.serverInfo = function()
+    return BR.relay and BR.relay.serverInfo or nil
+  end
+  mod.exports.dailyPlay = function() return BR:dailyPlay() end
+  mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
+  mod.exports.isDailyLobby = function() return BR.dailyLobby == true end
+  -- the cold-start batch's handles (POK-129/130/133), for drivers
+  mod.exports.kick = function(id) return BR:kick(id) end
+  mod.exports.watchNext = function() return BR:watchNext() end
+  mod.exports.isSpectating = function() return BR:isSpectating() end
+  mod.exports.runningMatch = function()
+    local rm = BR.runningMatch
+    return rm and { code = rm.code, members = rm.members } or nil
+  end
+  mod.exports.members = function()
+    local out = {}
+    for _, m in ipairs((BR.relay and BR.relay.members) or {}) do
+      out[#out + 1] = { id = m.id, name = m.name, spectate = m.spectate }
+    end
+    return out
+  end
   mod.exports.lastError = function() return BR.relay and BR.relay.error end
   mod.exports.memberCount = function()
     return BR.relay and #BR.relay.members or 0

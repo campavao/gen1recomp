@@ -157,9 +157,11 @@ Bots.LOOKS = {
   { walk = "SPRITE_BIKER",         class = "OPP_BIKER" },
   { walk = "SPRITE_BEAUTY",        class = "OPP_BEAUTY" },
   { walk = "SPRITE_SWIMMER",       class = "OPP_SWIMMER" },
-  -- the two with real battle AI (X ATTACK; HYPER POTION and a switch)
-  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M", ai = true },
-  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F", ai = true },
+  -- the two whose CLASS carries real battle AI (X ATTACK; HYPER POTION
+  -- and a switch) -- since POK-160 the brain rides the tier, not the
+  -- face, so these are just two more faces (see Bots.fightAI)
+  { walk = "SPRITE_COOLTRAINER_M", class = "OPP_COOLTRAINER_M" },
+  { walk = "SPRITE_COOLTRAINER_F", class = "OPP_COOLTRAINER_F" },
   { walk = "SPRITE_GAMBLER",       class = "OPP_GAMBLER" },
   { walk = "SPRITE_SCIENTIST",     class = "OPP_SCIENTIST" },
   { walk = "SPRITE_ROCKER",        class = "OPP_ROCKER" },
@@ -169,31 +171,84 @@ Bots.LOOKS = {
 -- with species.  nil means this build has none of them, and the caller
 -- keeps whatever default it had.
 function Bots.look(seed, id, data)
-  local tier = Bots.tier(seed, id)
-  local pool, all = {}, {}
+  local pool = {}
   for _, e in ipairs(Bots.LOOKS) do
     local haveWalk = not (data and data.sprites) or data.sprites[e.walk]
     local haveClass = not (data and data.trainers) or data.trainers[e.class]
     if haveWalk and haveClass then
-      all[#all + 1] = e
-      -- The tier picks the CLASS, and the class IS the AI: the pic and the
-      -- AI temperament come together (see BOT_TRAINER_CLASS in main.lua).
-      -- Only COOLTRAINER_M/F have an entry in data/scripts/ai_classes.lua;
-      -- the other eight fall through to GenericAI, which never uses an
-      -- item and never switches.  So a cooltrainer is the dangerous one --
-      -- true in Gen 1, and a signal a player can learn to read on sight.
-      if (e.ai == true) == (tier.ai == true) then pool[#pool + 1] = e end
+      pool[#pool + 1] = e
     end
   end
-  -- a build with none of the tier's classes falls back to any face rather
-  -- than to no face
-  if #pool == 0 then pool = all end
   if #pool == 0 then return nil end
   -- a stream of its own: sharing the name's or the party's would tie a
   -- bot's face to its team, and every FISHER would lead the same mon
   local rng = Bots.rng((tonumber(seed) or 1) + 104729, id)
   return pool[rng(1, #pool)]
 end
+
+-- Which ai_classes record this bot FIGHTS with (POK-160).  The face used
+-- to be the AI: an ai-tier bot had to wear a cooltrainer's sprite because
+-- the trainer class carried both the pic and the brain, so eight of ten
+-- faces meant GenericAI -- no items, no switches -- and the dangerous
+-- bots were two faces deep in monotony.  The engine's own seam splits
+-- them: TrainerAI.classFor reads `trainer.aiClass` before `trainer.id`,
+-- so any face can fight with any brain.  nil for a tier that fights on
+-- GenericAI; its own stream, like the tier's and the look's, so the
+-- brain follows the bot and not its face.
+function Bots.fightAI(seed, id)
+  if not Bots.tier(seed, id).ai then return nil end
+  local rng = Bots.rng((tonumber(seed) or 1) + 131071, id)
+  return rng(1, 2) == 1 and "OPP_COOLTRAINER_M" or "OPP_COOLTRAINER_F"
+end
+
+-- The move an ai-tier bot actually clicks (POK-160 item 3, all mod-side).
+-- The engine's move choice dispatches battle.enemyAIMods through the
+-- MERGED ai_classes registry -- the vanilla three passes are just its
+-- first registrants -- so a mod layer slots into the same additive
+-- scoring the ROM ran: every usable move starts at 10, layers adjust,
+-- the MINIMUM wins.  This one plays the turn a person would: never an
+-- immune move, the biggest expected hit (power x full dual-type
+-- effectiveness x STAB -- the vanilla layer 3 only ever reads ONE
+-- matchup row) is encouraged past every vanilla nudge, and a resisted
+-- filler is discouraged.  Status moves are left at par: the vanilla
+-- passes already bury a dud, and an ACE that never clicked GROWL was
+-- the point where "skilled" tips into "robotic".
+--
+-- The expected-damage sweep runs once per selection and caches on the
+-- view, which chooseMove builds fresh for each pick.
+local TypeChart = require("src.battle.TypeChart")
+local function expectedHit(def, user, target)
+  if not def or not (def.power and def.power > 0) then return nil end
+  local eff = TypeChart.effectiveness(def.type, target.curTypes or {})
+  local stab = 10
+  for _, t in ipairs(user.curTypes or {}) do
+    if t == def.type then stab = 15 break end
+  end
+  return def.power * eff * stab, eff
+end
+
+Bots.MOVE_LAYER = {
+  kind = "layer",
+  score = function(view, def, score)
+    if not def then return score end
+    if view.brBest == nil then
+      local best = 0
+      for _, mv in ipairs(view.user.curMoves or {}) do
+        local exp = expectedHit(view.data.moves[mv.id], view.user, view.target)
+        if exp and exp > best then best = exp end
+      end
+      view.brBest = best
+    end
+    local exp, eff = expectedHit(def, view.user, view.target)
+    if not exp then return score end          -- status: the vanilla passes rule
+    if eff == 0 then return score + 10 end    -- an immune move is never the pick
+    if view.brBest > 0 and exp >= view.brBest then
+      return score - 3                        -- the biggest hit outbids any nudge
+    end
+    if eff < 10 then return score + 1 end     -- resisted filler waits its turn
+    return score
+  end,
+}
 
 local DIRS = { "up", "down", "left", "right" }
 local DELTA = { up = { 0, -1 }, down = { 0, 1 }, left = { -1, 0 }, right = { 1, 0 } }
@@ -244,6 +299,13 @@ Bots.FIGHT_COOLDOWN = 12
 
 -- Two bots notice each other about as far off as a player would.
 Bots.NOTICE = 3
+
+-- How far a bot SEES a player down its own facing (POK-149).  Four cells
+-- is the longest sight line Gen 1 gives its own trainers, and it is
+-- deliberately shorter than the player's eyeline (Engage.RANGE): spotting
+-- first is the player's edge, being spotted is the price of blundering
+-- across a line.
+Bots.SIGHT = 4
 
 function Bots.isBot(id)
   return type(id) == "number" and id >= Bots.ID_BASE
@@ -424,7 +486,7 @@ end
 -- declines to move a bot already standing on the map nearest the ring's
 -- eye.  Nothing else was left to move them.  A bot must always have an
 -- errand it can perform HERE.
-Bots.DWELL = { grass = 6, item = 1.5, stroll = 0, ring = 0, seam = 0 }
+Bots.DWELL = { grass = 6, item = 1.5, heal = 4, stroll = 0, ring = 0, seam = 0 }
 
 -- A bot gives up on a goal it cannot reach rather than grinding at a wall.
 Bots.GOAL_SECONDS = 20
@@ -575,6 +637,11 @@ function Bots.chooseGoal(bot, ctx, rng)
   -- else on this map matters if standing here is what kills you.
   if ctx.inFog or ctx.ringSoon then return { kind = "seam", why = "ring" } end
 
+  -- A wrecked team walks to the Centre before it does anything else
+  -- (POK-158 M2).  `heal` is the door cell, offered by the caller only
+  -- when the team is hurt enough and the Centre still serves.
+  if ctx.heal then return { kind = "heal", x = ctx.heal.x, y = ctx.heal.y } end
+
   -- Loot on the floor beats grass: it is already a team, and somebody
   -- else paid for it.
   local item = Bots.nearest(bot, ctx.items)
@@ -678,6 +745,269 @@ function Bots.dealTowns(count, n, rng)
   local out = {}
   for k = 1, n do out[k] = deck[(k - 1) % count + 1] end
   return out
+end
+
+-- ------------------------------------------------ THE RECORD (POK-158)
+--
+-- A bot's PERSISTENT team.  Bots.party synthesizes a fresh, full-HP team
+-- at the moment a fight opens, which is the central cheat POK-158 names:
+-- a bot never catches anything, never carries a wound out of a fight,
+-- never needs healing.  The record replaces that: a list of
+-- { species=, hpFrac= } rows that is CREATED identically on every client
+-- (derived from the seed at the floor rung, so lazy creation needs no
+-- message) and then MUTATED only by broadcast events -- the host's catch
+-- rolls, and the scars reported by whichever client just fought it.
+--
+-- Levels are deliberately not stored: every fight is at the rung, exactly
+-- as before, so `hpFrac` is the only thing that has to survive a rung
+-- change and it survives it by construction.
+
+-- How often a grass dwell actually catches (M1 tuning knob).  The dwell
+-- cadence -- walk, six seconds in the grass, twenty-second goal clock --
+-- paces the team build the way steps pace a player's.
+Bots.CATCH_CHANCE = 0.5
+
+-- ONE mon at the drop, whatever the tier (the POK-121 rule, kept).
+-- Derived at the FLOOR rung so two clients creating the record lazily at
+-- different rungs still agree byte-for-byte.
+function Bots.newRecord(seed, id, data)
+  local first = Bots.party(seed, id, data, 5)[1]
+  return { { species = first.species, hpFrac = 1 } }
+end
+
+-- Every bot builds to a full six, like a player.  This was briefly the
+-- tier's maxParty, but the tier caps never actually read in play -- what
+-- a ROOKIE is worse AT is roaming and battle AI, and capping its team on
+-- top of that just made small teams nobody could attribute to anything.
+-- The catching itself is the pacing.
+function Bots.recordCap()
+  return 6
+end
+
+-- The rows a FIGHT is built from: healthy mons only, at the rung, in
+-- record order.  Also returns idx -- the record index behind each row --
+-- so the fight's outcome can be carried back (Bots.scarRecord).
+function Bots.fightRows(record, rung)
+  local rows, idx = {}, {}
+  for i, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then
+      rows[#rows + 1] = { species = m.species, level = rung }
+      idx[#idx + 1] = i
+    end
+  end
+  return rows, idx
+end
+
+-- The rows a SPILL is built from: the whole team, fainted included --
+-- "the team hits the ground where you fell" counts the fallen.
+function Bots.spillRows(record, rung)
+  local rows = {}
+  for _, m in ipairs(record or {}) do
+    rows[#rows + 1] = { species = m.species, level = rung }
+  end
+  return rows
+end
+
+-- Carry a finished fight's damage back into the record.  `idx` is
+-- fightRows' mapping; `enemyParty` the engine's post-battle mons in the
+-- same order.  Fractions round to hundredths so the wire copy and the
+-- local copy cannot drift.
+function Bots.scarRecord(record, idx, enemyParty)
+  for k, recI in ipairs(idx or {}) do
+    local mon = enemyParty and enemyParty[k]
+    local m = record and record[recI]
+    if mon and m then
+      local maxHp = (mon.stats and mon.stats.hp) or mon.maxHp
+      if maxHp and maxHp > 0 then
+        local frac = math.max(0, math.min(1, (tonumber(mon.hp) or 0) / maxHp))
+        m.hpFrac = math.floor(frac * 100 + 0.5) / 100
+      end
+    end
+  end
+  return record
+end
+
+function Bots.recordAlive(record)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0 then return true end
+  end
+  return false
+end
+
+-- What a record can put up in a fight: each healthy mon's base-stat
+-- total, scaled by how much of it is left.  Every mon fights at the same
+-- rung, so base stats are the whole difference between species -- an
+-- ACE's GOLEM outweighs a ROOKIE's third RATTATA, which is what the tier
+-- pools were always supposed to buy.  300 is a middling total, the
+-- benefit of the doubt for a species the data cannot place.
+function Bots.recordPower(record, data)
+  local total = 0
+  for _, m in ipairs(record or {}) do
+    local frac = m.hpFrac or 0
+    if frac > 0 then
+      local def = data and data.pokemon and data.pokemon[m.species]
+      local bs = def and def.baseStats
+      local stat = bs and ((bs.hp or 0) + (bs.attack or 0) + (bs.defense or 0)
+                          + (bs.speed or 0) + (bs.special or 0)) or 300
+      total = total + stat * frac
+    end
+  end
+  return total
+end
+
+-- Resolve a meeting between two records (POK-158 M3): the coin flip is
+-- dead.  The stronger team usually wins -- the roll is weighted by
+-- power, so an upset stays possible the way it is in a real fight -- and
+-- the WINNER walks away hurt: the loser's power lands on it as damage,
+-- front-loaded onto its lead the way a Gen 1 fight chews through one,
+-- capped so a won fight never wipes the team that won it.
+--
+-- Returns "a" or "b"; the winner's record is scarred in place, the
+-- loser's is left for the spill.
+function Bots.resolveFight(recA, recB, data, rng)
+  local pa = Bots.recordPower(recA, data)
+  local pb = Bots.recordPower(recB, data)
+  if pa <= 0 and pb <= 0 then return (rng() < 0.5) and "a" or "b" end
+  local winner = (rng() < pa / (pa + pb)) and "a" or "b"
+  local wrec = (winner == "a") and recA or recB
+  local wp = (winner == "a") and pa or pb
+  local lp = (winner == "a") and pb or pa
+  local budget = (wp > 0) and math.min(0.9, lp / wp) or 0
+  local healthy, totalFrac = {}, 0
+  for _, m in ipairs(wrec) do
+    if (m.hpFrac or 0) > 0 then
+      healthy[#healthy + 1] = m
+      totalFrac = totalFrac + m.hpFrac
+    end
+  end
+  local damage = budget * totalFrac
+  for i, m in ipairs(healthy) do
+    if damage <= 0 then break end
+    -- the last healthy mon is the one that took the fight: it stands
+    local floor_ = (i == #healthy) and 0.05 or 0
+    local take = math.min(m.hpFrac - floor_, damage)
+    if take > 0 then
+      m.hpFrac = math.floor((m.hpFrac - take) * 100 + 0.5) / 100
+      damage = damage - take
+    end
+  end
+  return winner
+end
+
+-- What one gulp of each potion tier is worth, as a fraction of a mon.
+-- The record stores fractions, not points, so the bag's medicine speaks
+-- the same language: a POTION is worth about a third of a mid-match mon,
+-- which is the same ballpark 20 points is against Gen 1 HP curves.
+Bots.POTION_HEAL = {
+  POTION = 0.3, SUPER_POTION = 0.5, HYPER_POTION = 0.8,
+  MAX_POTION = 1, FULL_RESTORE = 1,
+}
+
+-- Drink from the bag between fights (POK-158 M2): the weakest potion
+-- that helps, onto the most-hurt mon still standing, whenever anybody is
+-- under 0.6 -- roughly when a player reaches for the bag rather than the
+-- Centre.  Consumes the item.  Returns the item id used and the mon
+-- healed, or nil when nothing was needed or nothing was left.
+function Bots.quaff(record, bag)
+  if not (record and bag and bag.items) then return nil end
+  local worst
+  for _, m in ipairs(record) do
+    local f = m.hpFrac or 0
+    if f > 0 and f < 0.6 and (not worst or f < worst.hpFrac) then worst = m end
+  end
+  if not worst then return nil end
+  local best
+  for _, it in ipairs(bag.items) do
+    local heal = Bots.POTION_HEAL[it.id]
+    if heal and (it.n or 0) >= 1 and (not best or heal < best.heal) then
+      best = { it = it, heal = heal }
+    end
+  end
+  if not best then return nil end
+  best.it.n = best.it.n - 1
+  if best.it.n <= 0 then
+    for i, it in ipairs(bag.items) do
+      if it == best.it then table.remove(bag.items, i) break end
+    end
+  end
+  worst.hpFrac = math.min(1, math.floor((worst.hpFrac + best.heal) * 100 + 0.5) / 100)
+  return best.it.id, worst
+end
+
+-- A looted bag folds into the bot's own (POK-158 M2): stacks merge by
+-- id, money adds.
+function Bots.bagMerge(bag, loot)
+  if not (bag and loot) then return bag end
+  for _, it in ipairs(loot.items or {}) do
+    local mine
+    for _, own in ipairs(bag.items) do
+      if own.id == it.id then mine = own break end
+    end
+    if mine then mine.n = math.min(99, (mine.n or 0) + (it.n or 0))
+    else bag.items[#bag.items + 1] = { id = it.id, n = it.n or 1 } end
+  end
+  bag.money = (bag.money or 0) + (loot.money or 0)
+  return bag
+end
+
+-- The move inside a TM item id, or nil for anything else.
+function Bots.tmMove(itemId)
+  if type(itemId) ~= "string" then return nil end
+  local move = itemId:match("^TM_(.+)$")
+  return move
+end
+
+-- Can this species learn this move from a machine?  `def.tmhm` is the
+-- generated per-species table of machine moves.
+function Bots.canLearn(def, moveId)
+  for _, m in pairs((def and def.tmhm) or {}) do
+    if m == moveId then return true end
+  end
+  return false
+end
+
+-- Can this record cross water (POK-158 M4)?  The same rule the player
+-- lives by -- somebody on the team knows SURF -- read as capability
+-- from the team it built: a HEALTHY mon whose species takes HM03.  The
+-- "taught ahead of time" half of the goal; a fainted swimmer carries
+-- nobody, which is also the player's rule.
+function Bots.canSurf(record, data)
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) > 0
+       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species],
+                         "SURF") then
+      return true
+    end
+  end
+  return false
+end
+
+-- Is this record hurt enough that a trainer would walk to a Centre?
+-- Half a team's worth of damage, or anything fainted -- a player limps
+-- in earlier than that, but a bot that healed every scratch would never
+-- be caught wounded, and being caught wounded is half the drama.
+function Bots.wantsHeal(record)
+  local n, total = 0, 0
+  for _, m in ipairs(record or {}) do
+    if (m.hpFrac or 0) <= 0 then return true end
+    n = n + 1
+    total = total + m.hpFrac
+  end
+  return n > 0 and (total / n) <= 0.5
+end
+
+-- The catch a grass dwell earns: a species off the map's own grass table
+-- (data.encounters[map].grass.slots), the same table the player's
+-- encounters roll on.  nil when the team is full, the map has no grass
+-- table, or the roll misses -- a dwell is a hunt, not a vending machine.
+function Bots.rollCatch(record, cap, slots, rng)
+  if not (record and slots and #slots > 0) then return nil end
+  if #record >= (cap or 1) then return nil end
+  if rng() >= Bots.CATCH_CHANCE then return nil end
+  local pick = slots[rng(1, #slots)]
+  if not (pick and pick.species) then return nil end
+  record[#record + 1] = { species = pick.species, hpFrac = 1 }
+  return pick.species
 end
 
 -- The TM in a bot's bag (POK-62).  Machine moves are only teachable FROM
