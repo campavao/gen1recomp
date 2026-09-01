@@ -98,7 +98,17 @@ function Menu.items(mod, BR, game)
       -- where the fog is, and whether you are standing in it
       local ring = BR.ring
       if ring and ring.phase and ring.phase > 1 then
-        row("FOG: " .. tostring((ring.center and ring.center.name) or "CLOSING"))
+        -- The grid is twenty tiles and the box is the widest row plus
+        -- three (fit(), below), so a label may be seventeen at most:
+        -- "FOG: VERMILION CITY" is nineteen and ran off the right edge
+        -- (POK-171).  The long names go under their label instead.
+        local where = tostring((ring.center and ring.center.name) or "CLOSING")
+        if #("FOG: " .. where) > Menu.MAX_LABEL then
+          row("FOG:")
+          row(where)
+        else
+          row("FOG: " .. where)
+        end
       end
     end
     -- No PLAY AGAIN row here any more (POK-144): every client leaves the
@@ -430,6 +440,10 @@ end
 -- How many rows fit on screen at a given row step (2 is Menu's default and
 -- the original's double-spaced style).  Public so the suite can check the
 -- faces against it without standing up a live Menu.
+-- The widest label a face may carry: the grid is twenty tiles and fit()
+-- makes the box the widest row plus three (POK-171).
+Menu.MAX_LABEL = 17
+
 function Menu.maxRows(rowStep)
   return math.max(1, math.floor((canvasRows() - 2) / (rowStep or 2)))
 end

@@ -944,6 +944,8 @@ do
             "tryEngage fires from a quiet screen only")
     T.check(try and try:find("(p.busy ~= nil and not Bots.isBot(id))", 1, true) ~= nil,
             "...and does not challenge a trainer in a menu (a bot has no menu)")
+    T.check(try and try:find('p.busy == "battle"', 1, true) ~= nil,
+            "...nor a bot mid-fight, the rule the bump shares (POK-165)")
     local bot = body("tryBotEngage")
     T.check(bot and bot:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
             "a bot does not spot a player whose screen is busy")
@@ -1023,6 +1025,40 @@ do
             and menu:find('label = "READY UP"', 1, true) ~= nil
             and menu:find("BR:readyUp()", 1, true) ~= nil,
             "a quick room after a match offers READY UP, not an instant start")
+  end
+end
+
+-- ------- text never parks a match (POK-169/170) and a bump is a challenge
+-- (POK-165), read off the source
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the auto-advance/bump scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    T.check(src:find("local AUTO_ADVANCE_SECONDS = 3", 1, true) ~= nil,
+            "text auto-advances after three seconds")
+    local auto = src:match("function BR:tickAutoResolve%(.-\n  end\n")
+    T.check(auto ~= nil, "found BR:tickAutoResolve")
+    T.check(auto and auto:find("lb.msgWaiting or lb.msgPrompt", 1, true) ~= nil
+            and auto:find('press("b")', 1, true) ~= nil,
+            "battle text waiting on a button is pressed through with B, never A (POK-66)")
+    T.check(auto and auto:find("getmetatable(top) == TextBox", 1, true) ~= nil,
+            "a text box of its own is pressed through too")
+    T.check(auto and auto:find("self.runnerBusySince = now", 1, true) ~= nil,
+            "each box gets its own three seconds")
+    local coll = src:match('mod%.hooks:wrap%("movement%.collision".-\n  end%)\n')
+    T.check(coll ~= nil, "found the collision hook")
+    T.check(coll and coll:find("BR:trainerAtCell(ctx.map.id, ctx.toX, ctx.toY)", 1, true) ~= nil
+            and coll:find('ctx.reason = "engage"', 1, true) ~= nil,
+            "a step into a trainer is the engage gesture, refused only while a fight can start")
+    T.check(src:find('BR:challengeTrainer(id, "walking up")', 1, true) ~= nil,
+            "the walk-up talk starts the same fight")
+    local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")
+    T.check(chal and chal:find("self:fleeAvoid(true)[id]", 1, true) ~= nil,
+            "...and neither starts inside a flee's grace")
   end
 end
 

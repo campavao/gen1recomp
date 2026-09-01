@@ -3233,18 +3233,19 @@ do
   local maps = { VIRIDIAN_CITY = { warps = { { x = 29, y = 19,
                                                destMap = "VIRIDIAN_MART" } } } }
 
-  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
-     "a living trainer in the open is solid -- you cannot walk through somebody")
+  -- POK-165 turned this around: nobody is solid.  Being body-blocked in a
+  -- doorway or at a Centre counter was pure friction, and walking INTO
+  -- somebody is the engage gesture, read by main.lua's collision hook.
+  ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "alive" }),
+     "a living trainer in the open is walk-through (POK-165)")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 10, y = 10, status = "out" }),
-     "an eliminated one is walk-through, so a corpse cannot wall a survivor in")
+     "an eliminated one still is")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "alive" }),
-     "and one standing IN the mart's door is too, or the shop shuts for good (POK-94)")
+     "and one standing IN the mart's door is (POK-94)")
   ok(Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 19, status = "battle" }),
-     "mid-battle in a doorway seals it just as thoroughly")
-  ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", { x = 29, y = 20, status = "alive" }),
-     "the cell beside the door is not the door")
-  ok(not Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
-     "and the door is this map's, not that coordinate on every map")
+     "mid-battle too")
+  ok(Ghosts.passableFor(maps, "PALLET_TOWN", { x = 29, y = 19, status = "alive" }),
+     "on every map")
   ok(not Ghosts.passableFor(maps, "VIRIDIAN_CITY", nil),
      "no peer at all is not a hole in the world")
 end
@@ -4342,6 +4343,117 @@ do
     ok(block and block:find('"EVENT_BEAT_ROCKET_HIDEOUT_GIOVANNI"', 1, true) == nil,
        "...but not the hideout: its Giovanni stays a boss")
   end
+end
+
+-- ------- the mark over a ghost's head lands on the ghost (POK-166)
+
+do
+  local Ghosts = require("mods.battle_royale.lib.ghosts")
+  local cam = { x = 100, y = 200 }
+  local mx, my = Ghosts.markAt(116, 216, cam, 160, 144, 1)
+  eq(mx, 20, "a 160x144 world view at 1x is the old formula (x)")
+  eq(my, 2, "...and (y)")
+  mx, my = Ghosts.markAt(116, 216, cam, 200, 150, 1)
+  eq(mx, 0, "a wider world view is centred: half the extra comes off x")
+  eq(my, -1, "...and off y")
+  mx, my = Ghosts.markAt(116, 216, cam, 160, 144, 0.5)
+  eq(mx, 50, "zoomed out, the mark scales toward the centre (x)")
+  eq(my, 37, "...and (y)")
+end
+
+-- ------- an automatic level-up never displaces a taught move (POK-172)
+
+do
+  local Levels = require("mods.battle_royale.lib.levels")
+  local data = { moves = { TACKLE = { pp = 35 }, TAIL_WHIP = { pp = 30 },
+                           QUICK_ATTACK = { pp = 30 }, HYPER_FANG = { pp = 15 },
+                           THUNDERBOLT = { pp = 15 }, BLIZZARD = { pp = 5 } } }
+  -- the real shape: the level-1 moves sit beside the learnset, not in it
+  local def = { level1Moves = { "TACKLE", "TAIL_WHIP" },
+                learnset = { { level = 7, move = "QUICK_ATTACK" },
+                             { level = 14, move = "HYPER_FANG" } } }
+  local function ids(mon)
+    local out = {}
+    for _, m in ipairs(mon.moves) do out[#out + 1] = m.id end
+    return table.concat(out, ",")
+  end
+  -- room to spare: the empty slots are filled
+  local mon = { moves = { { id = "TACKLE", pp = 35 } } }
+  Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "TACKLE,QUICK_ATTACK,HYPER_FANG", "empty slots are filled first")
+  -- two taught, two natural: the natural ones give way, oldest first
+  mon = { moves = { { id = "TACKLE" }, { id = "TAIL_WHIP" },
+                    { id = "THUNDERBOLT" }, { id = "BLIZZARD" } } }
+  local learned, forgot = Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,QUICK_ATTACK,HYPER_FANG",
+     "the TM moves survive; the level-up moves gave way")
+  eq(table.concat(forgot, ","), "TACKLE,TAIL_WHIP", "...oldest natural first")
+  eq(table.concat(learned, ","), "QUICK_ATTACK,HYPER_FANG", "both rung moves learned")
+  eq(mon.moves[4].pp, 15, "a learned move arrives with its PP")
+  -- all four taught: the rung's move is skipped, silently
+  mon = { moves = { { id = "THUNDERBOLT" }, { id = "BLIZZARD" }, { id = "SURF" }, { id = "DIG" } } }
+  learned = Levels.learn(data, mon, def, 5, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,DIG", "four taught moves are all kept")
+  eq(#learned, 0, "...and nothing was learned")
+  -- a move learned this rung is natural for the next: it can give way later
+  mon = { moves = { { id = "THUNDERBOLT" }, { id = "BLIZZARD" }, { id = "SURF" } } }
+  Levels.learn(data, mon, def, 5, 7)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,QUICK_ATTACK", "rung 7 fills the slot")
+  Levels.learn(data, mon, def, 7, 15)
+  eq(ids(mon), "THUNDERBOLT,BLIZZARD,SURF,HYPER_FANG",
+     "rung 15 replaces the move rung 7 taught, not a TM")
+  -- nothing below the level it already had is re-learned
+  mon = { moves = { { id = "THUNDERBOLT" } } }
+  Levels.learn(data, mon, def, 20, 30)
+  eq(ids(mon), "THUNDERBOLT", "no rung move in the window, no change")
+  -- ...and the loadout uses it, read off the source
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find("Pokemon.learnMovesFromDayCare(", 1, true) == nil,
+       "scaleMon no longer uses the engine's oldest-slot learn")
+    ok(src:find("Levels.learn(game.data, mon, def, from, target)", 1, true) ~= nil
+       and src:find("Levels.learn(game.data, mon, newDef, from, target)", 1, true) ~= nil,
+       "...both the rung and the evolution learn through Levels.learn")
+  end
+end
+
+-- ------- the parade shows no level (POK-168)
+
+do
+  local f = io.open("mods/battle_royale/lib/fame.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find('"Lv%d"', 1, true) == nil, "the Hall of Fame roll draws no level")
+  end
+end
+
+-- ------- the FOG row fits the grid (POK-171)
+
+do
+  local BRMenu = require("mods.battle_royale.lib.menu")
+  eq(BRMenu.MAX_LABEL, 17, "a label may be seventeen tiles: twenty less the box's three")
+  local BR = {
+    phase = "match", status = "alive", solo = false,
+    ring = { phase = 2, center = { name = "VERMILION CITY" } },
+    aliveCount = function() return 4 end, level = function() return 15 end,
+    safariLeft = function() return 0 end, lastResult = nil,
+  }
+  local items = BRMenu.items({ version = "0.0.0" }, BR, {})
+  local fogRows, longest = 0, 0
+  for _, it in ipairs(items) do
+    if it.label == "FOG:" or it.label == "VERMILION CITY" then fogRows = fogRows + 1 end
+    if #it.label > longest then longest = #it.label end
+  end
+  eq(fogRows, 2, "the longest town goes under its label")
+  ok(longest <= BRMenu.MAX_LABEL, "no row wider than the grid allows (" .. longest .. ")")
+  BR.ring.center.name = "PALLET TOWN"
+  items = BRMenu.items({ version = "0.0.0" }, BR, {})
+  local found = false
+  for _, it in ipairs(items) do if it.label == "FOG: PALLET TOWN" then found = true end end
+  ok(found, "a short town stays on one row")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))

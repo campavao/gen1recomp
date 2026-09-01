@@ -2306,7 +2306,11 @@ return function(mod)
                                 -- the challenge waits until they are back
                                 -- on the map, where they can answer it.
                                 -- A bot has no screen to be in.
-                                busy = p.status == "battle"
+                                -- A bot is busy only mid-FIGHT (its grass
+                                -- dwell); one heading for the nurse may
+                                -- still be jumped (POK-160), and that is
+                                -- the same rule challengeTrainer applies.
+                                busy = p.status == "battle" or p.busy == "battle"
                                   or (p.busy ~= nil and not Bots.isBot(id)) }
       end
     end
@@ -2598,6 +2602,63 @@ return function(mod)
     BR.ghosts:despawn(id)
     BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
                                   p.status, p.sprite, id))
+  end
+
+  -- Which trainer's ghost stands on a cell of this map (POK-165): the
+  -- drawn cell first, since that is what the player walked into, then the
+  -- wire cell for a ghost this screen has not drawn yet.
+  function BR:trainerAtCell(mapId, x, y)
+    local found
+    for id, p in pairs(self.players) do
+      if p.status == "alive" and p.map == mapId then
+        local gx, gy = self.ghosts:cellOf(id)
+        if (gx == x and gy == y) or (gx == nil and p.x == x and p.y == y) then
+          if not found or id < found then found = id end
+        end
+      end
+    end
+    return found
+  end
+
+  -- Pick a fight with a trainer by hand: the walk-up talk and the bump
+  -- (POK-165) both come here.  True when a challenge went out or a bot's
+  -- walk-up began; false when nothing could start -- a fight or a
+  -- challenge already open, the other side out or mid-fight, a flee's
+  -- grace, or (for a bump) a screen in the way.  A human in a MENU is
+  -- still challenged: their queue answers when they are back (POK-162).
+  function BR:challengeTrainer(id, how)
+    if not (self.phase == "match" and self.status == "alive") then return false end
+    local p = self.players[id]
+    if not (p and p.status == "alive") then return false end
+    if self.battle or self.pending or self.botFight then return false end
+    if how ~= "walking up" and not self:screenIsQuiet() then return false end
+    if self:fleeAvoid(true)[id] then return false end
+    if p.busy == "battle" then return false end
+    local ow = mod.world:overworld()
+    if Bots.isBot(id) then
+      self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
+      engageFlash(ow and ow.player, function()
+        -- you walked into THIS one, so its stride is already over and
+        -- Bots.approach returns nil on the first beat (POK-85)
+        BR:walkUpThen(id, function()
+          if BR.pending and BR.pending.to == id then BR.pending = nil end
+          if BR.status == "alive" and not BR.battle and not BR.botFight then
+            BR:startBotBattle(id)
+          end
+        end)
+      end)
+      return true
+    end
+    if not (self.relay and self.relay:isOpen()) then return false end
+    self.nonceSeq = self.nonceSeq + 1
+    self.pending = { to = id, nonce = self.nonceSeq,
+                     host = Engage.isHost(self.myId, id), at = clock() or 0 }
+    log:say("challenging %s by %s (nonce %d)", self:nameOf(id), how, self.nonceSeq)
+    self.relay:send(id, Wire.challenge(self.nonceSeq))
+    if ow then
+      ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
+    end
+    return true
   end
 
   -- ------- the walk over (POK-85)
@@ -4288,6 +4349,22 @@ return function(mod)
         end
       end
     end
+    -- A step INTO another trainer is the engage gesture (POK-165).  Ghosts
+    -- are not solid any more -- being body-blocked in a doorway was pure
+    -- friction -- so the bump is read here, at the attempt: if a fight can
+    -- start it starts, and the step is refused the way a wall refuses one,
+    -- so the two stand face to face like a route trainer's approach.  If
+    -- nothing can start (a challenge already out, the other side in a
+    -- fight, a flee's grace) the step goes through, which is exactly the
+    -- unblocking this is for.
+    if ow and ctx and ctx.mover == ow.player and ctx.map
+       and BR.phase == "match" and BR.status == "alive" then
+      local id = BR:trainerAtCell(ctx.map.id, ctx.toX, ctx.toY)
+      if id and BR:challengeTrainer(id, "bumping") then
+        ctx.reason = "engage"
+        return false
+      end
+    end
     return next(allowed, ctx)
   end)
 
@@ -4317,7 +4394,8 @@ return function(mod)
     local from = mon.level
     local oldMax, oldHp = (mon.stats and mon.stats.hp or 0), (mon.hp or 0)
     mon.level = target
-    Pokemon.learnMovesFromDayCare(game.data, mon, def, from, target)
+    -- the rung's moves, never at the cost of a taught one (POK-172)
+    Levels.learn(game.data, mon, def, from, target)
     mon.stats = Stats.calc(def, target, mon.dvs, mon.statExp)
     mon.hp = Levels.carryHp(oldMax, oldHp, mon.stats.hp)
     local okExp, exp = pcall(Growth.expForLevel, def.growthRate, target,
@@ -4332,7 +4410,7 @@ return function(mod)
       Evolution.apply(game, mon, evo, "LEVEL")
       local newDef = game.data.pokemon[mon.species]
       if newDef then
-        Pokemon.learnMovesFromDayCare(game.data, mon, newDef, from, target)
+        Levels.learn(game.data, mon, newDef, from, target)
       end
     end
     return true
@@ -4370,59 +4448,93 @@ return function(mod)
     if BRMenu.say(mod, q[1].text) then table.remove(q, 1) end
   end
 
-  -- An online match never waits on a read (POK-54).  Any dialog left open
-  -- five continuous seconds gets pressed through -- one A a second until
-  -- the runner is quiet.  Plain-text says are the common case; the rare
-  -- prompt resolves to its default rather than holding the match hostage.
+  -- An online match never waits on a read (POK-54; the ceiling was five
+  -- seconds, POK-169/170 make it THREE, PER BOX).  Any text left unread
+  -- that long is pressed through: a plain say advances, the rare prompt
+  -- resolves to its default rather than holding the match hostage.  A
+  -- press of your own still advances at once -- this is a ceiling, not a
+  -- cadence.  Three surfaces, one rule:
+  --
+  --   the overworld's runner (signs, NPC chatter, the mod's own says);
+  --   a TextBox pushed on its own (a gift, an ask);
+  --   battle text -- link, bot, route trainer and wild alike -- where the
+  --   press is B, never A (POK-66): B advances text exactly like A and in
+  --   any menu BACKS OUT instead of choosing, so the watchdog keeps a
+  --   fight moving and can never pick a move.  A link battle's text is
+  --   paced locally on each side (only the moves are lockstep), which is
+  --   what POK-65's watchdog already relied on.
+  local AUTO_ADVANCE_SECONDS = 3
   function BR:tickAutoResolve(game)
     if not self.matchWorld then
-      self.runnerBusySince = nil
-      self.linkWaitSince = nil
+      self.runnerBusySince, self.battleTextSince, self.boxSince = nil, nil, nil
       return
     end
     local now = clock()
-    -- A link battle's text waits auto-advance too (POK-65): the intro and
-    -- turn messages cannot be parked on forever, so a silent player always
-    -- drifts to the move menu, where the shot clock (POK-59) takes over.
-    -- The menu and the wait-for-remote phases are exempt -- this never
-    -- picks a move -- and the party/bag screens sit above the battle on
-    -- the stack, so top == battle rules them out on its own.
+    if not (game and now) then return end
+    local top = game.stack and game.stack:top()
+    local input = game.input
+    local function press(btn)
+      if input and input.pressQueue then table.insert(input.pressQueue, btn) end
+    end
+
+    -- battle text waiting on a button: msgWaiting is the CONT arrow
+    -- between lines, msgPrompt the end of a message.  The party and bag
+    -- screens sit ABOVE the battle on the stack, so top == battle rules
+    -- them out on its own, and the move menu is not "messages" at all.
     local lb = self.localBattle
-    local top = game and game.stack and game.stack:top()
-    if now and lb and lb.kind == "link" and top == lb
-       and lb.phase ~= "menu" and lb.phase ~= "waitBoth"
-       and lb.phase ~= "waitRemote" then
-      self.linkWaitSince = self.linkWaitSince or now
-      if (now - self.linkWaitSince) >= 5
-         and not (self.lastAutoA and (now - self.lastAutoA) < 1) then
-        self.lastAutoA = now
-        if game.input and game.input.pressQueue then
-          -- B, never A (POK-66): B advances text exactly like A, but in
-          -- any menu it BACKS OUT instead of choosing -- the watchdog can
-          -- keep a stalled duel moving yet can never pick a move.  Full
-          -- silence still drifts to the action menu, where the POK-59
-          -- clock forfeits it.
-          table.insert(game.input.pressQueue, "b")
+    if lb and top == lb then
+      local waiting = lb.phase == "messages" and (lb.msgWaiting or lb.msgPrompt)
+      if waiting then
+        self.battleTextSince = self.battleTextSince or now
+        if (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
+          self.battleTextSince = nil
+          press("b")
         end
+      else
+        self.battleTextSince = nil
       end
-    else
-      self.linkWaitSince = nil
+      self.runnerBusySince, self.boxSince = nil, nil
+      return
     end
-    -- a battle on the stack silences the runner watchdog (POK-66): a
-    -- script-started trainer fight keeps the runner busy for the whole
-    -- battle, and pressing A into it picks moves nobody chose.  Battle
-    -- text paces like vanilla; only the overworld's own dialogs resolve.
-    if self.localBattle then self.runnerBusySince = nil return end
+    self.battleTextSince = nil
+    -- a battle under something else on the stack: those screens are the
+    -- player's own, and pressing into them picks things
+    if self.localBattle then
+      self.runnerBusySince, self.boxSince = nil, nil
+      return
+    end
+
     local ow = mod.world:overworld()
-    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
-    if not (busy and now) then self.runnerBusySince = nil return end
-    self.runnerBusySince = self.runnerBusySince or now
-    if (now - self.runnerBusySince) < 5 then return end
-    if self.lastAutoA and (now - self.lastAutoA) < 1 then return end
-    self.lastAutoA = now
-    if game and game.input and game.input.pressQueue then
-      table.insert(game.input.pressQueue, "a")
+    -- a TextBox on top -- the runner's own show_text pushes one and waits
+    -- under it, so this is the common case, not the rare one -- waiting on
+    -- A: `waiting` at a page end or a CONT arrow, `done` on the last page
+    local okTB, TextBox = pcall(require, "src.render.TextBox")
+    if okTB and top and top ~= ow and getmetatable(top) == TextBox then
+      if top.waiting or top.done then
+        self.boxSince = self.boxSince or now
+        if (now - self.boxSince) >= AUTO_ADVANCE_SECONDS then
+          self.boxSince = nil
+          press("a")
+        end
+      else
+        self.boxSince = nil
+      end
+      self.runnerBusySince = nil
+      return
     end
+    self.boxSince = nil
+
+    -- the overworld's own runner
+    local busy = ow and ow.runner and ow.runner.isRunning and ow.runner:isRunning()
+    if not busy then
+      self.runnerBusySince = nil
+      return
+    end
+    self.runnerBusySince = self.runnerBusySince or now
+    if (now - self.runnerBusySince) < AUTO_ADVANCE_SECONDS then return end
+    -- the press starts the NEXT box's three seconds
+    self.runnerBusySince = now
+    press("a")
   end
 
   function BR:tickLevels()
@@ -6542,34 +6654,9 @@ return function(mod)
     if not (BR.game and BR.relay and BR.relay:isOpen()) then return end
     if BR.status == "out" then return end   -- a camera has nobody to face
     npc:facePlayer(ow.player)
-    -- talking counts as engaging if they are alive and we are
-    if BR.phase == "match" and BR.status == "alive" and BR.players[id]
-       and BR.players[id].status == "alive"
-       and not BR.battle and not BR.pending and not BR.botFight then
-      local owE = mod.world:overworld()
-      if Bots.isBot(id) then
-        BR.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
-        engageFlash(owE and owE.player, function()
-          -- you walked into THIS one, so its stride is already over and
-          -- Bots.approach returns nil on the first beat (POK-85)
-          BR:walkUpThen(id, function()
-            if BR.pending and BR.pending.to == id then BR.pending = nil end
-            if BR.status == "alive" and not BR.battle and not BR.botFight then
-              BR:startBotBattle(id)
-            end
-          end)
-        end)
-        return
-      end
-      BR.nonceSeq = BR.nonceSeq + 1
-      BR.pending = { to = id, nonce = BR.nonceSeq,
-                     host = Engage.isHost(BR.myId, id), at = clock() or 0 }
-      log:say("challenging %s by walking up (nonce %d)", BR:nameOf(id), BR.nonceSeq)
-      BR.relay:send(id, Wire.challenge(BR.nonceSeq))
-      if owE then
-        owE.emote = { npc = owE.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
-      end
-    end
+    -- talking counts as engaging if they are alive and we are: the same
+    -- fight a bump starts (POK-165), so both live in challengeTrainer
+    BR:challengeTrainer(id, "walking up")
   end)
 
   -- ------- the fog, drawn on the TOWN MAP
@@ -6850,6 +6937,17 @@ return function(mod)
     local sheet, bubbles = emoteSheet(game)
     local cam = ow.camera
     if cam and sheet then
+      -- the world pass's own size and scale (POK-166); 160x144 at 1 when
+      -- the renderer cannot say
+      local markVw, markVh, markZ = 160, 144, 1
+      local okV, vw, vh = pcall(function() return game.renderer:worldViewSize() end)
+      if okV and vw and vh then markVw, markVh = vw, vh end
+      local okZ, z = pcall(function()
+        local Zoom = require("src.render.Zoom")
+        local Sp = (viewport and viewport.scale) or 1
+        return Zoom.scale(Sp) / Sp
+      end)
+      if okZ and z and z > 0 then markZ = z end
       local h = here()
       for id, p in pairs(BR.players) do
         -- On OUR map and actually drawn.  Both halves matter: a bot that
@@ -6867,15 +6965,19 @@ return function(mod)
             local quad = emoteQuad(bubbles, sheet,
                                    p.busy == "battle" and "EXCLAMATION_BUBBLE"
                                    or "QUESTION_BUBBLE")
-            -- the engine's own bubble slot, so it lands exactly where a
-            -- trainer-sight "!" does (fxEmote: px + 4, py - 14)
-            local mx = math.floor(npc.px - cam.x) + 4
-            local my = math.floor(npc.py - cam.y) - 14
+            -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
+            -- mapped from the WORLD pass onto this canvas (POK-166): the
+            -- world is drawn at worldViewSize() and the zoom's scale, both
+            -- centred in the viewport, so a mark computed in world pixels
+            -- and drawn here straight sat half the extra view off the
+            -- sprite -- "two tiles right and one up" on a wide window.
+            local mx, my = Ghosts.markAt(npc.px, npc.py, cam, markVw, markVh, markZ)
+            mx, my = math.floor(mx), math.floor(my)
             -- only when it would land on the screen: a bubble for somebody
             -- across a big map is a smear at the edge, not information
             if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
               g.setColor(1, 1, 1, 1)
-              g.draw(sheet, quad, mx, my)
+              g.draw(sheet, quad, mx, my, 0, markZ, markZ)
             end
           end
         end
@@ -7328,6 +7430,20 @@ return function(mod)
     return { to = p.to, nonce = p.nonce, host = p.host }
   end
   mod.exports.queued = function() return Events.count(BR.events) end
+  -- the mark's arithmetic, for a driver reading a screenshot (POK-166)
+  mod.exports.markProbe = function(id)
+    local ow = mod.world:overworld()
+    local npc = BR.ghosts:npcOf(id)
+    local cam = ow and ow.camera
+    if not (npc and cam and npc.px) then return nil end
+    local vw, vh = 160, 144
+    pcall(function() vw, vh = BR.game.renderer:worldViewSize() end)
+    local mx, my = Ghosts.markAt(npc.px, npc.py, cam, vw, vh, 1)
+    return { px = npc.px, py = npc.py, camX = cam.x, camY = cam.y, vw = vw, vh = vh,
+             mx = mx, my = my,
+             spriteX = 80 + (npc.px - cam.x - vw / 2),
+             spriteY = 72 + (npc.py - cam.y - vh / 2) }
+  end
   -- ...and one on the walk over (POK-85): a smoke needs to know the
   -- stride began, not just that a battle eventually happened
   mod.exports.walkUp = function()
