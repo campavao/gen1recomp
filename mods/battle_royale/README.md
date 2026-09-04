@@ -79,6 +79,8 @@ where the team is your health. The Safari is closed for the rest of the
 match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
 RATTATA.
 
+**The zone has a shape.** Each match draws its own twelve species from the match seed, and the draw is three slices: a theme (one type the seed picks, so a match is a WATER match or a BUG match and reads that way in two minutes), a rare slice (the Safari's own residents and Kanto's one-offs, guaranteed a few places every match), and the open rest. The log names the theme. Bots draft their first Pokémon from the same zone, so what a fallen bot drops carries the match's character.
+
 You start with **all eight badges and all five HMs**, because a match is
 twenty minutes and Kanto is gated for a campaign. The badges are what Gen 1
 checks before a field move will run at all, and they open the Route 22 gate
@@ -101,6 +103,8 @@ and leave the rest on the ground for the next trainer — and their team lands
 around it as Poké Balls. Balls and bags are walkable: a pile is something you
 wade through, and A on the piece under your feet picks it up. **Opening a ball is a gift, not a fight**: it
 shows the prompt Oak's lab uses —
+
+**A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — with the engine's own evolution scene. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
 
 > This contains a NIDORINO.
 > Do you want it?
