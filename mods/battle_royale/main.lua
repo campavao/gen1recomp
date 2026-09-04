@@ -1162,6 +1162,7 @@ return function(mod)
     self.ringLocs = nil
     self.matchFog = nil
     self.safariPool = nil
+    self.safariTheme = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
     self.lastSafariBeat = nil
@@ -1502,8 +1503,8 @@ return function(mod)
     self.matchFog = msg.fog
     -- ...and this match's zone, drawn from the same seed on every client
     -- rather than sent, so the draft is the same for everyone (POK-118)
-    self.safariPool = Safari.pool(msg.seed, self.game and self.game.data)
-    log:say("the zone today: %s", Safari.describe(self.safariPool))
+    self.safariPool, self.safariTheme = Safari.pool(msg.seed, self.game and self.game.data)
+    log:say("the zone today: %s", Safari.describe(self.safariPool, self.safariTheme))
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -2812,7 +2813,9 @@ return function(mod)
   function BR:botRecord(id)
     local rec = self.botRecords[id]
     if not rec then
-      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data)
+      -- from this match's zone (POK-177), which every client derived
+      rec = Bots.newRecord(self.matchSeed, id, self.game and self.game.data,
+                           self.safariPool)
       self.botRecords[id] = rec
     end
     if not rec.bag then
@@ -7718,7 +7721,7 @@ return function(mod)
   -- phase change.  nil clears it, the way leaving a match does.
   mod.exports.debugSafariPool = function(seed)
     if seed == nil then BR.safariPool = nil return nil end
-    BR.safariPool = Safari.pool(seed, BR.game and BR.game.data)
+    BR.safariPool, BR.safariTheme = Safari.pool(seed, BR.game and BR.game.data)
     return BR.safariPool
   end
 
@@ -7877,6 +7880,9 @@ return function(mod)
   mod.exports.serverInfo = function()
     return BR.relay and BR.relay.serverInfo or nil
   end
+  -- this match's zone and its theme (POK-118 / POK-177), for drivers
+  mod.exports.safariPool = function() return BR.safariPool, BR.safariTheme end
+  mod.exports.botRecord = function(id) return BR:botRecord(id) end
   mod.exports.dailyPlay = function() return BR:dailyPlay() end
   mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
   mod.exports.isDailyLobby = function() return BR.dailyLobby == true end

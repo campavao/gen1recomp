@@ -3289,6 +3289,89 @@ do
   eq(#poor, 1, "and a build with none of them still yields something catchable")
   eq(poor[1], "RATTATA", "namely a RATTATA, which Kanto can always find")
 
+  -- POK-177: the zone has a shape.  Without data there is no theme (a
+  -- type is read off the data), but the rare slice is always there.
+  local rareSet = {}
+  for _, sp in ipairs(Safari.RARE) do rareSet[sp] = true end
+  for _, seed in ipairs({ 1, 2, 3, 12345, 99999 }) do
+    local zone, theme = Safari.pool(seed, nil)
+    ok(theme == nil, "no data, no theme (seed " .. seed .. ")")
+    local rares = 0
+    for _, sp in ipairs(zone) do if rareSet[sp] then rares = rares + 1 end end
+    ok(rares >= Safari.RARE_PER_POOL,
+       ("every zone holds at least %d of the rare slice (seed %d: %d)"):format(
+         Safari.RARE_PER_POOL, seed, rares))
+  end
+  ok(#Safari.CANDIDATES >= 65, "the candidate list is wider than the routes (" .. #Safari.CANDIDATES .. ")")
+  local candSet = {}
+  for _, sp in ipairs(Safari.CANDIDATES) do candSet[sp] = true end
+  for _, sp in ipairs(Safari.RARE) do
+    ok(candSet[sp], "a rare entry is a candidate: " .. sp)
+  end
+  for _, sp in ipairs({ "LAPRAS", "SNORLAX", "EEVEE", "PORYGON", "MR_MIME", "FARFETCHD",
+                        "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "DITTO" }) do
+    ok(candSet[sp], "the one-offs the report missed are candidates: " .. sp)
+  end
+
+  -- with data that knows types, the seed picks a theme and the zone leans
+  -- into it; NORMAL never is one, and a thin type never is either
+  local typed = { pokemon = {} }
+  local function mon(sp, ...) typed.pokemon[sp] = { types = { ... } } end
+  for _, sp in ipairs(Safari.CANDIDATES) do mon(sp, "NORMAL") end
+  for _, sp in ipairs({ "POLIWAG", "PSYDUCK", "KRABBY", "GOLDEEN", "MAGIKARP",
+                        "SHELLDER", "HORSEA", "STARYU", "SEEL", "LAPRAS" }) do
+    mon(sp, "WATER")
+  end
+  for _, sp in ipairs({ "CATERPIE", "WEEDLE", "PARAS", "VENONAT", "SCYTHER", "PINSIR" }) do
+    mon(sp, "BUG")
+  end
+  mon("GASTLY", "GHOST", "POISON")   -- one ghost: not enough for a theme
+  eq(table.concat(Safari.themes(typed), ","), "BUG,WATER",
+     "the themes are the types enough candidates carry, NORMAL and thin types excluded")
+  local sawBug, sawWater = false, false
+  for seed = 1, 40 do
+    local zone, theme = Safari.pool(seed, typed)
+    ok(theme == "BUG" or theme == "WATER", "a themed zone names its theme (seed " .. seed .. ")")
+    local inTheme = 0
+    for _, sp in ipairs(zone) do
+      for _, ty in ipairs(typed.pokemon[sp].types) do
+        if ty == theme then inTheme = inTheme + 1 end
+      end
+    end
+    ok(inTheme >= Safari.THEME_PER_POOL,
+       ("the zone leans into its theme (seed %d, %s: %d)"):format(seed, theme, inTheme))
+    eq(#zone, Safari.POOL_SIZE, "...and is still POOL_SIZE")
+    local z2, t2 = Safari.pool(seed, typed)
+    ok(t2 == theme and table.concat(z2, ",") == table.concat(zone, ","),
+       "the same seed and data draw the same themed zone")
+    if theme == "BUG" then sawBug = true elseif theme == "WATER" then sawWater = true end
+  end
+  ok(sawBug and sawWater, "over forty seeds both themes come up")
+  eq(Safari.themeName("PSYCHIC_TYPE"), "PSYCHIC", "the data's PSYCHIC_TYPE reads as PSYCHIC")
+  eq(Safari.themeName(nil), nil, "no theme, no name")
+  ok(Safari.describe({ "A", "B" }, "WATER"):find("a WATER match: A, B", 1, true) ~= nil,
+     "the log line names the theme")
+  eq(Safari.describe({ "A", "B" }, nil), "A, B", "...and stays plain without one")
+
+  -- bots draft their first mon from the zone (POK-177)
+  local Bots = require("mods.battle_royale.lib.bots")
+  local zone = Safari.pool(777, nil)
+  local zoneSet = {}
+  for _, sp in ipairs(zone) do zoneSet[sp] = true end
+  local fromZone = 0
+  for id = 1, 30 do
+    local rec = Bots.newRecord(777, id, nil, zone)
+    eq(#rec, 1, "one mon at the drop, still")
+    if zoneSet[rec[1].species] then fromZone = fromZone + 1 end
+    local again = Bots.newRecord(777, id, nil, zone)
+    eq(again[1].species, rec[1].species, "the draft is derived, so every client agrees")
+  end
+  eq(fromZone, 30, "every bot's first mon is out of the match's own zone")
+  local plain = Bots.newRecord(777, 1, nil, nil)
+  ok(plain[1] and plain[1].species ~= nil, "without a zone the tier's list still stands")
+  local unknown = Bots.newRecord(777, 1, { pokemon = { RATTATA = true } }, { "MEWTWO" })
+  eq(unknown[1].species, "RATTATA", "a zone this build cannot make falls back rather than asserting")
+
   -- picking within a zone
   local rolled = Safari.pick(a1, function(lo, hi) return lo end)
   eq(rolled, a1[1], "pick draws through the caller's own roll")

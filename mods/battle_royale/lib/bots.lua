@@ -779,7 +779,23 @@ Bots.CATCH_CHANCE = 0.5
 -- ONE mon at the drop, whatever the tier (the POK-121 rule, kept).
 -- Derived at the FLOOR rung so two clients creating the record lazily at
 -- different rungs still agree byte-for-byte.
-function Bots.newRecord(seed, id, data)
+--
+-- From the match's own zone when there is one (POK-177): a bot was in the
+-- Safari with everybody else, so its first mon is a draft from the same
+-- pool -- and what a fallen bot drops carries the match's character
+-- instead of being another PIDGEY off a fixed list.  The pool is
+-- seed-derived on every client (Safari.pool), so the record still agrees
+-- everywhere without a message.  Without a zone (an old caller, a test)
+-- the tier's list stands.
+function Bots.newRecord(seed, id, data, zone)
+  local pool = {}
+  for _, s in ipairs(zone or {}) do
+    if not data or not data.pokemon or data.pokemon[s] then pool[#pool + 1] = s end
+  end
+  if #pool > 0 then
+    local rng = Bots.rng((tonumber(seed) or 1) + 7919, id)
+    return { { species = pool[rng(1, #pool)], hpFrac = 1 } }
+  end
   local first = Bots.party(seed, id, data, 5)[1]
   return { { species = first.species, hpFrac = 1 } }
 end
