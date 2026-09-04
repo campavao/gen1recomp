@@ -1028,6 +1028,48 @@ do
   end
 end
 
+-- ------- A on a bag opens the bag (POK-176), read off the source: no
+-- text box before the list, USE / TAKE / CANCEL per row, and a take that
+-- travels by the item so the rest stays on the ground.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the loot-bag scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local open = src:match("function BR:openBag%(.-\n  end\n")
+    T.check(open ~= nil, "found BR:openBag")
+    T.check(open and open:find('ListMenu.new(game, (who .. "\'s BAG"):sub(1, 17), self:lootRows(key)', 1, true) ~= nil,
+            "A on a bag pushes the item list of that bag alone")
+    T.check(open and open:find("TextBox", 1, true) == nil and open:find("Take it?", 1, true) == nil,
+            "...with no text box first")
+    local choose = src:match("function BR:lootChoose%(.-\n  end\n")
+    T.check(choose ~= nil, "found BR:lootChoose")
+    T.check(choose and choose:find('label = "USE"', 1, true) ~= nil
+            and choose:find('label = "TAKE"', 1, true) ~= nil
+            and choose:find('label = "CANCEL"', 1, true) ~= nil,
+            "a row offers USE / TAKE / CANCEL")
+    T.check(choose and choose:find("if id ~= MONEY_ROW then", 1, true) ~= nil,
+            "...and the money row only TAKE")
+    local take = src:match("function BR:lootTake%(.-\n  end\n")
+    T.check(take ~= nil, "found BR:lootTake")
+    T.check(take and take:find("self.relay:broadcast(Wire.took(key, id, n))", 1, true) ~= nil,
+            "a take travels by the item and count")
+    T.check(take and take:find("Bag.add(save, id, n, game.data)", 1, true) ~= nil,
+            "...through the bag's own capacity rule")
+    local use = src:match("function BR:lootUse%(.-\n  end\n")
+    T.check(use and use:find("if not self:lootTake(key, id) then return false end", 1, true) ~= nil
+            and use:find("BagMenu.new(game, {})", 1, true) ~= nil,
+            "USE takes the item and opens the PACK on it")
+    T.check(src:find("self.spills:takeItem(msg.key, msg.item, msg.n, msg.cash)", 1, true) ~= nil,
+            "a rival's per-item take lightens our copy of the bag")
+    T.check(src:find('"Open the PACK\\nnow?"', 1, true) == nil,
+            "the second question is gone")
+  end
+end
+
 -- ------- pickups are walkable, and A on the tile takes them (POK-175),
 -- read off the source: the placement rule refuses a cell with a ball on
 -- it (passable balls would stack), the trade-drop path lands by the same

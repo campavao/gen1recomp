@@ -101,10 +101,19 @@ return function(game)
     if C.x() ~= piece.x or C.y() ~= piece.y then
       return C.fail(("turning walked us off the %s to %d,%d"):format(label, C.x(), C.y()))
     end
-    -- through the pages, YES on the take, then B out of the PACK offer
-    local t0 = love.timer.getTime()
-    while count() == before and love.timer.getTime() - t0 < 20 do
-      U.tap(game, "a") U.wait(12)
+    if piece.bag then
+      -- the bag is a list (POK-176): TAKE the POTION row, then the money
+      U.tap(game, "a") U.wait(15)                       -- the loot list
+      U.tap(game, "a") U.wait(10)                       -- USE / TAKE / CANCEL
+      U.tap(game, "down") U.wait(6) U.tap(game, "a") U.wait(15)   -- TAKE
+      U.tap(game, "a") U.wait(10)                       -- TAKE / CANCEL
+      U.tap(game, "a") U.wait(15)                       -- TAKE the money
+    else
+      -- the ball asks; YES
+      local t0 = love.timer.getTime()
+      while count() == before and love.timer.getTime() - t0 < 20 do
+        U.tap(game, "a") U.wait(12)
+      end
     end
     if count() ~= before - 1 then
       return C.fail(("A on the %s took nothing (%d pieces, was %d)"):format(label, count(), before))

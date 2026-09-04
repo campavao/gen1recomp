@@ -95,8 +95,11 @@ by what is actually on screen, and a trainer is engaged on the cell your
 screen has *drawn* them on rather than the cell the wire says they reached,
 so a fight never opens against a sprite that was never there. Win, lose or
 run; a lost battle only ends your match if it was your last Pokémon. **Knock someone out and their BAG hits the ground where they
-fell** — items and money, one bag with its own sprite, walk over and take
-it — and their team lands around it as Poké Balls. **Opening a ball is a gift, not a fight**: it
+fell** — items and money, one bag with its own sprite; A on it opens the bag
+itself, and each item offers USE / TAKE / CANCEL, so you take what you want
+and leave the rest on the ground for the next trainer — and their team lands
+around it as Poké Balls. Balls and bags are walkable: a pile is something you
+wade through, and A on the piece under your feet picks it up. **Opening a ball is a gift, not a fight**: it
 shows the prompt Oak's lab uses —
 
 > This contains a NIDORINO.

@@ -48,7 +48,7 @@ do
   ok(Wire.decode({ t = "start", seed = 1, spawns = {} }) == nil, "empty start is refused")
 
   -- the Safari opening (POK-21): start carries the round, beats carry the clock
-  eq(Wire.PROTOCOL, 10, "a room whose bots carry records is PROTOCOL 10")
+  eq(Wire.PROTOCOL, 11, "a room that takes loot by the item is PROTOCOL 11")
 
   -- botrec (POK-158): the record on the wire
   local br = Wire.decode(Wire.botrec(1001, {
@@ -1064,6 +1064,19 @@ do
   eq(drop.mons[1].key, "5:drop:1", "with its drop key intact")
   eq(Wire.decode(Wire.took("7:1")).key, "7:1", "took carries the key")
   ok(Wire.decode({ t = "took" }) == nil, "took without a key is refused")
+  -- part of a bag (POK-176): the item and how many, and whether the cash went
+  local part = Wire.decode(Wire.took("7:bag", "POTION", 2))
+  ok(part and part.item == "POTION" and part.n == 2 and part.cash == nil,
+     "a per-item take carries the item and the count")
+  ok(Wire.decode(Wire.took("7:bag", "money", 1, true)).cash == true,
+     "...and says when the money went with it")
+  ok(Wire.decode(Wire.took("7:1")).item == nil, "a bare key is still the whole piece")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION" }) == nil,
+     "an item without a count is refused")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION", n = 0 }) == nil,
+     "...and so is a count of nothing")
+  ok(Wire.decode({ t = "took", key = "7:bag", item = "POTION", n = 2.5 }) == nil,
+     "...or half an item")
 
   -- the table: add, claim, gone
   local fake = { world = { removeNpc = function() return true end,
@@ -1086,6 +1099,24 @@ do
      "and is findable, with its contents")
   t:take("7:bag")
   eq(t:count(), 2, "taking it leaves the balls")
+
+  -- a bag is taken by the item (POK-176): lighter, then gone
+  local u = Spills.new(fake)
+  u:add({ map = "ROUTE_1", mons = {},
+          bag = { key = "9:bag", x = 1, y = 1, name = "SAM", money = 300,
+                  items = { { id = "POTION", n = 3 }, { id = "POKE_BALL", n = 2 } } } })
+  ok(u:takeItem("9:bag", "POTION", 2) == true, "two of three POTIONs leave the bag")
+  eq(u:get("9:bag").bag.items[1].n, 1, "...and one is still in it")
+  ok(u:takeItem("9:bag", "POTION", 1) == true, "the last POTION goes")
+  eq(u:get("9:bag").bag.items[1].id, "POKE_BALL",
+     "...and the row with it, the next item moving up")
+  ok(u:takeItem("9:bag", "ELIXER", 1) == false, "an item that is not in the bag is refused")
+  ok(u:takeItem("9:bag", nil, nil, true) == true, "the cash can go on its own")
+  eq(u:get("9:bag").bag.money, 0, "...leaving none")
+  eq(u:takeItem("9:bag", "POKE_BALL", 2), "gone", "the last item empties the bag")
+  ok(u:get("9:bag") == nil and u:count() == 0, "...and an empty bag is gone from the ground")
+  ok(u:takeItem("9:bag", "POTION", 1) == false, "a bag that is gone takes nothing")
+  ok(u:takeItem("nope", "POTION", 1) == false, "and neither does a key nobody has")
 end
 
 -- ------- level scaling

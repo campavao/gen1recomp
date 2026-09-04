@@ -1211,6 +1211,7 @@ return function(mod)
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
     self.dailyLobby = nil
+    self.lootMenu = nil
   end
 
   function BR:teardown(message)
@@ -2018,7 +2019,13 @@ return function(mod)
       end
 
     elseif msg.t == "took" then
-      self.spills:take(msg.key)
+      if msg.item then
+        self.spills:takeItem(msg.key, msg.item, msg.n, msg.cash)
+      else
+        self.spills:take(msg.key)
+      end
+      -- a bag we are looking into just changed under us (POK-176)
+      self:refreshLoot(msg.key)
 
     elseif msg.t == "safari" then
       -- the Safari clock is the host's too
@@ -4836,57 +4843,142 @@ return function(mod)
     return true
   end
 
-  -- A fallen trainer's BAG (POK-25): what it holds, then take or leave.
-  -- The take is claimed for everyone like a ball's, and the contents land
-  -- in our bag the way the loot message used to put them there.
+  -- A fallen trainer's BAG (POK-25, reshaped by POK-176): A on it opens the
+  -- bag itself -- the engine's own item list, holding only what this bag
+  -- holds -- and each row offers USE / TAKE / CANCEL.  No text first: the
+  -- old flow read the contents out two lines a page, asked "Take it?",
+  -- then asked again whether to open the PACK, and a player under fog
+  -- pressure pressed through five boxes to reach one POTION.
+  --
+  -- Taking is PER ITEM on the wire (Wire.took with item and count,
+  -- PROTOCOL 11): what you leave stays on the ground for the next
+  -- trainer, and every client's copy of the bag gets lighter by the same
+  -- amount.  The money is a row of its own, TAKE only.  USE takes the
+  -- item and then runs the engine's own use -- the PACK opens on that
+  -- row with USE already chosen -- so a POTION picks its target, a TM
+  -- teaches, a stone evolves, exactly as from the START menu.
+  local MONEY_ROW = "money"
+
+  function BR:lootRows(key)
+    local game = self.game
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    local rows = {}
+    for _, it in ipairs(bag and bag.items or {}) do
+      local def = game.data.items and game.data.items[it.id]
+      rows[#rows + 1] = { value = it.id, label = (def and def.name) or it.id,
+                          right = "x" .. tostring(it.n) }
+    end
+    if bag and (bag.money or 0) > 0 then
+      rows[#rows + 1] = { value = MONEY_ROW, label = ("¥%d"):format(bag.money) }
+    end
+    return rows
+  end
+
+  -- Redraw the open loot list after the bag changed -- ours or a rival's
+  -- take -- and close it when the bag is gone.
+  function BR:refreshLoot(key)
+    local loot = self.lootMenu
+    if not (loot and loot.key == key) then return end
+    local list = loot.list
+    list.items = self:lootRows(key)
+    if #list.items == 0 then
+      self.lootMenu = nil
+      list:close()
+      return
+    end
+    list.index = math.max(1, math.min(list.index or 1, #list.items))
+  end
+
   function BR:openBag(key, ball)
     local game = self.game
-    local data = game.data
-    local bag = ball.bag
-    local who = bag.name or "Someone"
-    local lines = {}
-    for _, it in ipairs(bag.items or {}) do
-      local def = data.items and data.items[it.id]
-      lines[#lines + 1] = ("%s x%d"):format((def and def.name) or it.id, it.n)
-    end
-    if (bag.money or 0) > 0 then lines[#lines + 1] = ("¥%d"):format(bag.money) end
-    if #lines == 0 then lines[1] = "nothing" end
-    -- two lines a page, the owner's name on the first
-    local pages = { ("%s's BAG:\n%s"):format(who, lines[1]) }
-    local i = 2
-    while i <= #lines do
-      pages[#pages + 1] = lines[i] .. (lines[i + 1] and ("\n" .. lines[i + 1]) or "")
-      i = i + 2
-    end
-    local TextBox = require("src.render.TextBox")
-    game.stack:push(TextBox.new(game, table.concat(pages, "\f") .. "\fTake it?", nil, {
-      choice = function(yes)
-        if not yes then return end
-        if not self.spills:get(key) then
-          say("It's gone --\nsomeone was\nquicker.")
-          return
-        end
-        self.spills:take(key)
-        if self.relay then self.relay:broadcast(Wire.took(key)) end
-        local save = game.save
-        for _, it in ipairs(bag.items or {}) do
-          save.inventory[it.id] = math.min(99, (save.inventory[it.id] or 0) + it.n)
-        end
-        save.bagOrder = nil -- rebuilt from the inventory on the next PACK open
-        save.money = math.min(999999, (save.money or 0) + (bag.money or 0))
-        -- straight to using it (POK-73): the moment you loot is the moment
-        -- you want the POTION -- offer the PACK without the START round-trip
-        game.stack:push(TextBox.new(game,
-          ("You took %s's\nBAG!\fOpen the PACK\nnow?"):format(who), nil, {
-          choice = function(open)
-            if not open then return end
-            local BagMenu = require("src.ui.BagMenu")
-            game.stack:push(BagMenu.new(game, {}))
-          end,
-        }))
-      end,
-    }))
+    local who = ball.bag.name or "Someone"
+    local ListMenu = require("src.ui.ListMenu")
+    local list
+    list = ListMenu.new(game, (who .. "'s BAG"):sub(1, 17), self:lootRows(key), {
+      kind = "loot",
+      itemBox = true,
+      onChoose = function(row) self:lootChoose(key, row.value) end,
+    })
+    game.stack:push(list)
+    self.lootMenu = { key = key, list = list }
     return true
+  end
+
+  -- Move `id` (all of it, or the money) from the bag on the ground into
+  -- ours, tell the room, and redraw.  A bag we cannot fit refuses whole:
+  -- the item stays on the ground rather than half of it vanishing.
+  function BR:lootTake(key, id)
+    local game = self.game
+    local save = game.save
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    if not bag then
+      say("It's gone --\nsomeone was\nquicker.")
+      self:refreshLoot(key)
+      return false
+    end
+    if id == MONEY_ROW then
+      if (bag.money or 0) <= 0 then self:refreshLoot(key) return false end
+      local got = bag.money
+      save.money = math.min(999999, (save.money or 0) + got)
+      self.spills:takeItem(key, nil, nil, true)
+      if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
+      self:refreshLoot(key)
+      say(("Took ¥%d!"):format(got))
+      return true
+    end
+    local n
+    for _, it in ipairs(bag.items or {}) do
+      if it.id == id then n = it.n break end
+    end
+    if not n then self:refreshLoot(key) return false end
+    local Bag = require("src.inventory.Bag")
+    if not Bag.add(save, id, n, game.data) then
+      say("You can't carry\nany more!")
+      return false
+    end
+    self.spills:takeItem(key, id, n)
+    if self.relay then self.relay:broadcast(Wire.took(key, id, n)) end
+    self:refreshLoot(key)
+    return true
+  end
+
+  -- USE from the loot list: take it, then the PACK opens on that row with
+  -- USE already chosen, which is the engine's own use path from here on.
+  function BR:lootUse(key, id)
+    if not self:lootTake(key, id) then return false end
+    local game = self.game
+    local BagMenu = require("src.ui.BagMenu")
+    local pack = BagMenu.new(game, {})
+    local at
+    for i, row in ipairs(pack.items or {}) do
+      if row.value == id then at = i break end
+    end
+    if not at then return false end
+    pack.index = at
+    game.stack:push(pack)
+    -- the PACK's own A: the USE / TOSS box, whose first row is USE
+    if pack.onChoose then pack.onChoose(pack.items[at]) end
+    local sub = game.stack:top()
+    if sub ~= pack and sub and sub.items and sub.items[1] and sub.items[1].onSelect then
+      game.stack:pop()
+      sub.items[1].onSelect()
+    end
+    return true
+  end
+
+  function BR:lootChoose(key, id)
+    local game = self.game
+    local Menu = require("src.ui.Menu")
+    local rows = {}
+    if id ~= MONEY_ROW then
+      rows[#rows + 1] = { label = "USE", onSelect = function() self:lootUse(key, id) end }
+    end
+    rows[#rows + 1] = { label = "TAKE", onSelect = function() self:lootTake(key, id) end }
+    rows[#rows + 1] = { label = "CANCEL", onSelect = function() end }
+    -- the PACK's own USE / TOSS box geometry (BagMenu)
+    game.stack:push(Menu.new(game, rows, { tx = 13, ty = 10, tw = 7, th = 2 * #rows + 1 }))
   end
 
   -- Take a claimed spill ball: build the mon at 1 HP exactly as it fell,

@@ -211,6 +211,33 @@ function Spills:take(key)
   self.balls[key] = nil
 end
 
+-- Part of a bag is gone (POK-176): `n` of `item` left it, and the money
+-- too when `cash`.  Every client applies the same message, so the bag on
+-- the ground reads the same everywhere; the piece itself goes only when
+-- nothing is left in it.  Returns "gone" then, true for a lighter bag,
+-- false when there was no such bag or no such item in it.
+function Spills:takeItem(key, item, n, cash)
+  local ball = self.balls[key]
+  local bag = ball and ball.bag
+  if not bag then return false end
+  local hit = false
+  for i, it in ipairs(bag.items or {}) do
+    if it.id == item then
+      hit = true
+      it.n = it.n - (n or it.n)
+      if it.n <= 0 then table.remove(bag.items, i) end
+      break
+    end
+  end
+  if cash then bag.money = 0 end
+  if not hit and not cash then return false end
+  if #(bag.items or {}) == 0 and (bag.money or 0) <= 0 then
+    self:take(key)
+    return "gone"
+  end
+  return true
+end
+
 function Spills:despawnAll()
   for key in pairs(self.spawned) do self:despawn(key) end
   self.spawned = {}
