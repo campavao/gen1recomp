@@ -3905,6 +3905,40 @@ do
   ok(r.serverInfo.daily.at ~= nil, "with a receipt clock for the countdown")
 end
 
+-- POK-180: the daily host's re-arm never pushes the start to tomorrow.
+-- The arm lands after the true hour by up to a second plus half an RTT,
+-- and a poll answered in that sliver reports next day's seconds.  The
+-- night of 2026-09-04 the lone host sat through 00:00Z on exactly that.
+do
+  local Daily = require("mods.battle_royale.lib.daily")
+  -- the first answer arms, whatever it says
+  local held, refused = Daily.rearm(nil, 1000 + 510)
+  eq(held, 1510, "the first answer arms the deadline")
+  ok(refused == false, "...and is not a refusal")
+  -- honest re-derivations drift by truncation and RTT: both ways pass
+  held, refused = Daily.rearm(1510, 1510.8)
+  eq(held, 1510.8, "a re-derivation a fraction later is taken")
+  held, refused = Daily.rearm(1510.8, 1509.9)
+  eq(held, 1509.9, "...and one a fraction earlier")
+  ok(refused == false, "neither is a refusal")
+  -- the grace bump then the true clock: earlier is always allowed
+  held = Daily.rearm(1540, 1510)
+  eq(held, 1510, "the true hour reclaims a deadline the grace pushed out")
+  -- THE RACE: armed for 0.9s from now, the answer says tomorrow
+  local now = 1509.1
+  held, refused = Daily.rearm(1510, now + 86400)
+  eq(held, 1510, "an answer that rolled over to tomorrow leaves the arm alone")
+  ok(refused == true, "...and says so, for the log")
+  -- the same shape at the arm boundary: a jump past the slack is a
+  -- refusal, one inside it is a correction
+  held, refused = Daily.rearm(1510, 1510 + Daily.SLACK)
+  ok(refused == false, "later by exactly the slack is still a correction")
+  held, refused = Daily.rearm(1510, 1510 + Daily.SLACK + 0.001)
+  ok(refused == true and held == 1510, "a hair past the slack is the hour gone by")
+  ok(Daily.SLACK >= 2 and Daily.SLACK < 60,
+     "the slack covers a second of truncation and RTT jitter, not a minute")
+end
+
 -- POK-160 item 3: the move layer plays the turn a person would.  It
 -- rides the engine's own additive scoring (base 10, minimum wins), so
 -- these pins are exact scores, not tendencies.

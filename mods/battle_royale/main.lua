@@ -724,7 +724,7 @@ return function(mod)
     relay:on("info", function(_, info)
       if BR.dailyLobby and relay:isHost() and BR.phase == "lobby"
          and info and info.daily then
-        BR.autoStartAt = love.timer.getTime() + info.daily.secs
+        BR:armDaily(info.daily.secs)
       end
     end)
     relay:on("closed", function(reason)
@@ -847,6 +847,27 @@ return function(mod)
     self.dailyLobby = true
     self.fillTo = DAILY_FILL
     return true
+  end
+
+  -- Arm the daily start from one info answer (POK-180).  The deadline
+  -- only ever moves earlier, or later by the jitter of an honest answer:
+  -- an answer that has already rolled over to tomorrow arrived AFTER the
+  -- hour and must not un-arm the start it is a fraction of a second late
+  -- for.  Daily.rearm is the rule; this is the wiring and the log line.
+  function BR:armDaily(secs)
+    -- required here, like Skins: the outer function is at LuaJIT's
+    -- sixty-upvalue cap, and one more top-level local fails the load
+    local Daily = require("mods.battle_royale.lib.daily")
+    local at = love.timer.getTime() + secs
+    local held, refused = Daily.rearm(self.autoStartAt, at)
+    self.autoStartAt = held
+    -- one line per streak: the answers keep coming until the tick fires
+    if refused and not self.dailyRefused then
+      log:say("daily: the hour is here; the start stands (server says %ds)",
+              secs)
+    end
+    self.dailyRefused = refused or nil
+    return refused
   end
 
   -- Seconds until the daily hour, from the last info answer the server
@@ -7531,6 +7552,16 @@ return function(mod)
   -- the six names BR actually uses.
   local PHASES = { off = true, lobby = true, safari = true,
                    drop = true, match = true, over = true }
+  -- A poll answer the driver writes itself (POK-180): the race is a
+  -- fraction of a second wide, so a driver reproduces it by handing the
+  -- info handler a "tomorrow" answer while the real deadline is seconds
+  -- out.  Goes through the relay's own event so the wiring is what runs.
+  mod.exports.debugDailyInfo = function(secs)
+    local relay = BR.relay
+    if not (relay and relay._fire) then return false end
+    relay:_fire("info", relay, { daily = { secs = secs, at = love.timer.getTime() } })
+    return true
+  end
   mod.exports.debugPhase = function(p)
     if not PHASES[p] then return nil, "not a phase" end
     BR.phase = p

@@ -1028,6 +1028,32 @@ do
   end
 end
 
+-- ------- the daily host's clock survives the hour (POK-180), read off
+-- the source: the info handler goes through the rule, not straight to
+-- the field, and a driver can hand it a late answer.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the daily re-arm scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local info = src:match('relay:on%("info", function%(_, info%).-\n    end%)\n')
+    T.check(info ~= nil, "found the info handler")
+    T.check(info and info:find("BR:armDaily(info.daily.secs)", 1, true) ~= nil,
+            "the info handler arms through BR:armDaily")
+    T.check(info and info:find("BR.autoStartAt = ", 1, true) == nil,
+            "...and never writes the deadline itself")
+    local arm = src:match("function BR:armDaily%(.-\n  end\n")
+    T.check(arm ~= nil, "found BR:armDaily")
+    T.check(arm and arm:find("Daily.rearm(self.autoStartAt, at)", 1, true) ~= nil,
+            "armDaily is Daily.rearm over the held deadline")
+    T.check(src:find("mod.exports.debugDailyInfo = function(secs)", 1, true) ~= nil,
+            "a driver can hand the handler a late answer")
+  end
+end
+
 -- ------- text never parks a match (POK-169/170) and a bump is a challenge
 -- (POK-165), read off the source
 
