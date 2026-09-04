@@ -1328,6 +1328,39 @@ do
   eq(#ch:poll(), 0, "nothing is heard through a closed channel")
 end
 
+-- ------- the stone counter (POK-178)
+
+do
+  local Shops = require("mods.battle_royale.lib.shops")
+  local rom = { "POKE_DOLL", "FIRE_STONE", "THUNDER_STONE", "WATER_STONE", "LEAF_STONE" }
+  local stock = Shops.stock("CeladonMart4FClerkText", rom)
+  ok(stock ~= nil, "the 4F clerk is the stone counter")
+  eq(table.concat(stock, ","), "POKE_DOLL,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE,MOON_STONE",
+     "the ROM's list in its order, then the stone it lacked")
+  ok(Shops.stock("ViridianMartClerkText", { "POKE_BALL", "POTION" }) == nil,
+     "every other mart is left alone")
+  ok(Shops.stock(nil, rom) == nil, "no label, no counter")
+  local twice = Shops.stock("CeladonMart4FClerkText", Shops.stock("CeladonMart4FClerkText", rom))
+  eq(#twice, 6, "extending an already extended list adds nothing")
+  local bare = Shops.stock("CeladonMart4FClerkText", {})
+  eq(table.concat(bare, ","), "MOON_STONE,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE",
+     "a build whose counter sells nothing still gets all five")
+
+  -- the MOON STONE gets a price for the counter, and gives it back
+  local data = { items = { MOON_STONE = { price = 0 }, FIRE_STONE = { price = 2100 } } }
+  local was = Shops.priceMoonStone(data)
+  eq(was, 0, "the ROM price is remembered")
+  eq(data.items.MOON_STONE.price, Shops.MOON_STONE_PRICE, "...and replaced with the stones' price")
+  eq(data.items.FIRE_STONE.price, 2100, "the other stones are not touched")
+  Shops.restoreMoonStone(data, was)
+  eq(data.items.MOON_STONE.price, 0, "restore puts the ROM price back")
+  local priced = { items = { MOON_STONE = { price = 50 } } }
+  Shops.priceMoonStone(priced)
+  eq(priced.items.MOON_STONE.price, 50, "a build that already prices it keeps its price")
+  ok(Shops.priceMoonStone(nil) == nil and Shops.priceMoonStone({}) == nil,
+     "no items, nothing to price")
+end
+
 -- ------- a spill is walked through, not walled by (POK-175)
 --
 -- Thirty trainers' loot used to be thirty solid objects, and a player who

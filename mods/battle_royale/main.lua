@@ -1146,6 +1146,12 @@ return function(mod)
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
     end
+    -- ...and the MOON STONE its ROM price (POK-178), for the same reason
+    if self.moonStonePrice ~= nil then
+      require("mods.battle_royale.lib.shops").restoreMoonStone(
+        self.game and self.game.data, self.moonStonePrice)
+      self.moonStonePrice = nil
+    end
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
@@ -6786,6 +6792,33 @@ return function(mod)
       if entry and entry.nurse and BR:inRound() and BR:nurseClosed() then
         say("Sorry -- we're\nclosed! The fog\nis coming!")
         return
+      end
+      -- The stone counter (POK-178): Celadon's 4F clerk sells every
+      -- evolution stone for the length of a match, MOON STONE included.
+      -- The engine opens a mart from this same entry (OverworldController
+      -- "marts / nurses / PCs via TX_SCRIPT markers"): greeting, then the
+      -- ShopMenu screen over the mart's list.  Same two steps here, over
+      -- the extended list -- and no next(), which is how every other
+      -- answer in this hook keeps the vanilla path from running too.
+      -- Required in the hook: the outer function is at LuaJIT's
+      -- sixty-upvalue cap.
+      if entry and entry.mart then
+        local Shops = require("mods.battle_royale.lib.shops")
+        local stock = Shops.stock(entry.label, entry.mart)
+        if stock then
+          if BR.moonStonePrice == nil then
+            BR.moonStonePrice = Shops.priceMoonStone(data)
+          end
+          npc:facePlayer(ow.player)
+          local TextBox = require("src.render.TextBox")
+          local Screens = require("src.ui.Screens")
+          local romText = require("src.core.RomText")
+          local game = BR.game
+          game.stack:push(TextBox.new(game,
+            romText(data, "_PokemartGreetingText", "Hi there!\nMay I help you?"),
+            function() Screens.push(game, "ShopMenu", stock) end))
+          return
+        end
       end
     end
     -- the gate worker sells no admission during a round (POK-40): the

@@ -1028,6 +1028,34 @@ do
   end
 end
 
+-- ------- the stone counter (POK-178), read off the source: the talk
+-- hook answers the 4F clerk with the extended list, only in a session,
+-- and the MOON STONE's price goes back at resetMatch.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the stone-counter scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local talk = src:match('mod%.hooks:wrap%("world%.talk".-\n  end%)\n')
+    T.check(talk ~= nil, "found the talk hook")
+    T.check(talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true) ~= nil,
+            "a mart entry is asked whether it is the stone counter")
+    T.check(talk and talk:find('Screens.push(game, "ShopMenu", stock)', 1, true) ~= nil,
+            "...and the counter opens the engine's own shop over the extended list")
+    -- the counter sits under the session guard the cable club and nurse share
+    local guard = talk and talk:find("if BR:inSession() and def and def.text and data and data.textEntry", 1, true)
+    local counter = talk and talk:find("Shops.stock(entry.label, entry.mart)", 1, true)
+    T.check(guard and counter and guard < counter, "...only while the match world exists")
+    local reset = src:match("function BR:resetMatch%(.-\n  end\n")
+    T.check(reset and reset:find("restoreMoonStone(", 1, true) ~= nil
+            and reset:find("self.moonStonePrice = nil", 1, true) ~= nil,
+            "resetMatch gives the MOON STONE its ROM price back")
+  end
+end
+
 -- ------- A on a bag opens the bag (POK-176), read off the source: no
 -- text box before the list, USE / TAKE / CANCEL per row, and a take that
 -- travels by the item so the rest stays on the ground.
