@@ -1028,6 +1028,43 @@ do
   end
 end
 
+-- ------- pickups are walkable, and A on the tile takes them (POK-175),
+-- read off the source: the placement rule refuses a cell with a ball on
+-- it (passable balls would stack), the trade-drop path lands by the same
+-- rule as a fall (the doorway hole POK-94 left), and an A press that
+-- resolves to nothing asks the cell under the player.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the walkable-pickup scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local free = src:match("local function spillCellFree%(.-\n  end\n")
+    T.check(free ~= nil, "found spillCellFree")
+    T.check(free and free:find("BR.spills:keyAt(mapId, x, y) then return false", 1, true) ~= nil,
+            "a cell with a ball on it is not free (no stacking)")
+    T.check(free and free:find("Spawn.isWarp(data.maps, mapId, x, y) then return false", 1, true) ~= nil,
+            "...and a doorway still is not")
+    local drop = src:match("function BR:spillDropped%(.-\n  end\n")
+    T.check(drop ~= nil, "found BR:spillDropped")
+    T.check(drop and drop:find("return spillCellFree(data, here.mapId, x, y)", 1, true) ~= nil
+            and drop:find("Spawn.walkable(", 1, true) == nil,
+            "a traded-away mon lands by the fall's own cell rule, not bare walkability")
+    local at = src:match('mod%.events:on%("world%.interacted", function%(ev%).-\n  end%)\n')
+    T.check(at ~= nil, "found the A-on-the-tile listener")
+    T.check(at and at:find('ev.kind == "none"', 1, true) ~= nil,
+            "it answers only a press that resolved to nothing (facing wins)")
+    T.check(at and at:find("BR.spills:keyAt(here.mapId, here.x, here.y)", 1, true) ~= nil
+            and at:find("BR:openSpill(key)", 1, true) ~= nil,
+            "...and opens the ball under the player's feet")
+    T.check(at and at:find('BR.status == "alive"', 1, true) ~= nil
+            and at:find("not BR.battle and not BR.botFight", 1, true) ~= nil,
+            "...under the same guards as the faced-ball path")
+  end
+end
+
 -- ------- the daily host's clock survives the hour (POK-180), read off
 -- the source: the info handler goes through the rule, not straight to
 -- the field, and a driver can hand it a late answer.

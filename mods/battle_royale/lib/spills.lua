@@ -20,10 +20,20 @@
 local Spills = {}
 Spills.__index = Spills
 
--- A ball is a runtime object with the engine's own item-ball sprite, solid
--- and still, exactly like the item balls Kanto is littered with.  You walk
--- up and press A, which is the interaction every Gen 1 player already knows.
+-- A ball is a runtime object with the engine's own item-ball sprite, still,
+-- exactly like the item balls Kanto is littered with.  You press A facing
+-- it, which is the interaction every Gen 1 player already knows -- or
+-- standing ON it (POK-175): a pile of thirty trainers' loot used to be a
+-- wall, and a player who walked into a spill found every way out blocked
+-- by the very things they came for.  The balls are passable now, the way
+-- the ghosts are, so a spill is something you wade through and pick over.
 local BALL_SPRITE = "SPRITE_POKE_BALL"
+
+-- Drawn a pixel high.  The overworld sorts its sprites by py and breaks a
+-- tie however the sort falls, so a ball on the player's own cell could
+-- flicker over their sprite; one pixel up puts it under their feet every
+-- frame, and nobody can see a pixel.
+Spills.UNDERFOOT = 1
 
 -- The BAG (POK-25) is the mod's own 16x16 sheet, drawn in the item ball's
 -- four shades and registered by main.lua; until that has happened -- or if
@@ -241,6 +251,15 @@ function Spills:sync(mapId)
       end)
       if ok and npcId then
         self.spawned[key] = npcId
+        -- walkable (POK-175), and under the feet of whoever stands on it
+        local handle = self.mod.world.npc
+          and (self.mod.world:npc(mapId, npcId)) or nil
+        if handle then
+          if handle.setPassable then handle:setPassable(true) end
+          if handle.npc and handle.npc.py then
+            handle.npc.py = handle.npc.py - Spills.UNDERFOOT
+          end
+        end
       else
         self.failed = self.failed or {}
         if not self.failed[key] then

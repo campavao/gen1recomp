@@ -4742,17 +4742,22 @@ return function(mod)
   -- computed by whoever fell and broadcast (D8), so this one client's view
   -- is authoritative.
   --
-  -- The doorway rule is not about looking untidy.  A ball is a solid
-  -- runtime object and a warp only fires when you STEP ON it, so a ball on
-  -- a mart's door shuts that building for the rest of the match -- for
-  -- everyone, since every client lays the spill out the same way.  A
-  -- doorway is walkable by design, which is exactly why walkability alone
-  -- never caught it.
+  -- The doorway rule is not about looking untidy.  A warp fires when you
+  -- STEP ON it, so a ball on a mart's door can never be stood on to be
+  -- picked up -- and while balls were solid (before POK-175) it shut that
+  -- building for the rest of the match, for everyone, since every client
+  -- lays the spill out the same way.  A doorway is walkable by design,
+  -- which is exactly why walkability alone never caught it.
+  --
+  -- Nor on another ball (POK-175).  Solid balls kept each other apart
+  -- through the occupancy check; passable ones would stack, and a ball
+  -- under a ball is one nobody can see until the top one goes.
   local function spillCellFree(data, mapId, x, y)
     if not Spawn.walkable(data.maps, data.tilesets, mapId, x, y) then
       return false
     end
     if Spawn.isWarp(data.maps, mapId, x, y) then return false end
+    if BR.spills and BR.spills:keyAt(mapId, x, y) then return false end
     local ow = mod.world:overworld()
     if ow and ow.map and ow.map.id == mapId and ow.npcs then
       local Collision = require("src.world.Collision")
@@ -4917,8 +4922,11 @@ return function(mod)
     local here = game and mod.world:current()
     if not (game and here and here.mapId and mon and mon.species) then return end
     local data = game.data
+    -- the same cell rule as a fall's ring (POK-175): this path asked for
+    -- bare walkability, which is how a traded-away mon still landed on a
+    -- doorway after POK-94 closed every other road there
     local cells = Spills.placeAround(here.x, here.y, 1, function(x, y)
-      return Spawn.walkable(data.maps, data.tilesets, here.mapId, x, y)
+      return spillCellFree(data, here.mapId, x, y)
     end)
     local cell = cells[1] or { x = here.x, y = here.y }
     self.dropSeq = (self.dropSeq or 0) + 1
@@ -6740,6 +6748,22 @@ return function(mod)
     -- talking counts as engaging if they are alive and we are: the same
     -- fight a bump starts (POK-165), so both live in challengeTrainer
     BR:challengeTrainer(id, "walking up")
+  end)
+
+  -- A on the tile you stand on (POK-175).  The engine's A press only
+  -- looks at the FACED cell, and a passable ball is one you can stand on;
+  -- when the press resolves to nothing -- a wall, grass, open ground --
+  -- the ball under your feet is what you meant.  Anything the faced cell
+  -- answers (an NPC, a sign, a ball ahead) keeps answering: facing wins,
+  -- as it does everywhere else in Kanto.
+  mod.events:on("world.interacted", function(ev)
+    if not (ev and ev.kind == "none") then return end
+    if not (BR:inRound() and BR.status == "alive"
+            and not BR.battle and not BR.botFight) then return end
+    local here = mod.world:current()
+    if not (here and here.mapId == ev.mapId) then return end
+    local key = BR.spills:keyAt(here.mapId, here.x, here.y)
+    if key then BR:openSpill(key) end
   end)
 
   -- ------- the fog, drawn on the TOWN MAP

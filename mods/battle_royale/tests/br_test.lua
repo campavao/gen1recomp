@@ -1297,6 +1297,52 @@ do
   eq(#ch:poll(), 0, "nothing is heard through a closed channel")
 end
 
+-- ------- a spill is walked through, not walled by (POK-175)
+--
+-- Thirty trainers' loot used to be thirty solid objects, and a player who
+-- waded into a pile found every way out blocked by the very things they
+-- came for.  The spawn marks each ball passable through the same handle
+-- the ghosts use, and draws it a pixel high so the y-sort puts it under
+-- the feet of whoever stands on it rather than flickering over them.
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  local calls, npcs = {}, {}
+  local fake = { log = { warn = function() end }, world = {} }
+  function fake.world:spawnNpc(mapId, def)
+    local npc = { py = def.y * 16, cellX = def.x, cellY = def.y }
+    npcs["n" .. def.name] = npc
+    return "n" .. def.name
+  end
+  function fake.world:removeNpc() return true end
+  function fake.world:npc(mapId, id)
+    local npc = npcs[id]
+    if not npc then return nil, "no such object" end
+    return { npc = npc, setPassable = function(_, v) calls[#calls + 1] = { id = id, v = v } end }
+  end
+  local s = Spills.new(fake)
+  s:add({ map = "M", mons = { { key = "1:1", x = 4, y = 6, species = "RATTATA", level = 5 } },
+          bag = { key = "1:bag", x = 4, y = 5, items = {}, money = 100, name = "SAM" } })
+  s:sync("M")
+  eq(#calls, 2, "every spawned piece is marked passable (ball and bag)")
+  ok(calls[1].v == true and calls[2].v == true, "...passable, not solid")
+  local ball = npcs["nBR_SPILL_1:1"]
+  eq(ball and ball.py, 6 * 16 - Spills.UNDERFOOT, "a ball is drawn a pixel high, under the player's feet")
+  eq(Spills.UNDERFOOT, 1, "one pixel: enough to win the y-sort, too small to see")
+  -- a world without the handle API still places the ball, only solid
+  local bare = { log = { warn = function() end },
+                 world = { spawnNpc = function() return "x" end,
+                           removeNpc = function() return true end } }
+  local b = Spills.new(bare)
+  b:add({ map = "M", mons = { { key = "2:1", x = 1, y = 1, species = "PIDGEY", level = 5 } } })
+  b:sync("M")
+  ok(b.spawned["2:1"] == "x", "an engine without npc handles still gets its ball")
+  -- the pile does not stack: keyAt is what the placement rule asks
+  ok(s:keyAt("M", 4, 6) == "1:1" and s:keyAt("M", 4, 5) == "1:bag",
+     "a placed piece answers keyAt on its cell")
+  ok(s:keyAt("M", 5, 6) == nil, "...and a free cell does not")
+end
+
 -- ------- the bag obeys the doorway rule too (POK-94)
 --
 -- The balls go through placeAround and its predicate; the BAG lands on the
