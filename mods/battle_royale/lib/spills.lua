@@ -154,6 +154,24 @@ end
 
 function Spills:get(key) return self.balls[key] end
 
+-- Whose ball this was (POK-179): the key's first segment is the owner
+-- Spills.build was given -- a relay id, a bot id (Bots.ID_BASE and up),
+-- "npc" for Kanto's own trainers, 999 for a driver's debugSpill.  A drop
+-- key ("7:drop:2") belongs to 7 the same way.
+function Spills.ownerOf(key)
+  if type(key) ~= "string" then return nil end
+  return key:match("^([^:]+):")
+end
+
+-- Did WE drop this?  A trade evolution rides a change of hands, and
+-- releasing your own KADABRA to make room and picking it straight back
+-- up is not one.  Compared as text, because relay ids are numbers and
+-- keys are strings.
+function Spills.isOwn(key, myId)
+  local owner = Spills.ownerOf(key)
+  return owner ~= nil and myId ~= nil and owner == tostring(myId)
+end
+
 -- The ball on this very cell, if any (POK-75): the talk path asks by the
 -- FACED CELL when the engine's pick answered an NPC standing on a ball.
 function Spills:keyAt(mapId, x, y)

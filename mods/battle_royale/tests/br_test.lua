@@ -1328,6 +1328,25 @@ do
   eq(#ch:poll(), 0, "nothing is heard through a closed channel")
 end
 
+-- ------- whose ball was it (POK-179)
+
+do
+  local Spills = require("mods.battle_royale.lib.spills")
+  eq(Spills.ownerOf("7:1"), "7", "a player's ball names the player")
+  eq(Spills.ownerOf("7:bag"), "7", "...and so does their bag")
+  eq(Spills.ownerOf("7:drop:2"), "7", "...and a mon they released")
+  eq(Spills.ownerOf("1003:2"), "1003", "a bot's ball names the bot")
+  eq(Spills.ownerOf("npc:PEWTER_GYM:BROCK:1"), "npc", "a Kanto trainer's names npc")
+  ok(Spills.ownerOf(nil) == nil and Spills.ownerOf("") == nil and Spills.ownerOf("nocolon") == nil,
+     "no key, no owner")
+  ok(Spills.isOwn("7:1", 7), "our own ball is our own (a number id against a string key)")
+  ok(Spills.isOwn("7:drop:2", 7), "...and so is the mon we released")
+  ok(not Spills.isOwn("7:1", 8), "somebody else's is not")
+  ok(not Spills.isOwn("1003:1", 3), "a bot's is not (1003 is not 3)")
+  ok(not Spills.isOwn("npc:M:X:1", 1), "a Kanto trainer's is not")
+  ok(not Spills.isOwn("7:1", nil), "with no id of our own nothing is ours")
+end
+
 -- ------- the stone counter (POK-178)
 
 do

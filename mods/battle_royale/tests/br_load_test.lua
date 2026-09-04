@@ -1028,6 +1028,31 @@ do
   end
 end
 
+-- ------- a ball that changed hands is a trade (POK-179), read off the
+-- source: claimSpill asks the engine's own trade check, only for a ball
+-- somebody else dropped, and plays the engine's own movie.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the trade-evolution scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local claim = src:match("function BR:claimSpill%(.-\n  end\n")
+    T.check(claim ~= nil, "found BR:claimSpill")
+    T.check(claim and claim:find("if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then", 1, true) ~= nil,
+            "a trade evolution is asked only for a ball somebody else dropped")
+    T.check(claim and claim:find('local trade = { kind = "trade" }', 1, true) ~= nil,
+            "...through the engine's own TRADE method")
+    T.check(claim and claim:find("Evolution.request(game, mon, trade)", 1, true) ~= nil,
+            "...and plays the engine's own evolution movie")
+    T.check(claim and claim:find("Party.add(save.party, mon)", 1, true) ~= nil
+            and claim:find("Party.add(", 1, true) < claim:find("Evolution.pendingFor(", 1, true),
+            "the mon joins the party before it evolves")
+  end
+end
+
 -- ------- the stone counter (POK-178), read off the source: the talk
 -- hook answers the 4F clerk with the extended list, only in a session,
 -- and the MOON STONE's price goes back at resetMatch.

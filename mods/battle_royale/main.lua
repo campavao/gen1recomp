@@ -5011,6 +5011,21 @@ return function(mod)
       dex.seen[ball.species] = true
       dex.owned[ball.species] = true
     end
+    -- A ball that changed hands is a trade (POK-179): KADABRA, MACHOKE,
+    -- GRAVELER and HAUNTER evolve on pickup, the engine's own trade
+    -- movie and all, when somebody ELSE dropped them -- a bot or a Kanto
+    -- trainer counts.  Your own drop picked back up is not a trade.  The
+    -- joined line first, then the movie, so the beat reads in order.
+    local Evolution = require("src.pokemon.Evolution")
+    local trade = { kind = "trade" }
+    if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then
+      local TextBox = require("src.render.TextBox")
+      log:say("TRADE: %s out of %s's ball evolves on pickup",
+              tostring(name), tostring(Spills.ownerOf(key)))
+      game.stack:push(TextBox.new(game, ("%s joined\nyour party!"):format(name),
+        function() Evolution.request(game, mon, trade) end))
+      return
+    end
     say(("%s joined\nyour party!"):format(name))
   end
 
@@ -7593,15 +7608,19 @@ return function(mod)
   mod.exports.peeked = function() return BR.peeked end
   -- a driver's way to put a bag on the ground here and now: a bag-only
   -- spill two cells from where we stand (no ball to get in the way)
-  mod.exports.debugSpill = function(dx, dy, withMon)
+  mod.exports.debugSpill = function(dx, dy, withMon, owner)
     local here = mod.world:current()
     local data = BR.game and BR.game.data
     if not (here and data) then return nil, "no world" end
     local x, y = here.x + (dx or 0), here.y + (dy or 2)
     -- withMon: one ball too, so a driver can watch placeAround dodge an
-    -- occupied cell (POK-75); default stays the bag-only spill
-    local party = withMon and { { species = "RATTATA", level = 5, hp = 10 } } or {}
-    local spill = Spills.build(999, here.mapId, x, y, party,
+    -- occupied cell (POK-75); default stays the bag-only spill.  A string
+    -- names the species (POK-179's KADABRA); `owner` "me" keys the spill
+    -- as our own drop, anything else as somebody else's (999).
+    local species = type(withMon) == "string" and withMon or "RATTATA"
+    local party = withMon and { { species = species, level = 5, hp = 10 } } or {}
+    local who = (owner == "me") and (BR.myId or 0) or (owner or 999)
+    local spill = Spills.build(who, here.mapId, x, y, party,
       function(cx, cy) return spillCellFree(data, here.mapId, cx, cy) end,
       { items = { { id = "POTION", n = 1 } }, money = 500, name = "DEBUG" },
       function(cx, cy) return Spawn.isWarp(data.maps, here.mapId, cx, cy) end)
@@ -7915,6 +7934,7 @@ return function(mod)
   end
   -- this match's zone and its theme (POK-118 / POK-177), for drivers
   mod.exports.safariPool = function() return BR.safariPool, BR.safariTheme end
+  mod.exports.myId = function() return BR.myId end
   mod.exports.botRecord = function(id) return BR:botRecord(id) end
   mod.exports.dailyPlay = function() return BR:dailyPlay() end
   mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
