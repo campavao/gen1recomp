@@ -335,6 +335,52 @@ Sizing and rate need a decision before this is safe on the relay.
 
 ## P4 — quality of life
 
+### BR-29 · The last two bots should loot, heal and hunt each other — OPEN
+
+**Seen 2026-09-05 (the user, spectating a match to its end):** two bots left,
+same city, "idly walking back and forth". One had two POKéMON and stood a
+few cells from two dropped POKéMON and a bag; it picked up none of it. The
+other had five. Neither went looking for the other. A player at two-left
+loots what is at their feet, heals, reads the map and closes in.
+
+What exists already, and where it likely stalls:
+
+- **Same-map hunting** (`tickBotRoam`, main.lua ~3358): prey is only
+  considered when `not Bots.wantsHeal(record)`. `wantsHeal` is true for
+  ANY fainted mon (`hpFrac <= 0`) and a potion cannot revive one, so a bot
+  with a dead slot and no reachable Centre is "hurt" for the rest of the
+  match and never hunts. It also has a `p.rng() < 0.2` wobble per beat.
+- **The Centre** (`pickBotGoal`): `heal` is offered only while the town's
+  Centre is not under fog. Once the fog has the town, the bot sips a potion
+  per goal pick instead -- which never clears a faint, see above.
+- **Loot** (`Bots.chooseGoal`): `heal` outranks `item`, so a "hurt" bot on
+  a map with a live Centre walks to the door before it walks to the bag --
+  and after healing, the seam clock may take it out of town before it
+  circles back. When the Centre is fogged, items should be next; if the bot
+  stood by the loot without taking it, check `spills:cellsOn(map, full)`
+  (the second argument drops mons when the record is at cap) and whether a
+  dwell/`FIGHT_COOLDOWN` (12 s) or the breather was holding it.
+- **Cross-map hunting** (POK-95, `huntDistOf`) only ranks SEAMS by the
+  nearest live trainer's map; on the same map it does nothing, and the
+  roam clock at <= 3 alive is still 8 s of ambling between goal picks.
+
+What "like a player" would mean here, in order:
+
+1. At <= 3 alive (or once the ring is small), a bot on the same map as
+   another trainer walks AT them -- `huntFor` set every beat, no wobble,
+   healing or not (a wounded player at two-left still fights; it is that
+   or the fog).
+2. Loot at your feet first: an `item` within a few cells outranks `heal`.
+3. `wantsHeal` should not be a permanent state: a fainted slot with no
+   Centre in reach stops counting once the bot has nothing to do about it.
+4. The Centre stays worth a walk if it is one town over and the ring
+   allows it; today `heal` is only ever the door on THIS map.
+
+Evidence to gather first: a spectator's run with the deep log on, reading
+the two bots' goal picks (`debugFightProbe` shows `goal`, `hunting`,
+`dwell`, `sinceFight`) at the moment they are seen ambling.
+
+
 ### BR-27 · One lobby screen, not a menu round-trip — DONE (POK-32)
 
 **Resolved 2026-08-23:** `lib/menu.lua` is now a Menu whose rows are
