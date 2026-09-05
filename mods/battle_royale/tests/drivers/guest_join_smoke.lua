@@ -108,6 +108,10 @@ return function(game)
     if phase ~= "lobby" then
       U.log("GUEST: the room moved to " .. tostring(phase))
       shot("moved")
+      -- a few seconds in, then leave: the host's match must go on with
+      -- the bots still standing (the bug the first run found)
+      U.wait(300)
+      U.log(("GUEST: leaving the %s with %d alive"):format(tostring(E.phase()), E.aliveCount()))
       break
     end
     local now = love.timer.getTime()
