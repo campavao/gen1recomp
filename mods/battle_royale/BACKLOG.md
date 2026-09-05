@@ -397,6 +397,52 @@ Evidence to gather first: a spectator's run with the deep log on, reading
 the two bots' goal picks (`debugFightProbe` shows `goal`, `hunting`,
 `dwell`, `sinceFight`) at the moment they are seen ambling.
 
+### BR-30 · A bot plays the way a player plays — the decision list — OPEN
+
+**The user's own flow, 2026-09-05, written while spectating.** This is the
+spec the bot goal picker should be measured against, in priority order.
+The right-hand notes say what a bot does TODAY (`Bots.chooseGoal`,
+`pickBotGoal`, `tickBotRoam`, `huntDistOf`).
+
+| a player... | a bot today |
+| -- | -- |
+| If I'm not at the centre of the ring, I'm trying to get there. | Seams are ranked toward the eye (`Bots.homeward`, POK-42); on-map errands are grass/loot/stroll, not "toward the eye". |
+| If I'm not at a full party, I'm trying to pick up or catch POKéMON. | Yes: loot on the map is an errand, grass dwells roll a catch, the team builds to six (POK-158). |
+| If I don't have full type coverage, I swap POKéMON out for better coverage. | **Missing.** A bot keeps what it catches; no coverage read of the team. |
+| If there is a bag on the ground, I'm likely going to pick up its contents. | Bags are an errand (`spills:cellsOn`), but heal outranks them, and a bot never takes a bag while it is "hurt" on a map with a Centre. |
+| If one of mine needs healing and I see a trainer, I heal up with a potion. | Half of it: `quaff` runs at a goal pick when no Centre serves, not when prey appears. A hurt bot stands DOWN from prey instead. |
+| If I see a trainer and my party is at full health, I battle them. | Yes on the same unfogged map (the stalk, POK-153), with a 20 % per-beat wobble. |
+| If I see a trainer and my party is not at full health, I heal and then battle. | **Missing.** Hurt means no stalk at all (`wantsHeal` gate). |
+| If I see a trainer, I'm hurt and I cannot heal, I run to a town with a Centre. | Half: the Centre errand exists only for THIS map's Centre while unfogged; nothing walks a bot a route over to one. |
+| If one of mine has fainted and I have no REVIVE, I go to a Centre. | Same-map Centre only, as above. |
+| If one of mine can learn an HM, I teach it. | Partly: SURF is read as a team capability (POK-158 M4); no CUT/FLY, nothing taught deliberately. |
+| If one of mine can learn a TM, I teach it. | Partly: a looted TM is taught (`Bots.tmMove`, POK-62). |
+| If I'm in the fog, I get out as fast as I can. | Yes: the fog outranks every errand (`kind = "seam", why = "ring"`). |
+| If I have FLY, I use it to reach the ring's centre. | **Missing.** Bots walk. |
+| If I have SURF and it brings me closer to the centre or out of the fog, I use it. | Partly: the hunt path may cross water with SURF on the team; the seam ranking does not. |
+| If I have CUT and it brings me closer or out of the fog, I use it. | **Missing.** |
+
+And the two rules over all of it: **build the team on the way to the
+centre**, and **fight what you see unless the odds are bad, in which case
+heal first**; with fewer than four left and a good team, **hunt them down
+even if that means leaving the centre** (today: seams rank toward the
+nearest trainer at six or fewer alive, but only seams, and never while
+hurt or fogged -- see BR-29).
+
+The shape this wants is a single ordered decision list per goal pick with
+the team's state as input (hurt lead? faint? potions? coverage? HMs?),
+rather than the errand picker plus separate gates it is today. BR-29 is
+the first two rows of the endgame column and should be fixed inside this,
+not beside it.
+
+### BR-31 · TAKE ALL on a dropped bag — OPEN
+
+Looting a bag is one row at a time through the loot list. A player who
+wants the lot -- and at two-left, that is everyone -- presses A a dozen
+times. A TAKE ALL row at the top of the list (`BR:openBag`, `lootRows`)
+that takes every stack the party and bag have room for, in one press,
+with one "REF took ..." line per kind. Asked for by the user 2026-09-05.
+
 
 ### BR-27 · One lobby screen, not a menu round-trip — DONE (POK-32)
 
