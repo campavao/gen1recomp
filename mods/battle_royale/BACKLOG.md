@@ -504,6 +504,15 @@ what NOTICE measures, so a diagonal counts; a walk-up should end
 orthogonally adjacent and facing, the only way two trainers ever meet
 in Kanto.
 
+And the mirror image, same session: one bot FOLLOWED another across a
+town, in plain sight, and the fight only opened when the one in front
+stopped at the Centre door and the follower caught up to three cells.
+Two trainers who can see each other are already in the encounter: the
+eyeline is the trigger, and the one seen STOPS -- the way the engine
+freezes a player the moment a trainer's `!` goes up -- while the other
+walks over. NOTICE at three cells is what makes a chase at equal speed
+last until somebody pauses, which is what the user watched.
+
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
 Looting a bag is one row at a time through the loot list. A player who
