@@ -452,6 +452,36 @@ following it walks off one map and onto the next. A real FLY, when a bot
 has the move and the town is far (BR-30), would then be the one legitimate
 teleport, and could show the player's own fly-out animation over the ghost.
 
+### BR-33 · A surfing bot looks like it is walking on water — OPEN
+
+**Seen 2026-09-05 (the user, spectating, screenshot):** NED standing on the
+sea beside the CINNABAR lab door, drawn with his walk sheet, feet on the
+waves. A bot whose team knows SURF may cross water on purpose (POK-158 M4:
+`botCross` accepts `Spawn.swimmable` cells once `Bots.canSurf` says yes),
+and the hunt path and errands use it -- so the position is legitimate; the
+PICTURE is not. A player on water sits on the surf sprite. The ghost layer
+(`lib/ghosts.lua`) knows nothing about water: it draws the walk sheet the
+bot advertised, whatever the cell under it.
+
+Two parts:
+
+1. **Draw it.** When a ghost's cell is `swimmable`, draw the engine's surf
+   sprite under it the way the player's own surfing is drawn (the trainer
+   sits on the mount, the walk sheet is not used). The wire needs nothing
+   new: every client has the map and can ask `Spawn.swimmable` for the
+   cell.
+2. **Do not stop there.** A surfing player is passing through; a bot whose
+   errand or dwell ENDS on a water cell (a random landing cell from a seam
+   crossing -- BR-32 -- or a stroll target) will stand on the sea, which is
+   the frame in the screenshot. Roam landings, stroll targets and dwells
+   should be land cells (`Spawn.walkable`), with water allowed only as
+   path, never as destination.
+
+Related: a bot eliminated while on water spills where it stood.
+`Spills.placeAround` searches outward for walkable cells and falls back to
+the centre cell when none are near, so a team can hit the sea. It should
+walk the search to the nearest shore instead.
+
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
 Looting a bag is one row at a time through the loot list. A player who
