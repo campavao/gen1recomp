@@ -53,11 +53,13 @@ port-forwarding.
    **OPTIONS** button opens the settings over it; a guest's button is
    `LEAVE`. Press A on a trainer for their card — name, HOST, their wins —
    and, as the host, `REMOVE` to show them the door.
-6. Under **OPTIONS**, **FILL: ON** tops the roster up to **MAX** with bots
-   at the start (the row steps 2, 4, 6, 8, 12, 16, 20, 26, 30 and wraps),
-   and the room draws an outline in every seat a bot will take. Fill is
-   the one you want when you can't know how many people turn up; off, the
-   match is exactly who is in the room.
+6. Under **OPTIONS**, **MAX** is the room's size (the row steps 2, 4, 6, 8,
+   12, 16, 20, 26, 30 and wraps): the relay refuses the join past it, so a
+   game with friends stays a game with friends. **FILL: ON** lets bots take
+   whatever seats are still empty at the start, and the room shows those
+   bots by name in their seats. Fill is the one you want when you can't
+   know how many people turn up; off, the match is exactly who is in the
+   room. (The relay itself seats sixteen humans at most.)
 7. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
    without a code. Rooms are private until you say otherwise.
 8. The host sees the seats fill in and picks **START MATCH**. Everyone

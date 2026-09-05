@@ -199,18 +199,20 @@ end
 -- ------- the cursor
 --
 -- `cur` is a seat index, or 0 for the button.  Left and right walk the
--- seats in reading order; down off the last row lands on the button, up
--- from the button returns to the last seat.  Nothing wraps: the room is
--- small enough that a wrap reads as a jump.
+-- seats in reading order; up and down walk the rows, and the button is
+-- one more row that joins the bottom to the top: down off the last row
+-- lands on it, up off the first row lands on it, and from it up is the
+-- last seat and down the first -- so the room scrolls both ways (the
+-- user's call, 2026-09-05).
 function Lobby.move(cur, n, dir)
   local COLS = Lobby.COLS
   if n <= 0 then return 0 end
   if dir == "up" then
     if cur == 0 then return n end
     if cur - COLS >= 1 then return cur - COLS end
-    return cur
+    return 0
   elseif dir == "down" then
-    if cur == 0 then return 0 end
+    if cur == 0 then return 1 end
     if cur + COLS <= n then return cur + COLS end
     return 0
   elseif dir == "left" then
@@ -283,9 +285,10 @@ Lobby.Screen = Screen
 
 -- geometry, in pixels, inside the 20x18 box
 local HEADER_Y = 8
-local GRID_Y = 22          -- the first row's sprite
-local ROW_PITCH = 24       -- sprite (16) + name (8)
-local STATUS_Y = 120
+local GRID_Y = 18          -- the first row's sprite
+local NAME_DY = 17         -- the name, a pixel under the sprite (readability)
+local ROW_PITCH = 25       -- sprite (16) + gap (1) + name (8)
+local STATUS_Y = 119
 local BUTTON_Y = 128
 local COL_X = { 8, 80 }    -- the interior split in two
 local COL_W = 72
@@ -424,7 +427,7 @@ function Screen:draw()
     local row = math.floor((i - 1) / Lobby.COLS)
     local cx = COL_X[col + 1] + COL_W / 2
     local sy = GRID_Y + row * ROW_PITCH
-    local ny = sy + 16
+    local ny = sy + NAME_DY
     if seat.empty then
       -- a seat whose trainer is not known yet: a faded RED, the one
       -- sprite every build has.  The cursor sits beside it, since there

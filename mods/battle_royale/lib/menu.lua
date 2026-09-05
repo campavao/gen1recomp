@@ -140,10 +140,12 @@ function Menu.items(mod, BR, game)
       -- nothing settable, no START: the clock starts THE DAILY GAME, for
       -- host and guest alike (POK-161)
     elseif host then
-      -- FILL: ON tops the roster up to MAX with bots at the start; a solo
-      -- room has nobody to fill around, so MAX is its bot count outright.
-      -- (BOTS and TRAINERS were rows of their own until 2026-09-05; the
-      -- room shows the seats now, so the number is the picture.)
+      -- MAX is the room's size: how many trainers the relay lets in
+      -- (it caps joins at this), and, with FILL: ON, how far bots top the
+      -- roster up at the start.  A solo room has nobody to fill around or
+      -- keep out, so its MAX is the bot count outright.  (BOTS and
+      -- TRAINERS were rows of their own until 2026-09-05; the room shows
+      -- the seats now, so the number is the picture.)
       if not BR.solo then
         setting("FILL: " .. (BR:fillOn() and "ON" or "OFF"),
                 function() BR:setFillOn(not BR:fillOn()) end)
@@ -152,7 +154,7 @@ function Menu.items(mod, BR, game)
         -- steps the ladder 0,1,2,3,5,8,...,30 and wraps
         setting("MAX: " .. tostring(BR.botCount),
                 function() BR.botCount = BR:nextBotCount() end)
-      elseif BR:fillOn() then
+      else
         setting("MAX: " .. tostring(BR:fillMax()),
                 function() BR:cycleFillMax() end)
       end

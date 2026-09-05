@@ -2884,7 +2884,7 @@ do
         end,
         cycleFillMax = function(self)
           self.fillTarget = Bots.nextMax(self:fillMax())
-          self.fillTo = self.fillTarget
+          if self:fillOn() then self.fillTo = self.fillTarget end
         end,
         nextBotCount = function(self) return Bots.nextCount(self.botCount) end,
         -- the room door (POK-142): no trouble unless a test says so
@@ -3134,8 +3134,8 @@ do
     BR.startsIn = function() return 12 end
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
-       "FILL: OFF|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
-       "hosting: FILL, OPEN, the clocks, the log, the countdown")
+       "FILL: OFF|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
+       "hosting: FILL, MAX, OPEN, the clocks, the log, the countdown")
     eq(Lobby.header(BR), "CODE ABCDEF", "the code over the room")
     eq(Lobby.status(BR), "STARTS IN 12", "the countdown under it, for everyone")
     eq(Lobby.button(BR), "OPTIONS", "the host's button opens the box")
@@ -3144,7 +3144,7 @@ do
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
        "FILL: ON|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
-       "FILL on grows a MAX row, at a full room by default")
+       "FILL on keeps the same rows, MAX at a full room by default")
     eq(#Lobby.seats(BR), 30, "...and the room shows the seats bots will take")
     ok(Lobby.seats(BR)[3].bot and Lobby.seats(BR)[2].id,
        "humans first, the dealt bots after")
@@ -3157,11 +3157,16 @@ do
     ok(find(BRMenu.items({}, BR, {}), "MAX: 4") ~= nil, "and climbs")
     find(BRMenu.items({}, BR, {}), "FILL: ON").onSelect()
     items = BRMenu.items({}, BR, {})
-    ok(find(items, "FILL: OFF") ~= nil and find(items, "MAX") == nil,
-       "FILL off hides MAX again")
+    ok(find(items, "FILL: OFF") ~= nil and find(items, "MAX: 4") ~= nil,
+       "FILL off keeps MAX: it is the room's size, with or without bots")
+    eq(#Lobby.seats(BR), 2, "...and no bot seats with FILL off")
+    find(items, "MAX: 4").onSelect()
+    ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil, "MAX still steps with FILL off")
+    eq(#Lobby.seats(BR), 2, "...without dealing bots")
     BR:setFillOn(true)
-    ok(find(BRMenu.items({}, BR, {}), "MAX: 4") ~= nil,
-       "...and back on remembers the number it had")
+    ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil,
+       "...and FILL back on fills to the MAX it had")
+    eq(#Lobby.seats(BR), 6, "which the room now shows")
     BR:setFillOn(false)
     BR.startsIn = function() return nil end
 
@@ -3404,10 +3409,16 @@ do
       eq(Lobby.move(3, 5, "down"), 5, "...and another")
       eq(Lobby.move(5, 5, "down"), 0, "down off the last row is the button")
       eq(Lobby.move(4, 5, "down"), 0, "from either column")
-      eq(Lobby.move(0, 5, "down"), 0, "the button is the floor")
+      eq(Lobby.move(0, 5, "down"), 1, "down from the button is the first seat")
       eq(Lobby.move(0, 5, "up"), 5, "up from the button is the last seat")
       eq(Lobby.move(5, 5, "up"), 3, "up is one row")
-      eq(Lobby.move(1, 5, "up"), 1, "and the top row stays put")
+      eq(Lobby.move(1, 5, "up"), 0, "and up off the top row is the button")
+      eq(Lobby.move(2, 5, "up"), 0, "from either column")
+      -- ...so the room scrolls both ways: the page follows the wrap
+      eq(Lobby.scrollFor(11, Lobby.move(0, 30, "down"), 30), 0,
+         "down from the button on the last page shows the first")
+      eq(Lobby.scrollFor(0, Lobby.move(0, 30, "up"), 30), 11,
+         "up from the button on the first page shows the last")
       eq(Lobby.move(0, 5, "left"), 0, "the button does not slide")
       eq(Lobby.move(0, 5, "right"), 0, "either way")
 

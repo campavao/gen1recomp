@@ -797,7 +797,7 @@ return function(mod)
     -- is the opt-out for a private game with friends, and POK-130's
     -- REMOVE row is the way out if the open door lets somebody in you
     -- did not want.
-    local ok, err = relay:host(myName(), { open = true })
+    local ok, err = relay:host(myName(), { open = true, max = self:fillMax() })
     if not ok then return false, err end
     self.relay = relay
     return true
@@ -835,10 +835,25 @@ return function(mod)
     self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
     -- a number set is a number remembered: FILL: OFF then ON comes back
     -- to the MAX it had, not to the default
-    if self.fillTo > 0 then self.fillTarget = self.fillTo end
+    if self.fillTo > 0 then
+      self.fillTarget = self.fillTo
+      self:announceMax()
+    end
     -- the room's guests draw their seats from this
     if self.relay and self.relay:isOpen() then broadcastPlace() end
     return self.fillTo
+  end
+
+  -- MAX is the room's size on the relay too: it refuses the join past it
+  -- (set_max / host_room.max, relay/server.js), which is how a host gates
+  -- a game with friends without FILL.  The relay clamps to its own
+  -- member ceiling; an older relay ignores the message and the cap is
+  -- its ceiling alone.
+  function BR:announceMax()
+    local relay = self.relay
+    if relay and relay:isOpen() and relay:isHost() and relay.setMax then
+      relay:setMax(self:fillMax())
+    end
   end
 
   -- a match seed; the room rolls one when it opens (broadcastPlace) and
@@ -850,10 +865,11 @@ return function(mod)
 
   function BR:nextFill() return Bots.nextFill(self.fillTo) end
 
-  -- The lobby's two rows for the same knob (the user's sketch, 2026-09-05):
-  -- FILL: ON/OFF is whether bots top the roster up at all, MAX: n is how
-  -- far.  fillTo stays the one number botsAtStart reads, so nothing
-  -- downstream learns a second representation.
+  -- The lobby's two rows (the user's sketch, 2026-09-05): MAX: n is the
+  -- room's size, FILL: ON/OFF is whether bots take the seats humans have
+  -- not.  fillTo stays the one number botsAtStart reads -- MAX while FILL
+  -- is on, zero while it is off -- so nothing downstream learns a second
+  -- representation; fillTarget remembers MAX either way.
   function BR:fillOn() return (self.fillTo or 0) > 0 end
   function BR:fillMax() return self.fillTarget or Bots.MAX end
   function BR:setFillOn(on)
@@ -861,7 +877,12 @@ return function(mod)
     return self:fillOn()
   end
   function BR:cycleFillMax()
-    self:setFill(Bots.nextMax(self:fillMax()))
+    self.fillTarget = Bots.nextMax(self:fillMax())
+    if self:fillOn() then
+      self:setFill(self.fillTarget)       -- announces on the way
+    else
+      self:announceMax()
+    end
     return self:fillMax()
   end
 

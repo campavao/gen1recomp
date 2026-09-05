@@ -154,10 +154,19 @@ return function(game)
     return C.fail("B did not close the card back to the room")
   end
 
-  -- ------- 3. OPTIONS
-  for _ = 1, 8 do U.tap(game, "down") U.wait(3) end
+  -- ------- 3. OPTIONS -- and the wrap on the way: up off the top row is
+  -- the button, down from the button is the first seat
+  U.tap(game, "up") U.wait(3)
   if room.cur ~= 0 then
-    return C.fail("down did not land on the button: " .. tostring(room.cur))
+    return C.fail("up off the top row is not the button: " .. tostring(room.cur))
+  end
+  U.tap(game, "down") U.wait(3)
+  if room.cur ~= 1 then
+    return C.fail("down from the button is not the first seat: " .. tostring(room.cur))
+  end
+  for _ = 1, 7 do U.tap(game, "down") U.wait(3) end
+  if room.cur ~= 0 then
+    return C.fail("down off the last row did not land on the button: " .. tostring(room.cur))
   end
   U.tap(game, "a") U.wait(10)
   local box = game.stack:top()
