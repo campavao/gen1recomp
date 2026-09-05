@@ -343,6 +343,20 @@ few cells from two dropped POKéMON and a bag; it picked up none of it. The
 other had five. Neither went looking for the other. A player at two-left
 loots what is at their feet, heals, reads the map and closes in.
 
+**More from the same run, read off the spectator's START menu:** neither
+bot has a fainted mon; each has its FIRST slot badly hurt and the rest
+healthy; neither carries a potion. They are on the route between CELADON
+and SAFFRON with the ring closing on SAFFRON. So the permanent-wantsHeal
+theory below does not apply to them -- the opposite does: with one hurt mon
+in two, the record averages ABOVE the half-team line, `wantsHeal` is false,
+and no Centre trip is ever considered, even with a town a route away on
+either side. And a route under the ring's fog turns the same-map stalk OFF
+by design (`preyHere` requires `not fogOver(map)`, so prey cannot bait a
+bot into the fog), leaving only the seam errand toward the eye -- if that
+seam is not being reached, two bots pace the route until the fog decides
+it. First thing to read from a log: whether their map was fogged, and what
+`stepBotErrand` was walking them to.
+
 What exists already, and where it likely stalls:
 
 - **Same-map hunting** (`tickBotRoam`, main.lua ~3358): prey is only
@@ -371,8 +385,11 @@ What "like a player" would mean here, in order:
    healing or not (a wounded player at two-left still fights; it is that
    or the fog).
 2. Loot at your feet first: an `item` within a few cells outranks `heal`.
-3. `wantsHeal` should not be a permanent state: a fainted slot with no
-   Centre in reach stops counting once the bot has nothing to do about it.
+3. `wantsHeal` is the wrong shape at both ends: a fainted slot with no
+   Centre in reach should stop counting once the bot has nothing to do
+   about it, and a LEAD at a sliver of HP should count even when the rest
+   of the team averages it out -- a player heals the mon that fights, not
+   the mean.
 4. The Centre stays worth a walk if it is one town over and the ring
    allows it; today `heal` is only ever the door on THIS map.
 
