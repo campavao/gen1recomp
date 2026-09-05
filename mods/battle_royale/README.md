@@ -105,7 +105,9 @@ screen has *drawn* them on rather than the cell the wire says they reached,
 so a fight never opens against a sprite that was never there. Win, lose or
 run; a lost battle only ends your match if it was your last Pokémon. **Knock someone out and their BAG hits the ground where they
 fell** — items and money, one bag with its own sprite; A on it opens the bag
-itself, and each item offers USE / TAKE / CANCEL, so you take what you want
+itself, a TAKE ALL row at the top empties it in one press (every stack the
+pack has room for, one "Took ..." line per kind), and below that each item
+offers USE / TAKE / CANCEL, so you take what you want
 and leave the rest on the ground for the next trainer — and their team lands
 around it as Poké Balls. Balls and bags are walkable: a pile is something you
 wade through, and A on the piece under your feet picks it up. **Opening a ball is a gift, not a fight**: it
@@ -186,9 +188,14 @@ off screen and at the pace a person would play it — one bot's team where
 the player's would be, the other's as the trainer, both picking moves with
 the trainer AI — and records it like any player's, so a spectator watching
 either bot follows them into it on the battle screen. The wounds the winner
-walks away with are the fight's, not a formula's. While it runs, both bots
-stand where they met with the fighting mark over their heads, and nobody
-can jump either of them.
+walks away with are the fight's, not a formula's. And it opens the way a
+fight opens from the outside: one bot sees the other down its eyeline (four
+cells, stopped by terrain — never through a fence), the `!` goes up over its
+head, the one seen stops, the seer walks over until they stand face to
+face, and only then does the fight start. Until then they are still two
+trainers on a route, and either may be jumped or caught by the fog. While
+it runs, both stand where they met with the fighting mark over their heads,
+and nobody can jump either of them.
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
@@ -483,8 +490,9 @@ lockstep is a desync, and both players sit in the same fog anyway.)
 
 The host owns the clock and announces each shrink; nobody derives it from
 their own wall clock, which would drift. Bots take the fog on the same terms
-you do — they cannot walk between maps, so a bot the ring leaves behind is
-a bot that dies in it, and its team hits the ground like anyone else's.
+you do — they walk out of it by the same seams you do, a route is more than
+twenty seconds across, and a bot the ring catches on the far side of one
+dies in it, its team hitting the ground like anyone else's.
 
 Kanto's own trainers are not spared either: a map the ring has left gets
 one shared clock with the same grace you get, and when it runs out every
@@ -550,6 +558,23 @@ won. The winner tells the room (`botout`); the host recounts the survivors.
 A bot drops with one Pokémon at the starting level, the same as a player —
 two made the bot the favourite in every opening fight, which ended most
 matches before anyone could build a team.
+
+**A bot moves the way a player moves**, because a spectator is following
+it. It leaves a map by walking to the edge and stepping off, landing on the
+neighbour's edge exactly where the engine would land you (`Bots.seamCells`
+uses the same strip-offset landing as the seam crossing) — never by
+appearing on a random cell of the next map. It heals by going *into* the
+POKéMON CENTER: up the step, through the door, to the counter, four seconds
+with the nurse, and back out onto the doorstep facing down; a spectator's
+camera follows it in and stands in the Centre while it heals. On the water
+its ghost sits on the surf sprite, the way your own surfing is drawn, and
+seam landings prefer dry land — water is a way across, not a place to
+arrive. Its choices follow the list a player would follow: the fog first;
+loot within a few cells before anything; the Centre when the lead is at a
+sliver or the team is half gone (one town over if this map has none and
+the bag is empty); a potion the moment a trainer comes into view; and at
+three left it hunts whoever shares its map every beat, healed or not —
+a wound with no Centre in reach is not a reason to pace.
 
 **How many bots?** Up to **30**, verified live end-to-end. Kanto has 34
 outdoor maps, so thirty bots each get a route or town of their own and the
@@ -736,6 +761,28 @@ wounds the fight left. `DUEL OK` passes it.
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
   POKEPORT_IDENTITY=br-duel \
   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_duel_smoke.lua lovec .
+```
+
+### A bot moves like a player
+
+`bot_legs_smoke.lua` is the spectator's-eye check on all of the above, in
+five legs a referee watches from the camera: **seam** — a bot placed mid
+ROUTE_1 leaves it by walking to an edge cell and lands on the neighbour's
+edge, no in-map jump ever more than a cell, and the camera follows it
+across; **centre** — a wounded bot in VIRIDIAN walks to the Centre door,
+goes in (its map is the interior), stands at the counter, comes out healed
+onto the door facing down, with the spectator inside while it heals;
+**walkup** — two bots four cells apart on a row: the one facing the other
+spots it, walks up, both face, and only then does the duel open; **surf** —
+a bot with a SURF learner on PALLET's sea is drawn on the surf sheet and on
+the walk sheet ashore; **endgame** — the last two, both with a wrecked lead
+on a route with no Centre, walk at each other and meet. `BR_LEG` runs one.
+`LEGS OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-legs \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_legs_smoke.lua lovec .
 ```
 
 ### The playtest probes

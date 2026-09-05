@@ -346,7 +346,20 @@ Sizing and rate need a decision before this is safe on the relay.
 
 ## P4 — quality of life
 
-### BR-29 · The last two bots should loot, heal and hunt each other — OPEN
+### BR-29 · The last two bots should loot, heal and hunt each other — DONE
+
+**Resolved 2026-09-05** (with BR-30, one change): `Bots.wantsHeal` now
+counts a LEAD at or under `Bots.LEAD_LOW` (0.35) whatever the team
+averages, and it means "hurt", not "stand down" -- `BR:botStandsDown`
+decides that, and only when a nurse on THIS map can still serve, the bag
+has no potion, and more than `Bots.ALL_IN` (3) are alive. At three or
+fewer the stalk runs every beat with no wobble, healed or not. A spill
+within `Bots.LOOT_FIRST` (6) cells outranks the walk to the Centre
+(`Bots.chooseGoal`). A hurt bot with an empty bag and no Centre here
+ranks its seams by "has an unfogged Centre" first (`roamBot`), so the
+Centre one town over is a walk now. Pinned by the `endgame` leg of
+`tests/drivers/bot_legs_smoke.lua` (two bots with a lead at 0.3 on
+ROUTE_1 meet instead of pacing) and `br_test`.
 
 **Seen 2026-09-05 (the user, spectating a match to its end):** two bots left,
 same city, "idly walking back and forth". One had two POKéMON and stood a
@@ -408,7 +421,19 @@ Evidence to gather first: a spectator's run with the deep log on, reading
 the two bots' goal picks (`debugFightProbe` shows `goal`, `hunting`,
 `dwell`, `sinceFight`) at the moment they are seen ambling.
 
-### BR-30 · A bot plays the way a player plays — the decision list — OPEN
+### BR-30 · A bot plays the way a player plays — the decision list — DONE
+
+**Resolved 2026-09-05**, the rows this build covers: the fog first (as
+before); loot at your feet before the nurse; the Centre when the lead is
+at a sliver or the team is half gone, on this map or one town over when
+the bag is empty; a potion the moment a trainer comes into view (one sip
+a beat while the stalk closes, `tickBots`) rather than standing down; a
+trainer on your map hunted regardless of wounds unless a nurse here is
+the better move; and everything a player would do at three left. Still
+open from the table: coverage swaps, deliberate HM/TM teaching beyond the
+looted TM, FLY, and CUT. The picker is still `Bots.chooseGoal` plus the
+gates in `tickBots`, now reading the same team state (`wantsHeal`,
+`hasPotion`, `botStandsDown`) rather than one flag.
 
 **The user's own flow, 2026-09-05, written while spectating.** This is the
 spec the bot goal picker should be measured against, in priority order.
@@ -446,7 +471,23 @@ rather than the errand picker plus separate gates it is today. BR-29 is
 the first two rows of the endgame column and should be fixed inside this,
 not beside it.
 
-### BR-32 · A bot crosses a seam by walking through it, not by appearing — OPEN
+### BR-32 · A bot crosses a seam by walking through it, not by appearing — DONE
+
+**Resolved 2026-09-05:** the roam clock still ranks the exit
+(`Bots.homeward`), but `roamBot` now turns it into a `seam` goal: the
+nearest reachable edge cell whose crossing lands on the neighbour
+(`Bots.seamCells`, one BFS via `Bots.pathToAny`), walked by the errand
+machinery like any other goal under the long clock
+(`Bots.LONG_GOAL_SECONDS`). On arrival `BR:walkSeam` lands the bot on the
+engine's own landing cell (`Bots.seamLanding`: `destX = curX - offset*2`,
+unclamped -- an off-strip landing is a bump, as Spawn.escapableSets
+already held) and broadcasts the place; every client's ghost sync
+despawns it at the edge and spawns it just across, and tickWatch carries
+the spectator over. When the ranked exit's seam is unreachable the next
+exit is tried; a bot that can reach none holds. The one seam no bot can
+walk is ROUTE_22's fenced north edge, which is the gate building's job.
+Pinned by the `seam` leg of `bot_legs_smoke.lua` and the Kanto seam sweep
+in `br_test`. FLY as the one legitimate teleport is still BR-30's.
 
 **Seen 2026-09-05 (the user, spectating):** bots "fly" between maps --
 they vanish and are standing somewhere else, with no FLY animation and no
@@ -463,7 +504,15 @@ following it walks off one map and onto the next. A real FLY, when a bot
 has the move and the town is far (BR-30), would then be the one legitimate
 teleport, and could show the player's own fly-out animation over the ghost.
 
-### BR-33 · A surfing bot looks like it is walking on water — OPEN
+### BR-33 · A surfing bot looks like it is walking on water — DONE
+
+**Resolved 2026-09-05:** (1) `Ghosts:_dress` swaps the ghost NPC's sheet
+for `field.playerSprites.surf` (SEEL, what `Player:pose` draws) while the
+cell under it is `Spawn.swimmable`, and back ashore; nothing on the wire.
+(2) seam landings prefer dry cells (`seamGoalFor`), stroll and grass
+targets were land already, and spills already wash ashore (`spillBot`).
+A hunt or a wander may still pause a beat on water, which is passing
+through. Pinned by the `surf` leg of `bot_legs_smoke.lua`.
 
 **Seen 2026-09-05 (the user, spectating, screenshot):** NED standing on the
 sea beside the CINNABAR lab door, drawn with his walk sheet, feet on the
@@ -493,7 +542,20 @@ Related: a bot eliminated while on water spills where it stood.
 the centre cell when none are near, so a team can hit the sea. It should
 walk the search to the nearest shore instead.
 
-### BR-34 · Two bots fight from where they noticed each other, not face to face — OPEN
+### BR-34 · Two bots fight from where they noticed each other, not face to face — DONE
+
+**Resolved 2026-09-05:** `tickBotFights` no longer opens the duel on
+NOTICE. `BR:botSighting` finds who saw whom -- down the facing,
+`Bots.SIGHT` cells, stopped by the map's own walkability
+(`Engage.target`), or within NOTICE with a clear line between
+(`Bots.clearBetween`, never through a fence) -- and
+`BR:startBotApproach` puts a `spot` mark (drawn as the `!`) over the
+seer and freezes the one seen. `BR:tickBotApproaches` walks the seer at
+`Bots.WALKUP_SECONDS` along a BFS path to any cell orthogonally adjacent,
+turns both to face (`BR:faceBot`, on the wire), and only then
+`BR:openBotDuel`. Either may be jumped or fogged until then; a walled-off
+or over-long approach (`Bots.APPROACH_STEPS`) is called off under the
+fight cooldown. Pinned by the `walkup` leg of `bot_legs_smoke.lua`.
 
 **Seen 2026-09-05 (the user, spectating, screenshot):** NED and another
 bot both wearing the fighting mark, four or five cells apart with a fence
@@ -524,7 +586,21 @@ freezes a player the moment a trainer's `!` goes up -- while the other
 walks over. NOTICE at three cells is what makes a chase at equal speed
 last until somebody pauses, which is what the user watched.
 
-### BR-35 · A bot goes INTO the Centre — OPEN
+### BR-35 · A bot goes INTO the Centre — DONE
+
+**Resolved 2026-09-05, option (2):** the visit is three legs of the errand
+walker. `heal` is the doorstep and one real step up onto the door tile;
+`BR:enterCentre` puts the bot on the mat inside (`Bots.warpIn`) with
+`p.came` remembering the town and door; `counter` is the cell before the
+nurse (`Bots.counterCell`), where the four seconds and `botHeal` happen;
+`exit` is the cell above the mat and one step down onto it;
+`BR:leaveCentre` resolves the mat like the engine's `Warp.resolve`
+(`Bots.warpOut`, LAST_MAP -> the door it came in by) and lands it on the
+door facing down. The ring is asked about the town while it is inside
+(`BR:botOutdoor`, used by the fog, the goal picker and the stand-down).
+Every Centre in Kanto is pinned walkable in, at and out by `br_test`; the
+`centre` leg of `bot_legs_smoke.lua` watches VIRIDIAN's from the camera,
+which follows the bot inside.
 
 **Asked 2026-09-05 (the user, spectating):** "do bots not go all the way
 into a POKéMON CENTER to heal?" They do not. `botHeal` (POK-158 M2) is
@@ -556,7 +632,14 @@ Two sizes of fix:
 would; that is the expectation. (1) is not a stepping stone -- build the
 door warp with BR-32 and walk the interior. The spectator follows them in.
 
-### BR-31 · TAKE ALL on a dropped bag — OPEN
+### BR-31 · TAKE ALL on a dropped bag — DONE
+
+**Resolved 2026-09-05:** `BR:lootRows` puts a TAKE ALL row at the top of
+every non-empty bag; `BR:lootTakeAll` takes each stack the pack has room
+for and the money in one press, one `Wire.took` per kind so the room's
+copies follow, and says one "Took ... !" line per kind (a stack that does
+not fit stays on the ground and the box says so). Pinned by case 3 of
+`tests/drivers/loot_bag_smoke.lua`.
 
 Looting a bag is one row at a time through the loot list. A player who
 wants the lot -- and at two-left, that is everyone -- presses A a dozen

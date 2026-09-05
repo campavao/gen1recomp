@@ -384,6 +384,8 @@ return function(mod)
     mirrorState = nil,    -- ...and the screen showing one
     botDuels = {},        -- the bot fights this host is running off screen
     inDuel = {},          -- bot id -> true while it is in one
+    botApproach = {},     -- seer bot id -> the walk-up it is on (BR-34)
+    botApproaching = {},  -- bot id -> true for both sides of a walk-up
     botCount = 0,         -- how many bots the host will add at start
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
@@ -1280,6 +1282,7 @@ return function(mod)
     self:closeMirror("reset")
     for _, d in ipairs(self.botDuels or {}) do d.sim:abort(); d.rec:stop("reset") end
     self.botDuels, self.inDuel = {}, {}
+    self.botApproach, self.botApproaching = {}, {}
     self.mirrorRx, self.watchers = {}, {}
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
@@ -2599,6 +2602,9 @@ return function(mod)
     local me = { { id = self.myId, map = map.id, x = player.cellX,
                    y = player.cellY, facing = player.facing, moving = false,
                    status = "alive", busy = false } }
+    -- ...except at the end (BR-29): the last three fight what they see,
+    -- wounded or not, the player included
+    local allIn = self:aliveCount() <= Bots.ALL_IN
     for id, p in pairs(self.players) do
       -- A bot that wants the nurse does not call fights (POK-160): the
       -- record every client derives (and botrec keeps in step) says when
@@ -2607,7 +2613,7 @@ return function(mod)
       -- purpose -- the PLAYER may still jump a wounded bot via tryEngage,
       -- which is what wounds are for.
       if Bots.isBot(id) and p.status == "alive" and p.map == map.id
-         and not avoid[id] and not Bots.wantsHeal(self:botRecord(id)) then
+         and not avoid[id] and (allIn or not Bots.wantsHeal(self:botRecord(id))) then
         -- its GHOST's cell, never its wire cell, for the same reason
         -- tryEngage asks the screen (POK-96): a bot this client has not
         -- drawn cannot call a fight
@@ -2750,6 +2756,48 @@ return function(mod)
     end
   end
 
+  -- The town a bot's fog is judged on (BR-35): a bot inside a Centre has
+  -- no square on the ring's grid, so the ring is asked about the town it
+  -- walked in from -- the same answer Fog.outdoorFor gives a player.
+  function BR:botOutdoor(p)
+    return (p.came and p.came.id) or p.map
+  end
+
+  -- A SEAM IS WALKED, NOT SKIPPED (BR-32).
+  --
+  -- The exit to `dest` as a goal: the nearest reachable cell on this
+  -- map's edge whose crossing lands on the neighbour (Bots.seamCells,
+  -- the engine's own landing math), found by one BFS to any such cell.
+  -- The errand machinery walks it like anything else; the crossing is
+  -- walkSeam.  Returns the goal and its path, or nil when no edge cell
+  -- of that seam can be reached from here -- a bay between, a ledge
+  -- above it -- which the caller reads as "try the next exit".
+  local function seamGoalFor(id, p, dest, now)
+    local data = BR.game and BR.game.data
+    local side = Bots.seamSide(data and data.maps[p.map], dest)
+    if not side then return nil end
+    local cross = botCross(id)
+    local cells = Bots.seamCells(data.maps, p.map, side, cross)
+    if #cells == 0 then return nil end
+    -- land landings first (BR-33): water is a way across, never a place
+    -- to arrive -- a bot dropped at the water's edge of a seam stood on
+    -- the sea until its next errand, which is the frame the user shot
+    local byCell, land = {}, {}
+    for _, c in ipairs(cells) do
+      byCell[c.y * 4096 + c.x] = c
+      if canWalk(c.dest, c.lx, c.ly) then land[c.y * 4096 + c.x] = c end
+    end
+    local pick = next(land) and land or byCell
+    local path, at = Bots.pathToAny(function(x, y) return cross(p.map, x, y) end,
+                                    { x = p.x, y = p.y },
+                                    function(x, y) return pick[y * 4096 + x] ~= nil end)
+    if not path then return nil end
+    local c = pick[at.y * 4096 + at.x]
+    return { kind = "seam", x = c.x, y = c.y, map = p.map, at = now or 0,
+             dest = c.dest, lx = c.lx, ly = c.ly, step = Bots.SEAM_STEP[side] },
+           path
+  end
+
   local function roamBot(id, p, now)
     local data = BR.game and BR.game.data
     local exits = Bots.exits(data and data.maps[p.map])
@@ -2768,12 +2816,14 @@ return function(mod)
     -- fog decides it, which is what a playtest actually watched happen.
     local hunt = BR:huntDistOf(id)
     local dist = BR.ringDistOf
-    local dest
-    if hunt then
-      -- no safe-here exemption: standing still is exactly the failure
-      -- being fixed.  homeward still holds when no exit is any closer.
-      dest = Bots.homeward(exits, hunt, hunt(p.map), p.rng)
-      if not dest then
+    -- which of `pool` to walk, by those pulls; nil is "hold here"
+    local function choose(pool)
+      if #pool == 0 then return nil end
+      if hunt then
+        -- no safe-here exemption: standing still is exactly the failure
+        -- being fixed.  homeward still holds when no exit is any closer.
+        local dest = Bots.homeward(pool, hunt, hunt(p.map), p.rng)
+        if dest then return dest end
         local hereD = hunt(p.map)
         if hereD and hereD > 0 then
           -- A PLATEAU, not an arrival (POK-153): the target is on another
@@ -2781,38 +2831,76 @@ return function(mod)
           -- hunt had nothing to say and the bot paced here forever.  Head
           -- for the ring's eye instead -- the user's own fallback ask --
           -- and failing even that, any seam beats standing still.
-          dest = (dist and Bots.homeward(exits,
+          return (dist and Bots.homeward(pool,
                     function(m) return dist[m] end, nil, p.rng))
-            or exits[p.rng(1, #exits)]
+            or pool[p.rng(1, #pool)]
         end
-        if not dest then p.lastRoam = now return end
+        return nil
+      elseif dist then
+        -- holding still is only wisdom INSIDE the ring; outside it, the
+        -- least-bad seam beats waiting for the fog
+        local r = BR.ring and BR.ring.radius
+        local hereD = dist[p.map]
+        local safeHere = r and hereD and hereD <= r * r
+        return Bots.homeward(pool, function(m) return dist[m] end,
+                             safeHere and hereD or nil, p.rng)
       end
-    elseif dist then
-      -- holding still is only wisdom INSIDE the ring; outside it, the
-      -- least-bad seam beats waiting for the fog
-      local r = BR.ring and BR.ring.radius
-      local hereD = dist[p.map]
-      local safeHere = r and hereD and hereD <= r * r
-      dest = Bots.homeward(exits, function(m) return dist[m] end,
-                           safeHere and hereD or nil, p.rng)
-      if not dest then p.lastRoam = now return end -- nearest already: hold
-    else
-      dest = exits[p.rng(1, #exits)]
+      return pool[p.rng(1, #pool)]
     end
-    local cells = walkableCells(dest)
-    if #cells == 0 then return end
-    local c = cells[p.rng(1, #cells)]
-    p.map, p.x, p.y = dest, c.x, c.y
-    p.lastRoam = now
-    -- fogTicks deliberately survive the move.  They used to reset here ("a
-    -- new map is a fresh verdict"), and with a roam every 25 seconds against
-    -- a 40-second kill, a bot that kept walking could never die in the fog
-    -- -- which is exactly the match-never-ends that POK-5 was about.  The
-    -- ticks are the damage a player would still be carrying; whether the NEW
-    -- map is inside the ring is re-asked every tick anyway.
-    BR.ghosts:despawn(id)
-    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing or "down",
-                                  p.status, p.sprite, id))
+    -- THE CENTRE ONE TOWN OVER (BR-29): a hurt bot with nothing in the
+    -- bag and no nurse on this map walks to the next map that has one,
+    -- ring allowing, before the eye or the hunt get a say.  `heal` used
+    -- to be only ever the door on THIS map.
+    local rec = BR:botRecord(id)
+    local nurses = {}
+    if Bots.wantsHeal(rec) and not Bots.hasPotion(rec.bag)
+       and not BR:centerDoorOn(p.map) then
+      for _, e in ipairs(exits) do
+        if BR:centerDoorOn(e) and not BR:fogOver(e) then nurses[#nurses + 1] = e end
+      end
+    end
+    -- the exit, then the next best when its seam cannot be reached from
+    -- here -- a bot that could not get to the seam it wanted used to be
+    -- dropped across it anyway
+    for _, pool in ipairs({ nurses, exits }) do
+      local left = {}
+      for _, e in ipairs(pool) do left[#left + 1] = e end
+      while #left > 0 do
+        local dest = choose(left)
+        if not dest then break end
+        local goal, path = seamGoalFor(id, p, dest, now)
+        if goal then
+          p.goal, p.path = goal, path
+          p.lastRoam = now
+          return
+        end
+        for i, e in ipairs(left) do
+          if e == dest then table.remove(left, i) break end
+        end
+      end
+    end
+    p.lastRoam = now   -- nowhere to walk: hold, and ask again on the clock
+  end
+
+  -- The crossing itself (BR-32): the bot stands on the edge cell and this
+  -- is the step off it, onto the cell the engine lands a player on.  On
+  -- the wire it is the place a roam always was -- every client despawns a
+  -- ghost whose peer left its map and spawns it where it arrives
+  -- (Ghosts:sync) -- but the bot WALKED here first, and it lands on the
+  -- neighbour's edge rather than anywhere at all, so a spectator glued
+  -- to it (POK-30) sees it leave by the edge and finds it just across.
+  -- fogTicks survive the crossing, as they survived the roam (POK-5).
+  function BR:walkSeam(id, p, goal, now)
+    p.goal, p.path = nil, nil
+    p.map, p.x, p.y = goal.dest, goal.lx, goal.ly
+    p.facing = goal.step or p.facing or "down"
+    p.lastRoam = now or 0
+    p.stepsTaken = (p.stepsTaken or 0) + 1
+    p.seamsWalked = (p.seamsWalked or 0) + 1
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing,
+                                    p.status, p.sprite, id))
+    return nil
   end
 
   -- Which trainer's ghost stands on a cell of this map (POK-165): the
@@ -3055,14 +3143,13 @@ return function(mod)
     end
   end
 
-  -- The Centre serves bots too (POK-158 M2).  Walking to the door and
-  -- waiting the dwell out is the whole visit -- the interior trip is
-  -- abstracted, the way the fight against another bot is -- and the rule
+  -- The Centre serves bots too (POK-158 M2), and a bot goes IN for it
+  -- now (BR-35: enterCentre, the counter dwell, leaveCentre).  The rule
   -- is the player's own: no nurse in a fogged town (POK-117/140), which
   -- pickBotGoal enforced when it offered the errand and this re-checks,
   -- because the ring may have moved while the bot walked over.
   function BR:botHeal(id, p)
-    if self:fogOver(p.map) then return end
+    if self:fogOver(self:botOutdoor(p)) then return end
     local rec = self:botRecord(id)
     local healed = false
     for _, m in ipairs(rec) do
@@ -3073,11 +3160,12 @@ return function(mod)
     if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
   end
 
-  -- The cell in front of this map's POKeMON CENTER door, or nil.  Doors
-  -- all face south in Gen 1, so "in front" is one cell down; a door whose
-  -- step cell is not walkable is not offered (a bot grinding at a blocked
-  -- doorway forever is worse than one that never heals).  Cached: warps
-  -- cannot move during a match.
+  -- The cell in front of this map's POKeMON CENTER door, or nil, with the
+  -- door's warp on it (BR-35 walks through).  Doors all face south in
+  -- Gen 1, so "in front" is one cell down; a door whose step cell is not
+  -- walkable is not offered (a bot grinding at a blocked doorway forever
+  -- is worse than one that never heals).  Cached: warps cannot move
+  -- during a match.
   function BR:centerDoorOn(mapId)
     self.centerDoorCache = self.centerDoorCache or {}
     local hit = self.centerDoorCache[mapId]
@@ -3088,7 +3176,7 @@ return function(mod)
     for _, w in ipairs((def and def.warps) or {}) do
       if type(w.destMap) == "string" and w.destMap:find("POKECENTER", 1, true)
          and canWalk(mapId, w.x, w.y + 1) then
-        found = { x = w.x, y = w.y + 1 }
+        found = { x = w.x, y = w.y + 1, warp = w }
         break
       end
     end
@@ -3096,12 +3184,88 @@ return function(mod)
     return found or nil
   end
 
+  -- ------- into the Centre and out again (BR-35)
+  --
+  -- The visit used to be a dwell on the doorstep: the team healed on
+  -- the pavement with a mark over its head, which nobody minded until a
+  -- spectator was following.  Now it is the player's own trip, in three
+  -- legs the errand walker runs like any other goal: `heal` is the step
+  -- cell and one real step up onto the door; enterCentre puts the bot on
+  -- the mat inside; `counter` is the cell before the nurse, where the
+  -- four seconds are spent; `exit` is the cell above the mat and one
+  -- step down onto it; leaveCentre puts it back on the door outside,
+  -- facing down the step.  The ghost layer and the spectator's camera
+  -- follow a trainer across maps already, so a watcher walks in behind
+  -- it and stands in the Centre while it heals.
+
+  -- Standing on the door tile: through it.  `came` remembers the town
+  -- and the door -- for the way out (a Centre's mat is a LAST_MAP warp),
+  -- and for the ring, which has no square for an interior (botOutdoor).
+  function BR:enterCentre(id, p, t, now)
+    local data = self.game and self.game.data
+    local dest, mx, my = Bots.warpIn(data and data.maps, t.warp)
+    if not dest then return end
+    p.came = { id = p.map, x = p.x, y = p.y }
+    p.map, p.x, p.y, p.facing = dest, mx, my, "up"
+    p.goal, p.path = nil, nil
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+    local counter = Bots.counterCell(data.maps, data.tilesets, dest)
+    if counter then
+      p.goal = { kind = "counter", x = counter.x, y = counter.y, map = dest, at = now or 0 }
+    else
+      p.goal = self:exitLeg(p, now)
+    end
+    log:say("CENTER: %s went into the %s", tostring(p.name), tostring(dest))
+  end
+
+  -- The way out: the cell above the exit mat, then one step down onto it.
+  function BR:exitLeg(p, now)
+    local data = self.game and self.game.data
+    local i, w = Bots.exitMat(data and data.maps, p.map)
+    if not w then return nil end
+    return { kind = "exit", x = w.x, y = w.y - 1, map = p.map, at = now or 0, mat = i }
+  end
+
+  -- Standing on the mat: out, onto the door it came in by, facing down
+  -- the step the way a player walks out of a Centre.
+  function BR:leaveCentre(id, p, t, now)
+    local data = self.game and self.game.data
+    local dest, dx, dy = Bots.warpOut(data and data.maps, p.map, t.mat, p.came)
+    if not dest then
+      if not p.came then return end
+      dest, dx, dy = p.came.id, p.came.x, p.came.y
+    end
+    p.map, p.x, p.y, p.facing = dest, dx, dy, "down"
+    p.came, p.goal, p.path = nil, nil, nil
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+  end
+
+  -- Does a wound keep this bot off the prey on its map (BR-29/30)?  Only
+  -- when there is something better to do about it: a nurse on THIS map
+  -- the fog has not shut, and no potion (a potion is drunk on the way
+  -- in, tickBots).  A faint with no Centre in reach is a wound the bot
+  -- can do nothing about and no reason to pace, and at ALL_IN nothing
+  -- stands down: a wounded player at two-left still fights -- it is that
+  -- or the fog.  `wantsHeal` used to gate the stalk outright, and two
+  -- bots on a route between two towns walked back and forth for a whole
+  -- fog phase.
+  function BR:botStandsDown(id, p, alive)
+    if (alive or math.huge) <= Bots.ALL_IN then return false end
+    local rec = self:botRecord(id)
+    if not Bots.wantsHeal(rec) then return false end
+    if Bots.hasPotion(rec.bag) then return false end
+    return self:centerDoorOn(p.map) ~= nil and not self:fogOver(self:botOutdoor(p))
+  end
+
   -- What this bot is off to do, or nil to let the roam clock move it on.
   function BR:pickBotGoal(id, p, now)
     local rec = self:botRecord(id)
     -- a wrecked team walks to the Centre (POK-158 M2), under the same
     -- rule the player's nurse serves by: not once the fog has the town
-    local door = not self:fogOver(p.map) and self:centerDoorOn(p.map) or nil
+    local outdoor = self:botOutdoor(p)
+    local door = not self:fogOver(outdoor) and self:centerDoorOn(p.map) or nil
     -- The bag where there is no nurse (POK-160).  quaff only ran as a
     -- winner's swig after a bot-vs-bot fight, so a bot wounded any other
     -- way -- a lost trade, the fog -- sat on a bag of potions while it
@@ -3120,7 +3284,7 @@ return function(mod)
     local g = Bots.chooseGoal(p, {
       -- the fog outranks every errand, as it does for a player.  Reuses
       -- the per-map question POK-140 needed for the CENTRE counters.
-      inFog = self:fogOver(p.map),
+      inFog = self:fogOver(outdoor),
       heal = Bots.wantsHeal(rec) and door or nil,
       -- loot is only an errand while something there can be taken: any
       -- of it with room in the party, just the bags without
@@ -3137,6 +3301,9 @@ return function(mod)
       p.lastRoam = 0
       return nil
     end
+    -- the door's warp rides the heal goal: the doorstep is the first leg
+    -- of a walk THROUGH it (BR-35)
+    if g.kind == "heal" then g.warp = door.warp end
     g.map, g.at = p.map, now or 0
     return g
   end
@@ -3157,13 +3324,31 @@ return function(mod)
       -- door was the nurse (POK-158)
       if p.dwellKind == "grass" then self:botCatch(id, p)
       elseif p.dwellKind == "item" then self:botLoot(id, p)
-      elseif p.dwellKind == "heal" then self:botHeal(id, p) end
+      elseif p.dwellKind == "counter" then
+        -- healed at the counter (BR-35), and the way out is the next leg
+        self:botHeal(id, p)
+        p.goal, p.path = self:exitLeg(p, now), nil
+      end
       p.dwellKind = nil
     end
 
+    -- the beat after a step onto a door or a mat (BR-35): through it
+    if p.through then
+      local t = p.through
+      p.through = nil
+      if t.kind == "in" then self:enterCentre(id, p, t, now)
+      else self:leaveCentre(id, p, t, now) end
+      return nil
+    end
+
     local goal = p.goal
+    -- a seam walk and the Centre's legs are long by nature and get the
+    -- long clock; a route is more than twenty seconds across
+    local limit = (goal and (goal.kind == "seam" or goal.kind == "heal"
+                             or goal.kind == "counter" or goal.kind == "exit"))
+      and Bots.LONG_GOAL_SECONDS or Bots.GOAL_SECONDS
     local stale = not goal or goal.map ~= p.map
-      or (now and (now - (goal.at or 0)) > Bots.GOAL_SECONDS)
+      or (now and (now - (goal.at or 0)) > limit)
     if stale then
       p.goal, p.path = self:pickBotGoal(id, p, now), nil
       goal = p.goal
@@ -3171,6 +3356,17 @@ return function(mod)
     if not goal then return nil end
 
     if p.x == goal.x and p.y == goal.y then
+      -- the edge: off the map, the way a player leaves one (BR-32)
+      if goal.kind == "seam" then return self:walkSeam(id, p, goal, now) end
+      -- the doorstep or the cell above the mat: one real step onto the
+      -- warp tile -- which canWalk refuses for every other purpose
+      -- (POK-94) -- and the warp fires on the next beat (BR-35)
+      if goal.kind == "heal" or goal.kind == "exit" then
+        p.goal, p.path = nil, nil
+        p.through = { kind = goal.kind == "heal" and "in" or "out",
+                      warp = goal.warp, mat = goal.mat }
+        return goal.kind == "heal" and "up" or "down"
+      end
       local dwell = Bots.DWELL[goal.kind] or 0
       if dwell > 0 then
         p.dwellUntil = (now or 0) + dwell
@@ -3230,7 +3426,7 @@ return function(mod)
   -- turns back into shuffling -- which a spectator at three-left watched
   -- a bot do indefinitely.  A stalk deserves what errands already have:
   -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
-  function BR:stepBotHunt(id, p, prey)
+  function BR:stepBotHunt(id, p, prey, alive)
     -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
     -- not stay over its head while it walks somebody down
     if p.busy then self:markBot(id, p, nil) end
@@ -3240,7 +3436,9 @@ return function(mod)
       p.huntPath, p.huntFor = nil, nil
       return nil
     end
-    if p.rng() < 0.2 then return nil end -- the wobble the wander had
+    -- the wobble the wander had -- but not at the end (BR-29): the last
+    -- three walk AT each other every beat
+    if (alive or math.huge) > Bots.ALL_IN and p.rng() < 0.2 then return nil end
     -- with SURF on the team, the path may cross the bay (POK-158 M4)
     local cross = botCross(id)
     local stale = not (p.huntPath and p.huntPath[1])
@@ -3293,8 +3491,11 @@ return function(mod)
       -- cleared the moment the battle opens, so without this the opponent
       -- resumed roaming behind the battle screen and its loot spilled
       -- wherever it had wandered to by the end
+      -- ...and neither side of a walk-up (BR-34): the one seen has
+      -- stopped, and the seer's steps are tickBotApproaches' to make
       if p.bot and p.status == "alive" and p.map and id ~= striding
-         and id ~= self.botFight and not self.inDuel[id] then
+         and id ~= self.botFight and not self.inDuel[id]
+         and not self.botApproaching[id] then
         -- cached on the bot beside its rng, for the same reason: derived
         -- from (seed, id) and constant for the match
         p.tier = p.tier or Bots.tier(self.matchSeed, id)
@@ -3306,8 +3507,9 @@ return function(mod)
         -- the "pre-heal, then hunt" beat backwards.  An unreachable door
         -- clears the goal (stepBotErrand's path failure), so this cannot
         -- pin a bot to a map it can never heal on.
-        local nursing = (p.goal and p.goal.kind == "heal")
-          or p.dwellKind == "heal"
+        local nursing = (p.goal and (p.goal.kind == "heal" or p.goal.kind == "counter"
+                                     or p.goal.kind == "exit"))
+          or p.dwellKind == "counter" or p.through ~= nil or p.came ~= nil
         -- ...nor out from under a STALK (POK-160): the roam clock kept
         -- running while a bot walked prey down, so every 15-25s the hunt
         -- was teleported into a connected map and all the closing was
@@ -3318,8 +3520,8 @@ return function(mod)
         -- deferring roam on a fogged map would let prey bait a bot into
         -- the fog and camp there while it burned)
         local preyHere = false
-        if self.phase == "match" and p.map and not self:fogOver(p.map)
-           and not Bots.wantsHeal(self:botRecord(id)) then
+        if self.phase == "match" and p.map and not self:fogOver(self:botOutdoor(p))
+           and not self:botStandsDown(id, p, alive) then
           if meHere and meHere.mapId == p.map then preyHere = true end
           if not preyHere then
             for otherId, o in pairs(self.players) do
@@ -3364,7 +3566,7 @@ return function(mod)
           -- bot took us on the spot.  Skipping it (and a peer marked
           -- mid-fight) sends them at each other.
           local prey
-          if not Bots.wantsHeal(self:botRecord(id)) then
+          if not self:botStandsDown(id, p, alive) then
             if meHere and meHere.mapId == p.map then
               prey = { x = meHere.x, y = meHere.y }
             end
@@ -3392,7 +3594,18 @@ return function(mod)
           -- watched bot must never do.
           local dir
           if prey then
-            dir = self:stepBotHunt(id, p, prey)
+            -- a trainer in sight and a wound in the team: the bag first
+            -- (BR-30's row), one sip a beat while it closes -- and the
+            -- stalk goes on regardless of what is left to drink
+            local rec = self:botRecord(id)
+            if Bots.wantsHeal(rec) then
+              local drank = Bots.quaff(rec, rec.bag)
+              if drank then
+                log:say("POTION: %s used its %s", tostring(p.name), tostring(drank))
+                if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+              end
+            end
+            dir = self:stepBotHunt(id, p, prey, alive)
           elseif self.phase ~= "match" then
             dir = Bots.wander(p, p.rng, canWalk, nil)
           else
@@ -4099,7 +4312,8 @@ return function(mod)
 
     for id, p in pairs(self.players) do
       if p.bot and p.status == "alive" and p.map and not self.inDuel[id]
-         and not Fog.isSafe(locations, p.map, self.ring.center, self.ring.radius) then
+         and not Fog.isSafe(locations, self:botOutdoor(p),
+                            self.ring.center, self.ring.radius) then
         -- ticks, not hit points: the bite is a fraction of maximum HP, so the
         -- same count of them finishes a team at any rung of the ladder, and
         -- nothing here has to know how big a level 100 bot is
@@ -5383,6 +5597,8 @@ return function(mod)
   -- teaches, a stone evolves, exactly as from the START menu.
   local MONEY_ROW = "money"
 
+  local TAKE_ALL_ROW = "takeall"
+
   function BR:lootRows(key)
     local game = self.game
     local ball = self.spills:get(key)
@@ -5396,7 +5612,56 @@ return function(mod)
     if bag and (bag.money or 0) > 0 then
       rows[#rows + 1] = { value = MONEY_ROW, label = ("¥%d"):format(bag.money) }
     end
+    -- the lot in one press (BR-31): at two-left that is everyone
+    if #rows > 0 then
+      table.insert(rows, 1, { value = TAKE_ALL_ROW, label = "TAKE ALL" })
+    end
     return rows
+  end
+
+  -- TAKE ALL (BR-31): every stack the pack has room for and the money,
+  -- in one press, one line per kind.  What does not fit stays on the
+  -- ground -- a stack is taken whole or not at all, as lootTake takes it.
+  function BR:lootTakeAll(key)
+    local game = self.game
+    local save = game.save
+    local ball = self.spills:get(key)
+    local bag = ball and ball.bag
+    if not bag then
+      say("It's gone --\nsomeone was\nquicker.")
+      self:refreshLoot(key)
+      return false
+    end
+    local Bag = require("src.inventory.Bag")
+    local stacks = {}
+    for _, it in ipairs(bag.items or {}) do stacks[#stacks + 1] = { id = it.id, n = it.n } end
+    local lines, left = {}, 0
+    for _, it in ipairs(stacks) do
+      if Bag.add(save, it.id, it.n, game.data) then
+        self.spills:takeItem(key, it.id, it.n)
+        if self.relay then self.relay:broadcast(Wire.took(key, it.id, it.n)) end
+        local def = game.data.items and game.data.items[it.id]
+        lines[#lines + 1] = ("Took %s x%d!"):format((def and def.name) or it.id, it.n)
+      else
+        left = left + 1
+      end
+    end
+    if (bag.money or 0) > 0 then
+      local got = bag.money
+      save.money = math.min(999999, (save.money or 0) + got)
+      self.spills:takeItem(key, nil, nil, true)
+      if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
+      lines[#lines + 1] = ("Took ¥%d!"):format(got)
+    end
+    self:refreshLoot(key)
+    if #lines == 0 then
+      say("You can't carry\nany more!")
+      return false
+    end
+    if left > 0 then lines[#lines + 1] = "The rest won't\nfit." end
+    log:say("LOOT: took all from %s's bag (%d kinds)", tostring(bag.name), #lines)
+    say(table.concat(lines, "\n"))
+    return true
   end
 
   -- Redraw the open loot list after the bag changed -- ours or a rival's
@@ -5494,6 +5759,10 @@ return function(mod)
 
   function BR:lootChoose(key, id)
     local game = self.game
+    if id == TAKE_ALL_ROW then
+      self:lootTakeAll(key)
+      return
+    end
     local Menu = require("src.ui.Menu")
     local rows = {}
     if id ~= MONEY_ROW then
@@ -5705,15 +5974,19 @@ return function(mod)
   -- Walking a connection is the same move a player makes at a route seam,
   -- so it costs nothing in fiction and it is what makes the roster interact.
 
-  -- Resolve one meeting per tick, host-side and abstractly.  There is no
-  -- lockstep to run because neither side is a client, and nobody is owed a
-  -- battle screen for a fight they are not in -- a player watching the map
-  -- sees one trainer walk off and the other's team hit the ground, which is
-  -- what a fight between two strangers looks like from across a route.
+  -- One sighting per tick, host-side.  A fight between two bots used to
+  -- open the beat they came within three cells of each other, walls
+  -- ignored, and froze both where they stood -- four cells apart with a
+  -- fence between them, both wearing the fighting mark (BR-34).  Now it
+  -- is the scene a player gets from the outside: one sees the other
+  -- (botSighting), the one seen stops, the seer walks over
+  -- (tickBotApproaches), they face, the marks go up, and only then does
+  -- the fight open (openBotDuel).
   function BR:tickBotFights()
     if not (self.relay and self.relay:isHost() and self.phase == "match") then return end
     local now = clock()
     if not now then return end
+    self:tickBotApproaches(now)
     local live = {}
     for id, p in pairs(self.players) do
       -- the bot in OUR battle screen is not free to be jumped (POK-154).
@@ -5723,7 +5996,7 @@ return function(mod)
       -- could fight at all, which an accelerated driver sits entirely
       -- inside.)
       if p.bot and p.status == "alive" and p.map and id ~= self.botFight
-         and not self.inDuel[id]
+         and not self.inDuel[id] and not self.botApproaching[id]
          and (not p.lastFight
               or (now - p.lastFight) >= Bots.FIGHT_COOLDOWN) then
         live[#live + 1] = { id = id, p = p }
@@ -5733,34 +6006,157 @@ return function(mod)
     for i = 1, #live do
       for j = i + 1, #live do
         local a, b = live[i], live[j]
-        if Bots.near(a.p, b.p) then
-          a.p.lastFight, b.p.lastFight = now, now
-          -- a real fight, off screen, recorded for whoever is watching
-          -- (tickBotDuels settles it); the coin below is the fallback
-          if self:startBotDuel(a, b) then return end
-          -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
-          -- times what each team has left, an upset still possible, and
-          -- the winner walks away hurt.  The loser's record is what the
-          -- spill puts on the ground; the winner's scars ride a botrec so
-          -- every client carries them into its next fight.
-          local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
-                                      self.game and self.game.data,
-                                      function() return love.math.random() end)
-          local winner = (w == "a") and a or b
-          local loser = (w == "a") and b or a
-          self:eliminateBot(loser.id, loser.p, winner.p.name)
-          local wrec = self:botRecord(winner.id)
-          local drank = Bots.quaff(wrec, wrec.bag)
-          if drank then
-            log:say("POTION: %s used its %s", tostring(winner.p.name),
-                    tostring(drank))
+        if a.p.map == b.p.map then
+          local seer, seen = self:botSighting(a, b)
+          if seer then
+            self:startBotApproach(seer, seen, now)
+            return
           end
-          if self.relay then
-            self.relay:broadcast(Wire.botrec(winner.id, wrec))
-          end
-          return
         end
       end
+    end
+  end
+
+  -- Who saw whom (BR-34).  The rule players are engaged by: down the
+  -- facing, Bots.SIGHT cells, stopped by terrain (Engage.sightLine with
+  -- the map's own walkability -- not through a fence, not over water).
+  -- The old NOTICE at three cells still counts -- two bots that blunder
+  -- into each other side-on still fight, or nobody thins the roster --
+  -- but only with a clear line between them (Bots.clearBetween).
+  -- Returns seer, seen (each { id=, p= }) or nil.
+  function BR:botSighting(a, b)
+    local data = self.game and self.game.data
+    if not data then return nil end
+    local mapId = a.p.map
+    local blocked = function(x, y)
+      return not Spawn.walkable(data.maps, data.tilesets, mapId, x, y)
+    end
+    local function shape(e)
+      return { id = e.id, map = e.p.map, x = e.p.x, y = e.p.y,
+               facing = e.p.facing or "down", moving = false,
+               status = "alive", busy = e.p.busy == "battle" }
+    end
+    local sa, sb = shape(a), shape(b)
+    if Engage.target(sa, { sb }, { range = Bots.SIGHT, blocked = blocked }) == b.id then
+      return a, b
+    end
+    if Engage.target(sb, { sa }, { range = Bots.SIGHT, blocked = blocked }) == a.id then
+      return b, a
+    end
+    if Bots.near(a.p, b.p) and Bots.clearBetween(a.p, b.p, blocked) then
+      -- the one not stopped on an errand walks; failing that the lower id
+      if a.p.dwellUntil and not b.p.dwellUntil then return b, a end
+      return a, b
+    end
+    return nil
+  end
+
+  -- The seer walks over; the seen one STOPS, the way the engine freezes
+  -- a player the moment a trainer's ! goes up.  Neither is in the fight
+  -- yet: either may still be jumped by a player or taken by the fog, and
+  -- the marks that say "fighting" wait for the duel.  The ! over the
+  -- seer's head is a mark of its own kind, drawn as the exclamation on
+  -- every screen, that neither blocks a jump nor reads as a fight.
+  function BR:startBotApproach(seer, seen, now)
+    self.botApproach[seer.id] = { to = seen.id, at = 0, steps = 0, startedAt = now }
+    self.botApproaching[seer.id], self.botApproaching[seen.id] = true, true
+    seer.p.path, seen.p.path = nil, nil
+    self:markBot(seer.id, seer.p, "spot")
+    log:say("SPOTTED: %s sees %s", tostring(seer.p.name), tostring(seen.p.name))
+  end
+
+  -- Turn a bot, once, and tell the room.
+  function BR:faceBot(id, p, facing)
+    if not facing or p.facing == facing then return end
+    p.facing = facing
+    self.ghosts:face(id, facing)
+    if self.relay then self.relay:broadcast(Wire.face(facing, p.map, id)) end
+  end
+
+  function BR:tickBotApproaches(now)
+    for seerId, ap in pairs(self.botApproach) do
+      local a, b = self.players[seerId], self.players[ap.to]
+      local function release()
+        self.botApproach[seerId] = nil
+        self.botApproaching[seerId], self.botApproaching[ap.to] = nil, nil
+        if a and a.busy == "spot" then self:markBot(seerId, a, nil) end
+      end
+      -- called off, under the cooldown, so the same sighting does not
+      -- fire again next tick
+      local function callOff()
+        if a then a.lastFight = now end
+        if b then b.lastFight = now end
+        release()
+      end
+      local live = a and b and a.status == "alive" and b.status == "alive"
+        and a.map == b.map and self.phase == "match"
+        and seerId ~= self.botFight and ap.to ~= self.botFight
+      if not live then
+        -- jumped, fogged, or the match moved on
+        callOff()
+      elseif Bots.adjacent(a, b) then
+        -- face to face, and only now the fight
+        self:faceBot(seerId, a, Bots.facingToward(a, b))
+        self:faceBot(ap.to, b, Bots.facingToward(b, a))
+        release()
+        self:openBotDuel({ id = seerId, p = a }, { id = ap.to, p = b }, now)
+      elseif (now - (ap.at or 0)) >= Bots.WALKUP_SECONDS then
+        ap.at = now
+        if ap.steps >= Bots.APPROACH_STEPS then
+          callOff()
+        else
+          local cross = botCross(seerId)
+          if not (ap.path and ap.path[1]) then
+            ap.path = Bots.pathToAny(function(x, y) return cross(a.map, x, y) end,
+              { x = a.x, y = a.y },
+              function(x, y) return (math.abs(x - b.x) + math.abs(y - b.y)) == 1 end)
+          end
+          if not ap.path then
+            callOff()   -- walled off after all: not a fight
+          else
+            local dir = table.remove(ap.path, 1)
+            local d = dir and Bots.DELTA[dir]
+            if d and cross(a.map, a.x + d[1], a.y + d[2]) then
+              ap.steps = ap.steps + 1
+              a.facing = dir
+              a.x, a.y = a.x + d[1], a.y + d[2]
+              a.stepsTaken = (a.stepsTaken or 0) + 1
+              self.relay:broadcast(Wire.step(dir, a.x, a.y, a.map, seerId))
+              self.ghosts:pushStep(seerId, dir)
+            else
+              ap.path = nil   -- somebody moved into us; repath next beat
+            end
+          end
+        end
+      end
+    end
+  end
+
+  -- Two bots face to face: the fight.  A real one off screen, recorded
+  -- for whoever is watching (tickBotDuels settles it); the coin below is
+  -- the fallback when one cannot be built.
+  function BR:openBotDuel(a, b, now)
+    a.p.lastFight, b.p.lastFight = now, now
+    if self:startBotDuel(a, b) then return end
+    -- The RECORDS fight (POK-158 M3), not a coin: base-stat power
+    -- times what each team has left, an upset still possible, and
+    -- the winner walks away hurt.  The loser's record is what the
+    -- spill puts on the ground; the winner's scars ride a botrec so
+    -- every client carries them into its next fight.
+    local w = Bots.resolveFight(self:botRecord(a.id), self:botRecord(b.id),
+                                self.game and self.game.data,
+                                function() return love.math.random() end)
+    local winner = (w == "a") and a or b
+    local loser = (w == "a") and b or a
+    self:eliminateBot(loser.id, loser.p, winner.p.name)
+    local wrec = self:botRecord(winner.id)
+    local drank = Bots.quaff(wrec, wrec.bag)
+    if drank then
+      log:say("POTION: %s used its %s", tostring(winner.p.name),
+              tostring(drank))
+    end
+    if self.relay then
+      self.relay:broadcast(Wire.botrec(winner.id, wrec))
     end
   end
 
@@ -7987,7 +8383,8 @@ return function(mod)
           -- position would float the bubble off the sprite mid-step
           if npc and npc.px and npc.py then
             local quad = emoteQuad(bubbles, sheet,
-                                   p.busy == "battle" and "EXCLAMATION_BUBBLE"
+                                   (p.busy == "battle" or p.busy == "spot")
+                                   and "EXCLAMATION_BUBBLE"
                                    or "QUESTION_BUBBLE")
             -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
             -- mapped from the WORLD pass onto this canvas (POK-166): the
@@ -8426,13 +8823,42 @@ return function(mod)
   mod.exports.openSpill = function(key) return BR:openSpill(key) end
   -- a test hook, like debugSpill: the host drops a bot at a cell, so a
   -- smoke can stage an engage instead of praying for one
-  mod.exports.debugPlaceBot = function(id, map, x, y)
+  mod.exports.debugPlaceBot = function(id, map, x, y, facing)
     local p = BR.players[id]
     if not (p and BR.relay) then return false end
-    p.map, p.x, p.y, p.facing = map, x, y, "down"
+    p.map, p.x, p.y, p.facing = map, x, y, facing or "down"
+    -- a placed bot starts afresh: no errand, no Centre it was inside, no
+    -- walk-up it was on
+    p.goal, p.path, p.came, p.through = nil, nil, nil, nil
+    p.dwellUntil, p.dwellKind = nil, nil
+    if BR.botApproaching[id] then
+      for seer, ap in pairs(BR.botApproach) do
+        if seer == id or ap.to == id then
+          BR.botApproach[seer] = nil
+          BR.botApproaching[seer], BR.botApproaching[ap.to] = nil, nil
+        end
+      end
+    end
     BR.ghosts:despawn(id)
-    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, "down", p.status, p.sprite, id))
+    BR.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
     return true
+  end
+  -- turn a bot from outside, for a driver staging a sighting (BR-34)
+  mod.exports.debugFaceBot = function(id, facing)
+    local p = BR.players[id]
+    if not (p and BR.relay and Bots.DELTA[facing]) then return false end
+    BR:faceBot(id, p, facing)
+    return true
+  end
+  -- what a ghost is drawn on right now (BR-33): "surf" on the water
+  mod.exports.ghostSheet = function(id) return BR.ghosts:sheetOf(id) end
+  -- the walk-ups in flight (BR-34): seer -> { to, steps }
+  mod.exports.botApproaches = function()
+    local out = {}
+    for seer, ap in pairs(BR.botApproach) do
+      out[#out + 1] = { seer = seer, to = ap.to, steps = ap.steps }
+    end
+    return out
   end
   -- Put a mark over somebody's head from outside (POK-113).  A bot never
   -- sends `busy` -- it is simulated, not played -- so this is the only way
@@ -8658,9 +9084,16 @@ return function(mod)
           sinceFight = now - (p.lastFight or 0),
           -- what it is doing with its feet, for POK-160's probes
           goal = p.goal and p.goal.kind or nil,
+          goalAt = p.goal and { x = p.goal.x, y = p.goal.y, dest = p.goal.dest } or nil,
           hunting = (p.huntFor and true) or false,
           pathLeft = p.huntPath and #p.huntPath or nil,
           beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
+          -- seams walked rather than skipped (BR-32), and the town a bot
+          -- inside a Centre is judged on (BR-35)
+          seams = p.seamsWalked or 0,
+          came = p.came and p.came.id or nil,
+          approaching = BR.botApproaching[id] and true or false,
+          facing = p.facing, busy = p.busy,
           dwell = (p.dwellUntil and p.dwellUntil > now)
             and (p.dwellUntil - now) or nil,
         }
