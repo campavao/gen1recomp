@@ -801,6 +801,7 @@ decoders.bmir = function(m)
     out.hp = hpPair(f.hp)
     out.rolls = clampInt(f.rolls, 0, 1e9, nil)
     out.trace = shortString(f.trace, 400)
+    out.sig = shortString(f.sig, 300)
     if f.k == "move" then
       out.slot = clampInt(f.slot, 1, 4, nil)
       if not out.slot then return nil, "bad move slot" end

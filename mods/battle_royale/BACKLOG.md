@@ -314,6 +314,17 @@ roll-by-roll trace on both ends.
 Open: a host handover mid-duel loses the fight (the new host sees two
 bots with a stale `battle` mark until they next move).
 
+Open too: in the user's second 30-bot match (2026-09-05, log read), the
+replica's out-of-step recovery fired five times in 25 duels -- the fight
+lost a mon while the replica's was still standing -- with roll counts AND
+both actives' HP matching at the start of every turn. So the difference
+is inside a turn and not in the dice: stat stages, status, PP or a bench
+mon are the candidates. Every action frame now carries a per-turn state
+signature (`Mirror.signature`: both actives' species/HP/status/stages/PP
+and both benches) and the replica logs `mirror: turn N, the state differs
+before <k>` with both strings when they disagree. Three driver runs since
+showed none; the next long spectated match will name the field.
+
 ### BR-13 · See the spectated player's party and items — DONE (POK-18)
 
 **Resolved 2026-08-24:** pull, not push. A spectator unicasts `peek` to

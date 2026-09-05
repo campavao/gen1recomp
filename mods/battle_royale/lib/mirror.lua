@@ -110,6 +110,37 @@ local function indexIn(list, mon)
   return nil
 end
 
+-- The state a turn starts from, as a short string: both actives (species,
+-- HP, status, stat stages, PP) and both benches (species, HP).  Every
+-- action frame carries the fight's; the replica compares it with its own
+-- before applying the action, and a mismatch names the field that drifted
+-- -- the same idea as LinkBattle's per-turn hash, kept readable.
+local function battlerSig(b)
+  if not (b and b.mon) then return "-" end
+  local st = {}
+  for _, k in ipairs(STAGES) do st[#st + 1] = tostring((b.stages or {})[k] or 0) end
+  local pp = {}
+  for _, mv in ipairs(b.mon.moves or {}) do pp[#pp + 1] = tostring(mv.id) .. "=" .. tostring(mv.pp or 0) end
+  return ("%s:%d:%s:%s:%s"):format(tostring(b.mon.species), b.mon.hp or 0,
+                                   tostring(b.mon.status), table.concat(st, ","),
+                                   table.concat(pp, ","))
+end
+
+local function benchSig(list)
+  local out = {}
+  for _, mon in ipairs(list or {}) do
+    out[#out + 1] = tostring(mon.species) .. ":" .. tostring(mon.hp or 0)
+  end
+  return table.concat(out, "|")
+end
+
+function Mirror.signature(battle)
+  local mine = type(battle.playerPartyView) == "function" and battle:playerPartyView()
+               or battle.playerParty
+  return (battlerSig(battle.player) .. " / " .. battlerSig(battle.enemy) .. " // "
+          .. benchSig(mine) .. " / " .. benchSig(battle.enemyParty)):sub(1, 300)
+end
+
 -- ------- recording (the watched client)
 
 -- battle: a live BattleState (wild or trainer; a duel goes through
@@ -167,6 +198,7 @@ function Mirror.record(battle, opts)
   local function act(frame)
     frame.hp = hpNow()
     frame.rolls = rec.rolls
+    frame.sig = Mirror.signature(battle)
     if Mirror.DEBUG then
       frame.trace = table.concat(rec.trace, "|"):sub(1, 400)
       rec.trace = {}
@@ -675,6 +707,14 @@ local function openLocal(game, start, opts)
       self.mirrorRolls = f.rolls
     end
     self.mirrorTrace = {}
+    if f.sig then
+      local mine = Mirror.signature(self)
+      if mine ~= f.sig then
+        log("mirror: turn %d, the state differs before %s", self.turnCount or 0, tostring(f.k))
+        log("mirror:   here  %s", mine)
+        log("mirror:   fight %s", f.sig)
+      end
+    end
     snap(self, f.hp)
     if f.k == "move" then
       local mv = self.player.curMoves[f.slot]
