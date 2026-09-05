@@ -178,7 +178,7 @@ function Lobby.status(BR)
   if trouble then return trouble end
   -- (the daily's clock is the header; it armed the same countdown, and
   -- saying it twice on one screen was the first thing the user saw)
-  local countdown = not BR.dailyLobby and BR.startsIn and BR:startsIn()
+  local countdown = not BR.dailyLobby and Lobby.startsIn(BR)
   if countdown then return "STARTS IN " .. tostring(countdown) end
   if BR.lastResult then
     if BR.lastResult.won then return "YOU WIN!" end
@@ -189,6 +189,19 @@ function Lobby.status(BR)
   if BR.isSpectating and BR:isSpectating() then return "YOU PLAY NEXT" end
   if not host then return "WAIT FOR HOST" end
   return nil
+end
+
+-- Seconds until the clock starts the match, or nil: the host's own, or
+-- the one the host's place message carried, counted down on this
+-- client's wall clock from the moment it arrived.
+function Lobby.startsIn(BR)
+  local relay = BR.relay
+  if relay and relay:isHost() then return BR.startsIn and BR:startsIn() end
+  local hp = BR.players and relay and BR.players[relay.hostId]
+  if not (hp and hp.startsAt) then return nil end
+  local now = (love and love.timer and love.timer.getTime and love.timer.getTime())
+    or (BR.now and BR:now()) or 0
+  return math.max(0, math.ceil(hp.startsAt - now))
 end
 
 -- What the bottom-right button says.  OPTIONS is the host's, and only

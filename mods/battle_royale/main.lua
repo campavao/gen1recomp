@@ -466,15 +466,20 @@ return function(mod)
     -- dealt from, so every lobby shows the seats the drop will hold
     -- (lib/lobby.lua reads both off the host).  The seed is rolled HERE,
     -- at the first place a host sends, rather than at START MATCH.
-    local fill, seed
+    -- ...and the clock, as seconds left, so a guest of a quick room sees
+    -- STARTS IN rather than waiting on a host who is not going to press
+    -- anything (the guest's own clock is set from it on arrival)
+    local fill, seed, countdown
     if BR.relay:isHost() then
       fill = BR.fillTo or 0
       BR.lobbySeed = BR.lobbySeed or BR:rollSeed()
       seed = BR.lobbySeed
+      countdown = BR:startsIn()
     end
     BR.relay:broadcast(Wire.place(h and h.mapId, h and h.x, h and h.y,
                                   h and h.facing, BR.status, mySprite(),
-                                  nil, build(), BR:winCount(), fill, seed))
+                                  nil, build(), BR:winCount(), fill, seed,
+                                  countdown))
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
@@ -724,11 +729,15 @@ return function(mod)
         broadcastPlace()
       end
       BR.lastRoster = #members
-      -- forget anyone who left; the host recounts survivors
+      -- forget anyone who left; the host recounts survivors.  Anyone
+      -- HUMAN: a bot is never on the relay's roster, and forgetting the
+      -- bots here handed the host the match the moment a guest left --
+      -- twenty-eight bots standing and YOU WIN! on the lobby (found on
+      -- 2026-09-05's two-client run, present since bots existed).
       local present = {}
       for _, m in ipairs(members) do present[m.id] = true end
       for id in pairs(BR.players) do
-        if not present[id] then
+        if not present[id] and not Bots.isBot(id) then
           -- if the one who left is who we are fighting, end the battle as a
           -- pulled cable rather than waiting on a move that never comes
           if BR.battle and BR.battle.opponentId == id then
@@ -2029,6 +2038,11 @@ return function(mod)
       p.wins = msg.wins or p.wins
       if msg.fill ~= nil then p.fill = msg.fill end
       if msg.lobbySeed ~= nil then p.lobbySeed = msg.lobbySeed end
+      -- the host's clock, pinned to OUR wall clock at arrival (theirs is
+      -- not ours); nil from a host with no clock running clears it
+      if fromId == self.relay.hostId and actor == fromId and self.phase == "lobby" then
+        p.startsAt = msg.countdown and (love.timer.getTime() + msg.countdown) or nil
+      end
       p.status = msg.status
       -- keep the first answer rather than the latest: a resync from a bot
       -- the host is puppeting carries no build, and "no build in this

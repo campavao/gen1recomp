@@ -51,6 +51,10 @@ do
      "a negative fill is dropped")
   eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", sd = 0 }).lobbySeed, nil,
      "and a zero seed")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, nil, nil, nil, 37)).countdown, 37,
+     "the host's clock rides the place too")
+  eq(m.countdown, nil, "...and is absent when none is running")
   ok(m ~= nil, "place round-trips")
   eq(m and m.status, "alive", "place carries status")
   eq(m and m.sprite, "SPRITE_RED", "place carries sprite")
@@ -2729,6 +2733,25 @@ end
 -- for an alive player after the drop.  luacheck would say so; it is not on
 -- this machine, so this says so.
 
+-- ------- a guest leaving mid-match does not hand the host the match
+--
+-- The roster handler forgets whoever is no longer on the relay's member
+-- list.  A bot never was, so the forget loop wiped every bot the moment
+-- a human left, and checkWinner found the host alone: YOU WIN! with
+-- twenty-eight bots standing (the 2026-09-05 two-client run).  The loop
+-- has to skip bot ids, and this pins that it does.
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    local forget = src:match("forget anyone who left; the host recounts survivors.-BR%.players%[id%] = nil")
+    ok(forget ~= nil, "the roster handler's forget loop is where it was")
+    ok(forget and forget:find("not Bots%.isBot%(id%)") ~= nil,
+       "...and it leaves the bots alone: they are never on the roster")
+  end
+end
+
 do
   local f = io.open("mods/battle_royale/main.lua", "r")
   if not f then
@@ -3179,6 +3202,18 @@ do
     eq(labels(items), "WAIT FOR HOST|LEAVE", "a guest's rows are the wait and the way out")
     eq(Lobby.button(BR), "LEAVE", "a guest's button leaves")
     eq(Lobby.status(BR), "WAIT FOR HOST", "and the room says what they wait on")
+    -- ...unless the host's clock is running: the place message carried the
+    -- seconds left, pinned to this client's own wall clock on arrival, and
+    -- a quick guest is not waiting on anybody
+    BR.players[1] = { name = "RED", startsAt = 40 }
+    BR.now = function() return 0 end
+    eq(Lobby.status(BR), "STARTS IN 40", "the host's clock, on the guest's screen")
+    BR.now = function() return 12.4 end
+    eq(Lobby.status(BR), "STARTS IN 28", "...ticking on the guest's own wall clock")
+    BR.now = function() return 99 end
+    eq(Lobby.status(BR), "STARTS IN 0", "and never negative")
+    BR.players[1] = nil
+    BR.now = nil
     ok(Lobby.seats(BR)[2].me and not Lobby.seats(BR)[2].host, "the guest's seat is theirs")
     ok(not labels(Lobby.seatItems(BR, Lobby.seats(BR)[1])):find("REMOVE", 1, true),
        "a guest cannot remove anyone")

@@ -9,13 +9,15 @@
 -- envelope (see relay/server.js).  Field names are short because a step
 -- goes out roughly four times a second per player to every other player.
 --
---   {t="place", map=, x=, y=, f=, st=, sprite=, w=, fl=, sd=}
+--   {t="place", map=, x=, y=, f=, st=, sprite=, w=, fl=, sd=, cd=}
 --                                                 where I am + my status
 --                                                 (w: my career wins, for the
 --                                                 lobby's seat card; fl / sd:
 --                                                 the host's FILL target and
 --                                                 the room's seed, so a guest's
---                                                 lobby shows the same bots)
+--                                                 lobby shows the same bots;
+--                                                 cd: seconds until the host's
+--                                                 clock starts the match)
 --   {t="step",  d=, x=, y=, map=}                 a step just committed
 --   {t="face",  f=, map=}                         a turn in place
 --
@@ -173,11 +175,13 @@ local function count(v)
   return v and math.floor(v) or nil
 end
 
-function Wire.place(map, x, y, facing, status, sprite, as, build, wins, fill, seed)
+function Wire.place(map, x, y, facing, status, sprite, as, build, wins, fill, seed,
+                    countdown)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
            st = status, sprite = sprite, as = as,
            ev = build and build.engine, mv = build and build.mod,
-           w = count(wins), fl = count(fill), sd = count(seed) }
+           w = count(wins), fl = count(fill), sd = count(seed),
+           cd = count(countdown) }
 end
 
 function Wire.step(dir, x, y, map, as)
@@ -363,6 +367,8 @@ decoders.place = function(m)
                   and m.fl or nil,
            lobbySeed = (type(m.sd) == "number" and m.sd >= 1 and m.sd == math.floor(m.sd))
                   and m.sd or nil,
+           countdown = (type(m.cd) == "number" and m.cd >= 0 and m.cd == math.floor(m.cd))
+                  and m.cd or nil,
            build = (engine or modv) and { engine = engine, mod = modv } or nil }
 end
 
