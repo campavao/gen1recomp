@@ -435,6 +435,23 @@ rather than the errand picker plus separate gates it is today. BR-29 is
 the first two rows of the endgame column and should be fixed inside this,
 not beside it.
 
+### BR-32 · A bot crosses a seam by walking through it, not by appearing — OPEN
+
+**Seen 2026-09-05 (the user, spectating):** bots "fly" between maps --
+they vanish and are standing somewhere else, with no FLY animation and no
+walk. That is `roamBot` (main.lua, `p.map, p.x, p.y = dest, c.x, c.y`): a
+roam beat picks the next map by seam ranking and then drops the bot on a
+RANDOM walkable cell of it, despawning the ghost here and placing it
+there. Fine when nobody was looking; a camera glued to the bot (POK-30)
+sees a teleport. A player leaves a map through its edge or a door and
+arrives at the matching cell on the other side. So: the seam ranking picks
+the EXIT as it does now, the bot walks to that exit cell (the hunt path
+machinery, `Bots.path`), and the crossing lands it on the exit's connected
+cell on the far map -- the same warp the player takes -- so a spectator
+following it walks off one map and onto the next. A real FLY, when a bot
+has the move and the town is far (BR-30), would then be the one legitimate
+teleport, and could show the player's own fly-out animation over the ghost.
+
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
 Looting a bag is one row at a time through the loot list. A player who

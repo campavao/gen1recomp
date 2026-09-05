@@ -458,7 +458,14 @@ local function install(game, s, opts, applyFrame, frozen)
       return
     end
     local ok, err = pcall(function()
-      if #self.mirrorPending >= Mirror.CATCHUP_AT then
+      -- Catch-up is for the BACKLOG a late arrival is handed, never for
+      -- live lag: a fight that runs a shade faster on the other end must
+      -- not turn into a blur here.  The backlog is whatever was waiting
+      -- before the first frame of ours had played.
+      if self.mirrorBacklog == nil then
+        self.mirrorBacklog = #self.mirrorPending >= Mirror.CATCHUP_AT
+      end
+      if self.mirrorBacklog and #self.mirrorPending >= Mirror.CATCHUP_AT then
         local n = 0
         while n < Mirror.CATCHUP_TICKS and #self.mirrorPending >= Mirror.CATCHUP_AT do
           n = n + 1
@@ -466,6 +473,7 @@ local function install(game, s, opts, applyFrame, frozen)
           if self.mirrorClosed then break end
         end
       else
+        self.mirrorBacklog = false
         tick(self, dt, false)
       end
     end)

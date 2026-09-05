@@ -5737,207 +5737,211 @@ return function(mod)
     end
   end
 
-  -- ------- two bots fight for real (lib/mirror.lua Mirror.simulate)
-  --
-  -- A bot-versus-bot fight was one weighted coin flip on the host: team
-  -- power each side, a roll, the loser gone.  Now it is a real BattleState
-  -- the host runs off screen at a person's pace -- the first bot's team
-  -- where the player's would be, the second's as the trainer, both picking
-  -- moves with the trainer AI -- and recorded like any player's fight, so a
-  -- spectator watching either bot sees it on the battle screen.  The
-  -- wounds the winner walks away with are the fight's, not a formula's.
-  -- The coin flip stays as the fallback when a fight cannot be built.
-
-  local DUEL_LIMIT = 150   -- seconds of wall clock before a fight is called on HP
-
-  local function clampToRecord(party, idx, rec)
-    for k, recI in ipairs(idx or {}) do
-      local mon, m = party[k], rec[recI]
-      if mon and m and (m.hpFrac or 1) < 1 then
-        local maxHp = (mon.stats and mon.stats.hp) or mon.hp
-        if maxHp and maxHp > 0 then
-          mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
-        end
-      end
-    end
-  end
-
-  local function fracLeft(party)
-    local total, left = 0, 0
-    for _, mon in ipairs(party or {}) do
-      local mx = (mon.stats and mon.stats.hp) or 1
-      total = total + mx
-      left = left + math.max(0, mon.hp or 0)
-    end
-    return total > 0 and left / total or 0
-  end
-
-  -- A bot's team built the way the engine builds a trainer's -- through
-  -- newTrainer and the trainer.party hook -- so DVs, moves and special
-  -- moves come out exactly as they do when a player fights it.  Returns
-  -- the battle (its enemyParty is the team, wounded as the record says)
-  -- and the record indices its rows came from.
-  function BR:botDuelParty(pg, botId)
-    local rec = self:botRecord(botId)
-    local stone, pick = self:botEvo(botId)
-    local rows, idx = Bots.fightRows(rec, self:level(), self.game.data, stone, pick)
-    if #rows == 0 then return nil end
-    self:teachBotMoves(rows)
-    local look = self.players[botId]
-    local class = (look and look.class) or BOT_TRAINER_CLASS
-    self.botParty = rows
-    local ok, battle = pcall(function()
-      return require("src.battle.BattleState").newTrainer(pg, class, 1)
-    end)
-    self.botParty = nil
-    if not (ok and battle) then
-      mod.log:warn("bot duel: could not build %s's team (%s)", tostring(botId), tostring(battle))
-      return nil
-    end
-    self:botTrainerOverlay(battle, botId)
-    clampToRecord(battle.enemyParty, idx, rec)
-    return battle, idx
-  end
-
-  function BR:startBotDuel(a, b)
-    local game = self.game
-    if not game then return false end
-    local Mirror = require("mods.battle_royale.lib.mirror")
-    local Protocol = require("src.link.Protocol")
-    local quiet = { animations = false, battleStyle = "set" }
-    -- A's team, through a throwaway fight of its own
-    local pgA = Mirror.proxyGame(game, { name = a.p.name, party = {}, options = quiet })
-    local mine, idxA = self:botDuelParty(pgA, a.id)
-    if not mine then return false end
-    local partyA = mine.enemyParty
-    -- the fight itself: B is the trainer, A stands where the player would
-    local pg = Mirror.proxyGame(game, { name = a.p.name, party = partyA, options = quiet })
-    local battle, idxB = self:botDuelParty(pg, b.id)
-    if not battle then return false end
-    -- A's brain: the trainer AI B fights with, aimed the other way.  Its
-    -- own dice, not the battle's: the battle's stream is what the replica
-    -- follows, and the replica is told A's choice rather than making it.
-    local TrainerAI = require("src.battle.TrainerAI")
-    local dice = Mirror.makeRng(((self.matchSeed or 1) + a.id * 7919 + b.id * 104729) % 2147483646 + 1)
-    local view = setmetatable({
-      enemyAIMods = mine.enemyAIMods, trainer = mine.trainer,
-      ruleset = setmetatable({ enemyUnlimitedPP = false }, { __index = battle.ruleset }),
-    }, { __index = battle })
-    local function chooser(s)
-      view.player = s.enemy
-      local okC, mv = pcall(TrainerAI.chooseMove, s.player, dice, view)
-      if not okC then return nil end
-      for i, m in ipairs(s.player.curMoves) do if m == mv then return i end end
-      return nil
-    end
-    local okS, sim = pcall(Mirror.simulate, pg, battle, {
-      chooser = chooser, log = function(...) mod.log:warn(...) end,
-    })
-    if not okS then
-      mod.log:warn("bot duel: could not open the fight (%s)", tostring(sim))
-      return false
-    end
-    -- recorded for whoever is watching either bot
-    local tag, sentTo = self:battleTag(), {}
-    local okR, rec = pcall(Mirror.record, battle, {
-      kind = "trainer", pack = Protocol.packMon, myName = a.p.name, foeName = b.p.name,
-      badges = {}, send = self:mirrorSender(tag, sentTo, { a.id, b.id }),
-    })
-    if not okR then
-      mod.log:warn("bot duel: could not record the fight (%s)", tostring(rec))
-      sim:abort()
-      return false
-    end
-    rec.b, rec.sentTo = tag, sentTo
-    local d = { a = a.id, b = b.id, sim = sim, rec = rec, idxA = idxA, idxB = idxB,
-                partyA = partyA, partyB = battle.enemyParty, startedAt = clock() or 0 }
-    self.botDuels[#self.botDuels + 1] = d
-    self.inDuel[a.id], self.inDuel[b.id] = true, true
-    self:markBot(a.id, a.p, "battle")
-    self:markBot(b.id, b.p, "battle")
-    log:say("DUEL: %s vs %s", tostring(a.p.name), tostring(b.p.name))
-    -- the watchers already looking at either bot get the start at once
-    for _, id in ipairs({ a.id, b.id }) do
-      for wid in pairs(self.watchers[id] or {}) do self:noteWatcher(wid, id) end
-      if self.status == "out" and self.watching == id then self:noteWatcher("local", id) end
-    end
-    return true
-  end
-
-  function BR:tickBotDuels(dt)
-    if #(self.botDuels or {}) == 0 then return end
-    if not (self.relay and self.relay:isHost()) then return end
-    local now = clock() or 0
-    for i = #self.botDuels, 1, -1 do
-      local d = self.botDuels[i]
-      local a, b = self.players[d.a], self.players[d.b]
-      local gone = self.phase ~= "match"
-                   or not (a and b and a.status == "alive" and b.status == "alive")
-      if not gone then d.sim:tick(dt or 1 / 60) end
-      local called = (now - d.startedAt) > DUEL_LIMIT
-      if gone or d.sim.done or called then
-        table.remove(self.botDuels, i)
-        self.inDuel[d.a], self.inDuel[d.b] = nil, nil
-        if a then self:markBot(d.a, a, nil) end
-        if b then self:markBot(d.b, b, nil) end
-        if gone then
-          d.sim:abort()
-          d.rec:stop("ended")
-        else
-          self:finishBotDuel(d, called and not d.sim.done)
-        end
-      end
-    end
-  end
-
-  function BR:finishBotDuel(d, called)
-    local a, b = self.players[d.a], self.players[d.b]
-    local result = d.sim.result
-    local aWins
-    if called or d.sim.error or (result ~= "win" and result ~= "lose") then
-      -- out of clock, or the fight broke: whoever has more left standing
-      local fa, fb = fracLeft(d.partyA), fracLeft(d.partyB)
-      aWins = fa > fb or (fa == fb and love.math.random() < 0.5)
-      d.sim:abort()
-    else
-      aWins = result == "win"
-    end
-    d.rec:stop(aWins and "win" or "lose")
-    local winner = aWins and { id = d.a, p = a } or { id = d.b, p = b }
-    local loser = aWins and { id = d.b, p = b } or { id = d.a, p = a }
-    -- the wounds are the fight's: each of the winner's mons keeps exactly
-    -- what it had left when the last of the loser's fell
-    local wrec = self:botRecord(winner.id)
-    local party = aWins and d.partyA or d.partyB
-    local idx = aWins and d.idxA or d.idxB
-    local standing = 0
-    for k, recI in ipairs(idx or {}) do
-      local mon, m = party[k], wrec[recI]
-      if mon and m then
-        local mx = (mon.stats and mon.stats.hp) or 1
-        m.hpFrac = math.max(0, math.min(1, (mon.hp or 0) / math.max(1, mx)))
-        if m.hpFrac > 0 then standing = standing + 1 end
-      end
-    end
-    if standing == 0 then
-      -- a called fight can leave the winner flat; a winner stands
-      local m = wrec[(idx and idx[1]) or 1] or wrec[1]
-      if m then m.hpFrac = 0.1 end
-    end
-    local now = clock() or 0
-    if a then a.lastFight = now end
-    if b then b.lastFight = now end
-    log:say("DUEL OVER: %s beat %s after %d turns%s", tostring(winner.p and winner.p.name),
-            tostring(loser.p and loser.p.name), d.sim.battle.turnCount or 0,
-            called and " (called on time)" or "")
-    if loser.p then self:eliminateBot(loser.id, loser.p, winner.p and winner.p.name) end
-    local drank = Bots.quaff(wrec, wrec.bag)
-    if drank then
-      log:say("POTION: %s used its %s", tostring(winner.p and winner.p.name), tostring(drank))
-    end
-    if self.relay then self.relay:broadcast(Wire.botrec(winner.id, wrec)) end
-  end
-
+  -- ------- two bots fight for real (lib/mirror.lua Mirror.simulate)
+  --
+  -- A bot-versus-bot fight was one weighted coin flip on the host: team
+  -- power each side, a roll, the loser gone.  Now it is a real BattleState
+  -- the host runs off screen at a person's pace -- the first bot's team
+  -- where the player's would be, the second's as the trainer, both picking
+  -- moves with the trainer AI -- and recorded like any player's fight, so a
+  -- spectator watching either bot sees it on the battle screen.  The
+  -- wounds the winner walks away with are the fight's, not a formula's.
+  -- The coin flip stays as the fallback when a fight cannot be built.
+
+  local DUEL_LIMIT = 150   -- seconds of wall clock before a fight is called on HP
+
+  local function clampToRecord(party, idx, rec)
+    for k, recI in ipairs(idx or {}) do
+      local mon, m = party[k], rec[recI]
+      if mon and m and (m.hpFrac or 1) < 1 then
+        local maxHp = (mon.stats and mon.stats.hp) or mon.hp
+        if maxHp and maxHp > 0 then
+          mon.hp = math.max(1, math.floor(maxHp * m.hpFrac + 0.5))
+        end
+      end
+    end
+  end
+
+  local function fracLeft(party)
+    local total, left = 0, 0
+    for _, mon in ipairs(party or {}) do
+      local mx = (mon.stats and mon.stats.hp) or 1
+      total = total + mx
+      left = left + math.max(0, mon.hp or 0)
+    end
+    return total > 0 and left / total or 0
+  end
+
+  -- A bot's team built the way the engine builds a trainer's -- through
+  -- newTrainer and the trainer.party hook -- so DVs, moves and special
+  -- moves come out exactly as they do when a player fights it.  Returns
+  -- the battle (its enemyParty is the team, wounded as the record says)
+  -- and the record indices its rows came from.
+  function BR:botDuelParty(pg, botId)
+    local rec = self:botRecord(botId)
+    local stone, pick = self:botEvo(botId)
+    local rows, idx = Bots.fightRows(rec, self:level(), self.game.data, stone, pick)
+    if #rows == 0 then return nil end
+    self:teachBotMoves(rows)
+    local look = self.players[botId]
+    local class = (look and look.class) or BOT_TRAINER_CLASS
+    self.botParty = rows
+    local ok, battle = pcall(function()
+      return require("src.battle.BattleState").newTrainer(pg, class, 1)
+    end)
+    self.botParty = nil
+    if not (ok and battle) then
+      mod.log:warn("bot duel: could not build %s's team (%s)", tostring(botId), tostring(battle))
+      return nil
+    end
+    self:botTrainerOverlay(battle, botId)
+    clampToRecord(battle.enemyParty, idx, rec)
+    return battle, idx
+  end
+
+  function BR:startBotDuel(a, b)
+    local game = self.game
+    if not game then return false end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local Protocol = require("src.link.Protocol")
+    -- animations ON, though nobody here sees them: a spectator's replica
+    -- plays them, and a fight that ran quicker on this end than on theirs
+    -- piled frames up there until the replica had to hurry (the user's
+    -- 2026-09-05 "it got fast").  SET, so no SHIFT prompt to answer.
+    local pace = { animations = true, battleStyle = "set" }
+    -- A's team, through a throwaway fight of its own
+    local pgA = Mirror.proxyGame(game, { name = a.p.name, party = {}, options = pace })
+    local mine, idxA = self:botDuelParty(pgA, a.id)
+    if not mine then return false end
+    local partyA = mine.enemyParty
+    -- the fight itself: B is the trainer, A stands where the player would
+    local pg = Mirror.proxyGame(game, { name = a.p.name, party = partyA, options = pace })
+    local battle, idxB = self:botDuelParty(pg, b.id)
+    if not battle then return false end
+    -- A's brain: the trainer AI B fights with, aimed the other way.  Its
+    -- own dice, not the battle's: the battle's stream is what the replica
+    -- follows, and the replica is told A's choice rather than making it.
+    local TrainerAI = require("src.battle.TrainerAI")
+    local dice = Mirror.makeRng(((self.matchSeed or 1) + a.id * 7919 + b.id * 104729) % 2147483646 + 1)
+    local view = setmetatable({
+      enemyAIMods = mine.enemyAIMods, trainer = mine.trainer,
+      ruleset = setmetatable({ enemyUnlimitedPP = false }, { __index = battle.ruleset }),
+    }, { __index = battle })
+    local function chooser(s)
+      view.player = s.enemy
+      local okC, mv = pcall(TrainerAI.chooseMove, s.player, dice, view)
+      if not okC then return nil end
+      for i, m in ipairs(s.player.curMoves) do if m == mv then return i end end
+      return nil
+    end
+    local okS, sim = pcall(Mirror.simulate, pg, battle, {
+      chooser = chooser, log = function(...) mod.log:warn(...) end,
+    })
+    if not okS then
+      mod.log:warn("bot duel: could not open the fight (%s)", tostring(sim))
+      return false
+    end
+    -- recorded for whoever is watching either bot
+    local tag, sentTo = self:battleTag(), {}
+    local okR, rec = pcall(Mirror.record, battle, {
+      kind = "trainer", pack = Protocol.packMon, myName = a.p.name, foeName = b.p.name,
+      badges = {}, send = self:mirrorSender(tag, sentTo, { a.id, b.id }),
+    })
+    if not okR then
+      mod.log:warn("bot duel: could not record the fight (%s)", tostring(rec))
+      sim:abort()
+      return false
+    end
+    rec.b, rec.sentTo = tag, sentTo
+    local d = { a = a.id, b = b.id, sim = sim, rec = rec, idxA = idxA, idxB = idxB,
+                partyA = partyA, partyB = battle.enemyParty, startedAt = clock() or 0 }
+    self.botDuels[#self.botDuels + 1] = d
+    self.inDuel[a.id], self.inDuel[b.id] = true, true
+    self:markBot(a.id, a.p, "battle")
+    self:markBot(b.id, b.p, "battle")
+    log:say("DUEL: %s vs %s", tostring(a.p.name), tostring(b.p.name))
+    -- the watchers already looking at either bot get the start at once
+    for _, id in ipairs({ a.id, b.id }) do
+      for wid in pairs(self.watchers[id] or {}) do self:noteWatcher(wid, id) end
+      if self.status == "out" and self.watching == id then self:noteWatcher("local", id) end
+    end
+    return true
+  end
+
+  function BR:tickBotDuels(dt)
+    if #(self.botDuels or {}) == 0 then return end
+    if not (self.relay and self.relay:isHost()) then return end
+    local now = clock() or 0
+    for i = #self.botDuels, 1, -1 do
+      local d = self.botDuels[i]
+      local a, b = self.players[d.a], self.players[d.b]
+      local gone = self.phase ~= "match"
+                   or not (a and b and a.status == "alive" and b.status == "alive")
+      if not gone then d.sim:tick(dt or 1 / 60) end
+      local called = (now - d.startedAt) > DUEL_LIMIT
+      if gone or d.sim.done or called then
+        table.remove(self.botDuels, i)
+        self.inDuel[d.a], self.inDuel[d.b] = nil, nil
+        if a then self:markBot(d.a, a, nil) end
+        if b then self:markBot(d.b, b, nil) end
+        if gone then
+          d.sim:abort()
+          d.rec:stop("ended")
+        else
+          self:finishBotDuel(d, called and not d.sim.done)
+        end
+      end
+    end
+  end
+
+  function BR:finishBotDuel(d, called)
+    local a, b = self.players[d.a], self.players[d.b]
+    local result = d.sim.result
+    local aWins
+    if called or d.sim.error or (result ~= "win" and result ~= "lose") then
+      -- out of clock, or the fight broke: whoever has more left standing
+      local fa, fb = fracLeft(d.partyA), fracLeft(d.partyB)
+      aWins = fa > fb or (fa == fb and love.math.random() < 0.5)
+      d.sim:abort()
+    else
+      aWins = result == "win"
+    end
+    d.rec:stop(aWins and "win" or "lose")
+    local winner = aWins and { id = d.a, p = a } or { id = d.b, p = b }
+    local loser = aWins and { id = d.b, p = b } or { id = d.a, p = a }
+    -- the wounds are the fight's: each of the winner's mons keeps exactly
+    -- what it had left when the last of the loser's fell
+    local wrec = self:botRecord(winner.id)
+    local party = aWins and d.partyA or d.partyB
+    local idx = aWins and d.idxA or d.idxB
+    local standing = 0
+    for k, recI in ipairs(idx or {}) do
+      local mon, m = party[k], wrec[recI]
+      if mon and m then
+        local mx = (mon.stats and mon.stats.hp) or 1
+        m.hpFrac = math.max(0, math.min(1, (mon.hp or 0) / math.max(1, mx)))
+        if m.hpFrac > 0 then standing = standing + 1 end
+      end
+    end
+    if standing == 0 then
+      -- a called fight can leave the winner flat; a winner stands
+      local m = wrec[(idx and idx[1]) or 1] or wrec[1]
+      if m then m.hpFrac = 0.1 end
+    end
+    local now = clock() or 0
+    if a then a.lastFight = now end
+    if b then b.lastFight = now end
+    log:say("DUEL OVER: %s beat %s after %d turns%s", tostring(winner.p and winner.p.name),
+            tostring(loser.p and loser.p.name), d.sim.battle.turnCount or 0,
+            called and " (called on time)" or "")
+    if loser.p then self:eliminateBot(loser.id, loser.p, winner.p and winner.p.name) end
+    local drank = Bots.quaff(wrec, wrec.bag)
+    if drank then
+      log:say("POTION: %s used its %s", tostring(winner.p and winner.p.name), tostring(drank))
+    end
+    if self.relay then self.relay:broadcast(Wire.botrec(winner.id, wrec)) end
+  end
+
   -- A bot is out: its team spills where it fell, exactly as a player's does.
   function BR:eliminateBot(id, p, killerName)
     p.status = "out"
@@ -6053,55 +6057,55 @@ return function(mod)
     end
   end
 
-  -- The bot's own name and brain over the class chassis, for a fight a
-  -- player opens (startBotBattle) and for one two bots have (startBotDuel).
-  function BR:botTrainerOverlay(battle, botId)
-    -- Overlay the bot's own name on the class chassis, the engine's own
-    -- rival-name pattern (POK-61).  Every line in BattleState reads
-    -- trainer.name live, so this is enough for all of them -- except
-    -- introText, which newTrainer BAKES before we get the battle back
-    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
-    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
-    -- swap the baked-in class for the name rather than reformatting the
-    -- string, which would drop whatever localisation Strings applied.
-    local bp = self.players[botId]
-    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
-    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
-    -- with a cooltrainer's item-and-switch AI whatever face it wears --
-    -- the face stopped being the brain in Bots.look the same ticket.
-    -- aiUses (wAICount) was already baked from the face's class at
-    -- newTrainer time, so it is re-asked once the overlay is on.
-    local aiClass = Bots.fightAI(self.matchSeed, botId)
-    if bp and (bp.name or aiClass) then
-      local was = battle.trainer and battle.trainer.name
-      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
-      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
-      -- top.  A ROOKIE keeps whatever move choice its face class shipped
-      -- with -- no field, so the chassis answers through __index.
-      local aiMods
-      if aiClass then
-        aiMods = {}
-        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
-          aiMods[#aiMods + 1] = m
-        end
-        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
-      end
-      battle.trainer = setmetatable(
-        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
-        { __index = battle.trainer })
-      if bp.name and was and was ~= bp.name
-         and type(battle.introText) == "string" then
-        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
-        battle.introText = battle.introText:gsub(pattern,
-                                                 (bp.name:gsub("%%", "%%%%")), 1)
-      end
-      -- both were baked from the face's class before the overlay existed
-      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
-      battle.aiUses = battle:aiUsesFor()
-      battle.enemyAIMods = battle.trainer.aiMods
-    end
-  end
-
+  -- The bot's own name and brain over the class chassis, for a fight a
+  -- player opens (startBotBattle) and for one two bots have (startBotDuel).
+  function BR:botTrainerOverlay(battle, botId)
+    -- Overlay the bot's own name on the class chassis, the engine's own
+    -- rival-name pattern (POK-61).  Every line in BattleState reads
+    -- trainer.name live, so this is enough for all of them -- except
+    -- introText, which newTrainer BAKES before we get the battle back
+    -- (BattleState.lua, "%s wants to fight!").  That is why the fight
+    -- opened as the CLASS and only the defeat line said SAM (POK-89): so
+    -- swap the baked-in class for the name rather than reformatting the
+    -- string, which would drop whatever localisation Strings applied.
+    local bp = self.players[botId]
+    -- The brain rides the overlay too (POK-160).  TrainerAI.classFor
+    -- reads trainer.aiClass before trainer.id, so an ai-tier bot fights
+    -- with a cooltrainer's item-and-switch AI whatever face it wears --
+    -- the face stopped being the brain in Bots.look the same ticket.
+    -- aiUses (wAICount) was already baked from the face's class at
+    -- newTrainer time, so it is re-asked once the overlay is on.
+    local aiClass = Bots.fightAI(self.matchSeed, botId)
+    if bp and (bp.name or aiClass) then
+      local was = battle.trainer and battle.trainer.name
+      -- ...and an ai-tier bot also PICKS its moves (POK-160 item 3): the
+      -- face's own vanilla passes, plus the mod's BR_BOT_MOVES layer on
+      -- top.  A ROOKIE keeps whatever move choice its face class shipped
+      -- with -- no field, so the chassis answers through __index.
+      local aiMods
+      if aiClass then
+        aiMods = {}
+        for _, m in ipairs((battle.trainer and battle.trainer.aiMods) or {}) do
+          aiMods[#aiMods + 1] = m
+        end
+        aiMods[#aiMods + 1] = "BR_BOT_MOVES"
+      end
+      battle.trainer = setmetatable(
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { __index = battle.trainer })
+      if bp.name and was and was ~= bp.name
+         and type(battle.introText) == "string" then
+        local pattern = was:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%1")
+        battle.introText = battle.introText:gsub(pattern,
+                                                 (bp.name:gsub("%%", "%%%%")), 1)
+      end
+      -- both were baked from the face's class before the overlay existed
+      -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
+      battle.aiUses = battle:aiUsesFor()
+      battle.enemyAIMods = battle.trainer.aiMods
+    end
+  end
+
   function BR:startBotBattle(botId)
     -- POK-145: asked HERE, at the moment the fight opens, and not at the
     -- moment the walk-up that leads to it was armed.
