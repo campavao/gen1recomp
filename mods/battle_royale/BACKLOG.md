@@ -277,9 +277,42 @@ over the relay). No engine change: `LinkBattle.newSpectator`,
 `BattleState.makeBattler` / `trainerSprite` and `Protocol.packMon` were
 already there.
 
-Known limits: a move learned mid-fight is not learned on the replica, a
-nickname prompt after a catch is skipped, and the "<PLAYER> used <ITEM>!"
-line reads the spectator's own name. Bot-vs-bot fights have no screen.
+Known limits: a move learned mid-fight is not learned on the replica and a
+nickname prompt after a catch is skipped. (The replica runs against a
+proxy game whose save names the watched trainer, so "<PLAYER> used
+<ITEM>!" and "is out of usable POKéMON!" read their name, not the
+spectator's.)
+
+### BR-28 · Two bots fight for real — DONE (2026-09-05)
+
+**Resolved 2026-09-05:** `Bots.resolveFight` (power ratio, one roll) is
+the fallback only. `tickBotFights` now opens `BR:startBotDuel`: bot A's
+team is built through `BattleState.newTrainer` against a proxy game
+(`Mirror.proxyGame` -- a save that names A and holds A's party, a private
+stack, the stand-in input), then the real fight is `newTrainer` for B with
+A's party on the player side. `Mirror.simulate` ticks it once per host
+frame at a person's pace with sound and music silenced, A picking moves
+through `TrainerAI.chooseMove` aimed the other way (its own dice: the
+battle's stream is what the replica follows, and the replica is TOLD A's
+choice), replacements through the engine's own PartyMenu closure, SHIFT
+declined, `finish` overridden (nothing to pop, nobody to pay). Recorded
+with `Mirror.record` for subjects {A, B}; a spectator's peek at a bot goes
+to the host (`peek.id`) and frames come back tagged `as` the bot; a host
+watching its own bot is fed "local". `finishBotDuel` writes each of the
+winner's mons' hpFrac from the fight, then the old path (eliminateBot,
+quaff, botrec). Both bots are `inDuel` -- no roaming, no fog, marked
+`battle` so nobody can jump them -- and a fight over 150 s is called on
+HP left. Proved by `bot_duel_smoke.lua` (14 runs while chasing one drift).
+
+The drift, for the record: a replica whose trainer had NO AI layers rolled
+a die where the layered host did not (`TrainerAI.chooseMove` returns a
+lone minimum without rolling), because the wire dropped the vanilla
+layers, which are NUMBERS (1, 2, 3 -> LAYER_n). Action frames now carry
+the roll count and the replica logs a mismatch; `Mirror.DEBUG` adds the
+roll-by-roll trace on both ends.
+
+Open: a host handover mid-duel loses the fight (the new host sees two
+bots with a stale `battle` mark until they next move).
 
 ### BR-13 · See the spectated player's party and items — DONE (POK-18)
 

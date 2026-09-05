@@ -178,9 +178,17 @@ leaves the camera on them. Arrive mid-fight and it catches up to where they
 are. Under the hood it is a replay, not a video: their client sends the seed
 its battle rolls on, both teams as they stood at the first turn and every
 choice they make, and your client runs the engine's own battle from that —
-the same trick the link cable uses to keep two Game Boys on one fight. Two
-bots fighting each other have no screen to show; those still resolve out of
-sight.
+the same trick the link cable uses to keep two Game Boys on one fight.
+
+**Two bots fighting each other is a real fight too.** It used to be a
+weighted coin flip on the host. Now the host runs it as an actual battle,
+off screen and at the pace a person would play it — one bot's team where
+the player's would be, the other's as the trainer, both picking moves with
+the trainer AI — and records it like any player's, so a spectator watching
+either bot follows them into it on the battle screen. The wounds the winner
+walks away with are the fight's, not a formula's. While it runs, both bots
+stand where they met with the fighting mark over their heads, and nobody
+can jump either of them.
 
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
@@ -713,6 +721,21 @@ same result after the same number of turns as the real fight.
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
   POKEPORT_IDENTITY=br-mirror \
   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/mirror_replay.lua lovec .
+```
+
+### Two bots fight for real
+
+`bot_duel_smoke.lua` hosts a solo room with three bots, goes out at the
+drop, turns its camera on one bot and puts another beside it. A duel must
+open (not an instant elimination), the replica of it must open on this very
+screen with no wire in between — the host is its own watcher — play itself
+and close on the fight's result, and the winner's record must carry the
+wounds the fight left. `DUEL OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-duel \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_duel_smoke.lua lovec .
 ```
 
 ### The playtest probes

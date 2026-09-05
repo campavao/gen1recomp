@@ -59,6 +59,9 @@ Mirror.CATCHUP_AT = 2
 Mirror.CATCHUP_TICKS = 40
 -- a replica waiting this long for a frame that never comes closes itself
 Mirror.IDLE_SECONDS = 45
+-- frames carry the fight's roll-by-roll trace and a drifting replica logs
+-- both traces side by side: a diagnostic, off in a release
+Mirror.DEBUG = false
 
 -- Deterministic Park-Miller PRNG -- LinkBattle.lua's, which is local there.
 -- Both ends must roll identical streams, so love.math.random cannot be it.
@@ -126,8 +129,17 @@ function Mirror.record(battle, opts)
   rec.emit = emit
 
   local seed = opts.seed or Mirror.newSeed()
-  -- from here on the battle rolls on a stream the replica can follow
-  battle.rng = Mirror.makeRng(seed)
+  -- from here on the battle rolls on a stream the replica can follow; the
+  -- rolls are counted so a frame can say how far along the stream it sits
+  -- (a replica that disagrees has drifted, and says where)
+  local stream = Mirror.makeRng(seed)
+  rec.rolls = 0
+  rec.trace = {}
+  battle.rng = function(a, b)
+    rec.rolls = rec.rolls + 1
+    if Mirror.DEBUG then rec.trace[#rec.trace + 1] = tostring(a) .. ":" .. tostring(b) end
+    return stream(a, b)
+  end
   local pack = opts.pack or function(m) return m end
   local function packParty(list)
     local out = {}
@@ -154,6 +166,11 @@ function Mirror.record(battle, opts)
   end
   local function act(frame)
     frame.hp = hpNow()
+    frame.rolls = rec.rolls
+    if Mirror.DEBUG then
+      frame.trace = table.concat(rec.trace, "|"):sub(1, 400)
+      rec.trace = {}
+    end
     emit(frame)
   end
 
@@ -317,13 +334,69 @@ local function firstHealthy(list)
   return list and list[1]
 end
 
+-- ------- a battle's view of the client it runs on
+--
+-- BattleState reads its player's name, party, badges and options off
+-- game.save, and pushes its menus on game.stack.  A replica or a headless
+-- fight is somebody ELSE's battle, so it gets a game whose save says that
+-- somebody's name and party (and no badges: the copies hit as the
+-- recording says), whose input is the stand-in above, and -- for a fight
+-- nobody is looking at -- a private stack where its menus can come and go
+-- without touching the screen.  Everything else falls through.
+function Mirror.fakeStack()
+  local st = { states = {} }
+  function st:push(s) self.states[#self.states + 1] = s; if s.enter then s:enter() end end
+  function st:pop()
+    local s = table.remove(self.states)
+    if s and s.exit then s:exit() end
+    return s
+  end
+  function st:top() return self.states[#self.states] end
+  return st
+end
+
+-- opts: { name, party, options, stack } -- stack nil means a private one
+function Mirror.proxyGame(game, opts)
+  opts = opts or {}
+  local realSave = game.save or {}
+  local save = setmetatable({
+    player = setmetatable({ name = opts.name or "?" }, { __index = realSave.player or {} }),
+    party = opts.party or {},
+    inventory = {},
+    options = setmetatable(opts.options or {}, { __index = realSave.options or {} }),
+  }, { __index = realSave })
+  local pg = setmetatable({ save = save, input = standIn(game.input),
+                            stack = opts.stack or Mirror.fakeStack() }, { __index = game })
+  return pg
+end
+
+-- run fn with the engine's sound and music silenced: a fight nobody is
+-- looking at must not be heard either
+function Mirror.muted(fn)
+  local saved = {}
+  local mods = {}
+  for _, name in ipairs({ "src.core.Sound", "src.core.Music" }) do
+    local ok, m = pcall(require, name)
+    if ok and type(m) == "table" then mods[#mods + 1] = m end
+  end
+  local function noop() end
+  for _, m in ipairs(mods) do
+    for k, v in pairs(m) do
+      if type(v) == "function" then saved[#saved + 1] = { m, k, v }; m[k] = noop end
+    end
+  end
+  local ok, err = pcall(fn)
+  for _, s in ipairs(saved) do s[1][s[2]] = s[3] end
+  if not ok then error(err, 0) end
+end
+
 -- shared by both replicas: the frame queue, the stand-in input, the page
 -- turner, catch-up, the idle close
 local function install(game, s, opts, applyFrame, frozen)
   local log = opts.log or function() end
   s.mirror = true
   s.mirrorPending = {}
-  s.mirrorInput = standIn(game.input)
+  s.mirrorInput = s.game.input       -- the proxy game's stand-in
   s.mirrorHold = 0
   s.mirrorIdle = 0
   s.mirrorEnd = nil
@@ -384,8 +457,6 @@ local function install(game, s, opts, applyFrame, frozen)
       if game.stack:top() == self then game.stack:pop() end
       return
     end
-    local real = game.input
-    game.input = self.mirrorInput
     local ok, err = pcall(function()
       if #self.mirrorPending >= Mirror.CATCHUP_AT then
         local n = 0
@@ -398,7 +469,6 @@ local function install(game, s, opts, applyFrame, frozen)
         tick(self, dt, false)
       end
     end)
-    game.input = real
     if not ok then
       log("mirror: replica threw (%s); closing", tostring(err))
       self:mirrorClose("error")
@@ -463,9 +533,18 @@ local function openLocal(game, start, opts)
   local me, foe = unpackParty(game, start.me), unpackParty(game, start.foe)
   if #me == 0 or #foe == 0 then return nil, "nothing to show" end
 
-  local s = BattleState.newWild(game, foe[1].species, foe[1].level)
+  -- the watched trainer's name and party, on the real screen stack
+  local pg = Mirror.proxyGame(game, { name = start.myName, party = me, stack = game.stack })
+  local s = BattleState.newWild(pg, foe[1].species, foe[1].level)
   s.dead = false
-  s.rng = Mirror.makeRng(start.seed)
+  local stream = Mirror.makeRng(start.seed)
+  s.mirrorRolls = 0
+  s.mirrorTrace = {}
+  s.rng = function(a, b)
+    s.mirrorRolls = s.mirrorRolls + 1
+    if Mirror.DEBUG then s.mirrorTrace[#s.mirrorTrace + 1] = tostring(a) .. ":" .. tostring(b) end
+    return stream(a, b)
+  end
   s.playerParty = me
   s.playerPartyIndices = nil
   -- the watched trainer's badges, so the copies hit as hard as theirs
@@ -542,14 +621,17 @@ local function openLocal(game, start, opts)
   end
   local ACTIONS = { move = true, struggle = true, locked = true, switch = true,
                     run = true, ball = true, item = true }
+  local log = opts.log or function() end
   local function snap(self, hp)
     if type(hp) ~= "table" then return end
-    for _, pair in ipairs({ { self.player, hp.me }, { self.enemy, hp.foe } }) do
+    for _, pair in ipairs({ { self.player, hp.me, "ours" }, { self.enemy, hp.foe, "theirs" } }) do
       local b, want = pair[1], pair[2]
       if b and b.mon and type(want) == "number" and b.mon.hp ~= want then
+        log("mirror: turn %d, %s %s at %d HP, the fight says %d; snapped",
+            self.turnCount or 0, pair[3], tostring(b.name), b.mon.hp, want)
         b.mon.hp = math.max(0, math.min(b.mon.stats.hp, math.floor(want)))
         b.shownHP = b.mon.hp
-        b.shownPx = require("src.battle.Timing").hpBarPixels(b.mon.hp, math.max(1, b.mon.stats.hp))
+        b.shownPx = require("src.core.Timing").hpBarPixels(b.mon.hp, math.max(1, b.mon.stats.hp))
       end
       if b and b.mon then b.shownStatus = b.mon.status end
     end
@@ -559,6 +641,16 @@ local function openLocal(game, start, opts)
     if not f then return false end
     self.phase = "menu"
     self:clearTurnFlinches()
+    if f.rolls and f.rolls ~= self.mirrorRolls then
+      log("mirror: turn %d, %d rolls here against %d in the fight (%s)",
+          self.turnCount or 0, self.mirrorRolls, f.rolls, tostring(f.k))
+      if Mirror.DEBUG then
+        log("mirror:   here  %s", table.concat(self.mirrorTrace, "|"):sub(1, 400))
+        log("mirror:   fight %s", tostring(f.trace))
+      end
+      self.mirrorRolls = f.rolls
+    end
+    self.mirrorTrace = {}
     snap(self, f.hp)
     if f.k == "move" then
       local mv = self.player.curMoves[f.slot]
@@ -617,7 +709,8 @@ local function openLink(game, start, opts)
   function net:send() end
   function net:close() end
   local hostIsMe = start.host == "me"
-  local s, why = LinkBattle.newSpectator(game, net, {
+  local pg = Mirror.proxyGame(game, { name = start.myName, party = {}, stack = game.stack })
+  local s, why = LinkBattle.newSpectator(pg, net, {
     hostParty = hostIsMe and start.me or start.foe,
     guestParty = hostIsMe and start.foe or start.me,
     hostName = hostIsMe and start.myName or start.foeName,
@@ -640,6 +733,123 @@ local function openLink(game, start, opts)
   -- must not announce anything
   s.finish = function(self) self:mirrorClose(self.result or "ended") end
   return s
+end
+
+-- ------- a fight nobody is driving (two bots)
+--
+-- A bot-versus-bot fight used to be one weighted coin flip on the host.
+-- Now it is a real BattleState the host runs off screen: `s` was built by
+-- BattleState.newTrainer against a proxy game (Mirror.proxyGame) whose
+-- party is the first bot's team and whose stack is private, so the fight's
+-- menus come and go unseen.  The first bot stands where the player would
+-- and picks its moves through `chooser` (the same trainer AI the other
+-- side uses, aimed the other way); the engine's own AI drives the trainer
+-- side as in any fight against a bot.  Ticked once per host frame at the
+-- pace a person would play, so the recorder next door sees a fight that
+-- takes as long as a fight takes -- and whoever is watching either bot
+-- gets it on their screen exactly as they would a player's.
+--
+-- opts: { chooser = fn(s) -> move slot or nil, log = fn(fmt, ...) }.
+-- Returns sim: { battle, done, result, elapsed, tick(dt), abort() }.
+function Mirror.simulate(pg, s, opts)
+  opts = opts or {}
+  local log = opts.log or function() end
+  s.botSim = true
+  s.onFinish = nil
+  local party = s:playerPartyView()
+  -- a fainted lead is replaced by the first standing mon, through the
+  -- engine's own send-out closure; every other menu leaves at once
+  s.buildScreen = function(self, id, sopts)
+    if id == "PartyMenu" and type(sopts) == "table" and sopts.forceSwitch then
+      return stub(pg, self, function()
+        local mon = firstHealthy(party)
+        if mon and (mon.hp or 0) > 0 and sopts.onSwitch then sopts.onSwitch(mon) end
+        return true
+      end)
+    end
+    return stub(pg, self, nil)
+  end
+  -- a bot never takes the SHIFT offer (the style is SET in a match anyway)
+  s.sayChoice = function(self, text, onChoose)
+    self:say(text)
+    self:act(function() if onChoose then onChoose(false) end end)
+  end
+  s.openItems = function(self) self.phase = "menu" end
+  s.openParty = function(self) self.phase = "menu" end
+  -- finish is the engine's exit: it pops the stack and pays the player.
+  -- Off screen there is nothing to pop and nobody to pay.
+  s.finish = function(self)
+    self.simDone = true
+    self.result = self.result or "run"
+  end
+
+  local sim = { battle = s, done = false, result = nil, elapsed = 0, hold = 0 }
+  local input = pg.input
+  input.fast = false
+  pg.stack:push(s)   -- enter(): the intro, and battle.started (botSim set)
+
+  function sim:tick(dt)
+    if self.done then return end
+    self.elapsed = self.elapsed + dt
+    local ok, err = pcall(Mirror.muted, function()
+      -- a menu stacked over the battle (the replacement picker) runs first
+      local top = pg.stack:top()
+      if top and top ~= s then
+        if top.update then top:update(dt) end
+        return
+      end
+      if s.phase == "menu" then
+        -- the first bot's turn: pick like a trainer, click like a player
+        local slot = opts.chooser and opts.chooser(s) or nil
+        if not s:chooseMenu("fight") then
+          -- the menu is not ours to open (a locked move): the lock plays
+          local a = s:menuLockedAction(s.player) or s:lockedAction(s.player)
+          if a then s:resolveTurn(a) else s:update(dt) end
+          return
+        end
+        if s.phase == "moveSelect" then
+          if not (slot and s.player.curMoves[slot] and s.player.curMoves[slot].pp > 0
+                  and s.player.disabledSlot ~= slot) then
+            slot = nil
+            for i, mv in ipairs(s.player.curMoves) do
+              if mv.pp > 0 and s.player.disabledSlot ~= i then slot = i break end
+            end
+          end
+          if slot then
+            s:chooseMove(slot)
+          else
+            s:resolveTurn({ id = "STRUGGLE", pp = 1, struggle = true })
+          end
+        end
+        return
+      end
+      if s.msgWaiting or s.msgPrompt then
+        self.hold = self.hold + dt
+        if self.hold >= Mirror.PAGE_SECONDS then
+          self.hold = 0
+          input.fireA = true
+        end
+      else
+        self.hold = 0
+      end
+      s:update(dt)
+      input.fireA = false
+    end)
+    if not ok then
+      log("bot duel: the fight threw (%s)", tostring(err))
+      self.done, self.error = true, err
+      return
+    end
+    if s.simDone then
+      self.done, self.result = true, s.result
+    end
+  end
+
+  function sim:abort()
+    self.done = true
+  end
+
+  return sim
 end
 
 -- start: the decoded `start` frame.  opts: { onClosed = fn(state, why),

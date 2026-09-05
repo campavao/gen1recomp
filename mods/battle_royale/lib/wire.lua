@@ -314,7 +314,10 @@ function Wire.again() return { t = "again" } end
 function Wire.busy(kind, as) return { t = "busy", k = kind, as = as } end
 
 -- a spectator asks the trainer they watch what they carry (POK-18)...
-function Wire.peek() return { t = "peek" } end
+-- `id` names a BOT: a peek at a bot goes to the host, who runs its fights
+-- and answers with the bot's battle frames (lib/mirror.lua); the party
+-- and bag a bot carries are still derived locally
+function Wire.peek(id) return { t = "peek", id = id } end
 -- ...and is answered: party rows are { sp, lv, hp, mhp, st, mv } on the
 -- wire, the bag as item stacks plus money
 function Wire.state(state)
@@ -334,7 +337,8 @@ end
 -- nobody else in the room is looking at it -- and not a protocol bump: a
 -- peer that does not send these leaves its spectators with the mark over
 -- its head, which is what they had before.
-function Wire.mirror(b, frame) return { t = "bmir", b = b, m = frame } end
+-- `as` tags a frame as a BOT's fight: only the host sends those.
+function Wire.mirror(b, frame, as) return { t = "bmir", b = b, m = frame, as = as } end
 
 -- ------- decoding
 --
@@ -619,7 +623,7 @@ decoders.busy = function(m)
   return { t = "busy", kind = m.k, as = actorOf(m) }
 end
 
-decoders.peek = function() return { t = "peek" } end
+decoders.peek = function(m) return { t = "peek", id = isId(m.id) and m.id or nil } end
 
 local function clampInt(v, lo, hi, default)
   if type(v) ~= "number" or v ~= v then return default end
@@ -753,6 +757,21 @@ local function hpPair(v)
   return { me = clampInt(v.me, 0, 999, nil), foe = clampInt(v.foe, 0, 999, nil) }
 end
 
+-- a trainer's AI layers: names of registered ai_classes records, or the
+-- numbers the vanilla three are keyed by (TrainerAI resolves n as LAYER_n).
+-- Dropping the numbers left a replica's trainer with no layers at all, and
+-- a layerless AI rolls a die where a layered one does not -- one roll
+-- apart, and the replica watched a different fight from there.
+local function layerList(v)
+  local out = {}
+  for i, x in ipairs(type(v) == "table" and v or {}) do
+    if i > 8 then break end
+    if type(x) == "string" and #x <= MAX_ID then out[#out + 1] = x
+    elseif type(x) == "number" and x == math.floor(x) and x >= 0 and x <= 99 then out[#out + 1] = x end
+  end
+  return out
+end
+
 decoders.bmir = function(m)
   local b = shortString(m.b, 24)
   local f = m.m
@@ -774,12 +793,14 @@ decoders.bmir = function(m)
     if type(f.trainer) == "table" then
       out.trainer = { class = shortString(f.trainer.class), name = shortString(f.trainer.name, 12),
                       aiClass = shortString(f.trainer.aiClass),
-                      aiMods = stringList(f.trainer.aiMods, 8, MAX_ID) }
+                      aiMods = layerList(f.trainer.aiMods) }
     end
   elseif f.k == "end" then
     out.result = shortString(f.result, 16)
   elseif MIRROR_ACTS[f.k] then
     out.hp = hpPair(f.hp)
+    out.rolls = clampInt(f.rolls, 0, 1e9, nil)
+    out.trace = shortString(f.trace, 400)
     if f.k == "move" then
       out.slot = clampInt(f.slot, 1, 4, nil)
       if not out.slot then return nil, "bad move slot" end
@@ -808,7 +829,7 @@ decoders.bmir = function(m)
   else
     return nil, "bad frame kind"
   end
-  return { t = "bmir", b = b, frame = out }
+  return { t = "bmir", b = b, frame = out, as = isId(m.as) and m.as or nil }
 end
 
 -- The parade is drawn, never trusted: every field is clamped to what the

@@ -5208,6 +5208,12 @@ do
   eq(st.me[1].hp, 30, "...and its HP")
   eq(st.myName, "RED", "...and the names ride along")
   eq(st.trainer, nil, "a wild fight names no trainer")
+  local tr = Wire.decode(Wire.mirror("m1", { n = 1, k = "start", kind = "trainer", me = { { species = "ABRA" } },
+                                             foe = { { species = "STARYU" } },
+                                             trainer = { class = "OPP_SWIMMER", name = "JOEY", aiMods = { 1, 2, 3, "BR_BOT_MOVES", 2.5, "x" } } })).frame
+  eq(#tr.trainer.aiMods, 5, "a trainer keeps its AI layers, numbered and named; a fraction is not a layer")
+  eq(tr.trainer.aiMods[1], 1, "...the vanilla layers as the numbers they are keyed by")
+  eq(tr.trainer.aiMods[4], "BR_BOT_MOVES", "...and the named ones")
   local lk = Wire.decode(Wire.mirror("m2", { n = 3, k = "link", side = "guest",
                                              m = { type = "action", kind = "move", slot = 2, junk = "x" } })).frame
   eq(lk.side, "guest", "a lockstep frame keeps its side")
@@ -5256,6 +5262,15 @@ do
   lrec:stop("draw")
   eq(lsent[4].k, "end", "the duel ends with an end frame")
   eq(rawget(ch, "send"), nil, "and the tap comes off the channel")
+  -- a bot's fight is the host's to show: the peek names the bot, the frame
+  -- is tagged as the bot's
+  eq(Wire.decode(Wire.peek()).id, nil, "a plain peek names nobody")
+  eq(Wire.decode(Wire.peek(1007)).id, 1007, "a peek at a bot names it")
+  eq(Wire.decode(Wire.peek("bot")).id, nil, "...and a name that is not an id is dropped")
+  local tagged = Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, 1007))
+  eq(tagged.as, 1007, "a frame tagged as a bot's keeps the tag")
+  eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" })).as, nil, "an untagged frame is the sender's own")
+  eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, "x")).as, nil, "a tag that is not an id is dropped")
 end
 
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
