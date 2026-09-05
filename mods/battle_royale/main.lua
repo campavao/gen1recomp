@@ -85,8 +85,10 @@ local FOG_SHELTER_SECONDS = 30    -- a bot fight blocks the fog this long (POK-6
 -- what SOLO VS BOTS fills an empty roster with: enough that the match has a
 -- shape to it, few enough that the first fight is not immediate
 local SOLO_BOTS = 8
--- QUICK PLAY aims at this many trainers and lets bots make up the shortfall
-local QUICK_FILL = 8
+-- QUICK PLAY fills the whole room and lets bots make up the shortfall: a
+-- full thirty, the same as the daily (the user's call, 2026-09-05 -- it
+-- was eight, and a quick game is meant to feel like the real thing)
+local QUICK_FILL = Bots.MAX
 -- ...and starts on its own after this long, so a newcomer who quick-plays
 -- into an empty relay is playing rather than staring at a roster of one.
 -- Sixty seconds, not thirty (POK-131): thirty meant the room was locked

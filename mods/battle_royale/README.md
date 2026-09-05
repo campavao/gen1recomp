@@ -28,8 +28,8 @@ go. Everything below is the same code path with other people in it.
 
 **With other people, the short way:** `QUICK PLAY`. It joins whatever open
 game is running, and if there isn't one it opens yours and counts down from
-thirty while it waits for company — bots fill whatever seats are still empty
-when the clock runs out. Nobody types a code and nobody has to press start,
+sixty while it waits for company — the room is thirty seats, and bots fill
+whatever are still empty when the clock runs out. Nobody types a code and nobody has to press start,
 so a newcomer with the mod installed is in a real match inside a minute.
 
 The relay picks the *fullest* joinable room rather than the first, so a
