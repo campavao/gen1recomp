@@ -513,6 +513,37 @@ freezes a player the moment a trainer's `!` goes up -- while the other
 walks over. NOTICE at three cells is what makes a chase at equal speed
 last until somebody pauses, which is what the user watched.
 
+### BR-35 · A bot goes INTO the Centre — OPEN
+
+**Asked 2026-09-05 (the user, spectating):** "do bots not go all the way
+into a POKéMON CENTER to heal?" They do not. `botHeal` (POK-158 M2) is
+reached by walking to the cell in front of the door and waiting the dwell
+out there; the team is healed on the doorstep and the interior trip was
+abstracted, as the bot fight was. Nobody was following a bot when that
+was decided. Now somebody is, and a trainer healing on the pavement with
+a mark over their head is the seam showing.
+
+Two sizes of fix:
+
+1. **Enter and vanish (cheap, reads right from outside).** On reaching
+   the door step, the bot steps onto the door tile and its ghost is
+   despawned for the length of the dwell -- a player walking into a
+   Centre disappears exactly like that -- then respawns on the step
+   facing down and walks off healed. The wire already carries a
+   despawn/place pair. A spectator's camera stays on the step; it is
+   what a friend waiting outside sees.
+2. **Actually go in (the full thing).** The Centre interior is a map like
+   any other: the bot warps through the door the way a player does
+   (BR-32's seam walk, doors included), walks to the counter, dwells,
+   walks back out. The ghost layer and the spectator camera already
+   follow a trainer across maps (tickWatch warps beside them), so the
+   spectator would follow them in and stand in the Centre while they
+   heal. Needs the interior's walkable cells and the door warp pair;
+   nothing new on the wire.
+
+Take (1) with BR-34's walk-up work; (2) falls out of BR-32 once bots walk
+through seams instead of appearing on the far side.
+
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
 Looting a bag is one row at a time through the loot list. A player who
