@@ -168,6 +168,20 @@ you're watching carries: their team with levels, HP and moves, their bag
 and their money, read-only, refreshed every few seconds (a bot's is
 derived from the seed, like its team).
 
+**And when they fight, you are in the fight with them.** The moment the
+trainer you're watching opens a battle — a wild one, a route trainer, a
+bot, a duel with another player — your screen becomes theirs: the same
+battle screen, text, animations and HP bars they are looking at, one relay
+hop behind. Nothing you press reaches it (the pages turn themselves);
+`LEFT` / `RIGHT` still hop to another trainer, and `B` closes the fight and
+leaves the camera on them. Arrive mid-fight and it catches up to where they
+are. Under the hood it is a replay, not a video: their client sends the seed
+its battle rolls on, both teams as they stood at the first turn and every
+choice they make, and your client runs the engine's own battle from that —
+the same trick the link cable uses to keep two Game Boys on one fight. Two
+bots fighting each other have no screen to show; those still resolve out of
+sight.
+
 A match plays in a throwaway world: **SAVE is disabled from the drop until
 you return to the title** and start or continue a real game, so a match can
 never overwrite your actual playthrough.
@@ -640,8 +654,9 @@ shot clock, the loser's spill, the return to the lobby — is
 regression-tested with two real clients fighting over a local relay:
 
 ```sh
-python mods/battle_royale/tests/drivers/pvp/run_pvp.py         # duel
-python mods/battle_royale/tests/drivers/pvp/run_pvp.py stall   # shot clock
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py            # duel
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py stall      # shot clock
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py spectate   # a spectator's screen
 ```
 
 The harness boots `relay/server.js` on `127.0.0.1`, launches two LOVE
@@ -654,6 +669,11 @@ the winner's screen, and the finished match returns both to the lobby with
 nobody pressing anything. **stall**
 has the host go silent mid-battle; lockstep means the fight cannot resolve
 until they move, so the win must come from the shot clock forfeiting them.
+**spectate** has the host lose the duel with a bot in the room to keep the
+match alive, turn its camera on the winner and wait: the guest's next wild
+fight must open on the host's screen as a replay, play through with no
+input at all, and close with the result and turn count the guest's own
+fight came to.
 
 It needs a `gen1recomp` checkout, an imported ROM (`POKEPORT_IMPORT_ROM`),
 `node`, and LOVE (`LOVEC` overrides the default path). A run takes a few
@@ -679,6 +699,21 @@ drops a bot down the block with `debugPlaceBot`, and checks that the bot
 wears a face of its own rather than the viewer's skin, **walks over**
 before the fight, and carries its own name from the battle intro on.
 `BOT OK` passes it.
+
+### The fight a spectator is shown
+
+The replay behind spectating (`lib/mirror.lua`) is proved on one client
+first: `mirror_replay.lua` fights a staged wild battle while recording it,
+then opens a replica of the recording on the same client — through the
+wire's own encode and decode — and lets it play with no input. `MIRROR OK`
+means the replica turned its own pages, closed on its own, and came to the
+same result after the same number of turns as the real fight.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-mirror \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/mirror_replay.lua lovec .
+```
 
 ### The playtest probes
 

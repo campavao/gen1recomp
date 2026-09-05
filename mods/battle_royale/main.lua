@@ -378,6 +378,10 @@ return function(mod)
     fleeing = nil,        -- who we are running from, while the battle unwinds
     peeked = nil,         -- what the trainer we watch carries, as last answered (POK-18)
     lastPeekAt = nil,
+    watchers = {},        -- who is watching us: id -> last peek (lib/mirror.lua)
+    recorder = nil,       -- our own fight, being sent to them
+    mirrorRx = nil,       -- the fight we are being sent, as a log
+    mirrorState = nil,    -- ...and the screen showing it
     botCount = 0,         -- how many bots the host will add at start
     fillTo = 0,           -- ...or top the roster up to this many, 0 = off
     solo = false,         -- hosting a room of one, with no server
@@ -1270,6 +1274,9 @@ return function(mod)
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
+    self:stopRecording("reset")
+    self:closeMirror("reset")
+    self.mirrorRx, self.watchers = nil, {}
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
@@ -1810,6 +1817,8 @@ return function(mod)
           opts.turnLimit = PVP_TURN_SECONDS
         end
         local battle, why = base(game, net, opts)
+        -- whoever is watching us follows us in (lib/mirror.lua)
+        if battle and BR:inRound() then BR:startRecordingLink(battle, opts) end
         -- POK-80: the link foe wears the skin they picked.  Their advertised
         -- walk sheet (BR.players[id].sprite, off the wire) maps back to a
         -- trainer class, and enter() keeps a trainerPic set before it over
@@ -2128,8 +2137,12 @@ return function(mod)
 
     elseif msg.t == "bt" then
       if self.battle and self.battle.opponentId == fromId then
+        if self.recorder and self.recorder.link then self.recorder:onTheirs(msg.inner) end
         self.battle.channel:push(msg.inner)
       end
+
+    elseif msg.t == "bmir" then
+      self:onMirrorFrame(fromId, msg)
 
     elseif msg.t == "out" then
       if p then p.status = "out" end
@@ -4335,6 +4348,8 @@ return function(mod)
       idx = ((idx - 1 + (dir or 1)) % #ids) + 1
     end
     self.watching = ids[idx]
+    self:closeMirror("hop")
+    self.mirrorRx = nil
     self.fellAt = nil              -- a deliberate move, nothing to undo
     self.lastHopAt = nil           -- catch up at once, wherever they are
     self.peeked, self.lastPeekAt = nil, nil   -- and ask them, not the last one
@@ -4352,6 +4367,7 @@ return function(mod)
     local save = self.game and self.game.save
     if not (save and self.relay) then return end
     self.relay:send(fromId, Wire.state(Peek.summary(save, bagOf(save))))
+    self:noteWatcher(fromId)
   end
 
   function BR:tickPeek()
@@ -4484,12 +4500,225 @@ return function(mod)
     if ow.player then ow.player.passable = nil end
   end
 
+  do
+  -- ------- the fight itself, on the battle screen (lib/mirror.lua)
+  --
+  -- Two roles, both here.  While WE fight, we are the recorder: the battle
+  -- rolls on a seed we dealt and every choice we make goes out as a frame
+  -- to whoever is watching us -- the peek that repeats every Peek.SECONDS
+  -- is the subscription, so a watcher who wanders off ages out.  While we
+  -- are OUT and watching, we are the replica: frames from the trainer we
+  -- watch are fed to a BattleState of their fight, pushed over the map.
+  -- A watcher who arrives mid-fight is sent the whole log and catches up.
+  -- The libs are required inside these functions: main.lua's closures sit
+  -- at LuaJIT's sixty-upvalue cap.
+
+  local WATCH_TTL = Peek.SECONDS * 3 + 1   -- three missed peeks and you are gone
+
+  function BR:noteWatcher(id)
+    self.watchers[id] = clock() or 0
+    local rec = self.recorder
+    if rec and not rec.stopped and not rec.sentTo[id] and self.relay then
+      rec.sentTo[id] = true
+      for _, f in ipairs(rec.log) do self.relay:send(id, Wire.mirror(rec.b, f)) end
+    end
+  end
+
+  function BR:liveWatchers()
+    local now, out = clock() or 0, {}
+    for id, t in pairs(self.watchers) do
+      if now - t <= WATCH_TTL then out[#out + 1] = id else self.watchers[id] = nil end
+    end
+    return out
+  end
+
+  -- the sender every recorder shares: unicast to the live watchers, and
+  -- remember who has the log so far so noteWatcher does not resend it
+  local function mirrorSender(b, sentTo)
+    return function(frame)
+      if not BR.relay then return end
+      for _, id in ipairs(BR:liveWatchers()) do
+        BR.relay:send(id, Wire.mirror(b, frame))
+        sentTo[id] = true
+      end
+    end
+  end
+
+  local function battleTag()
+    return tostring(BR.matchSeed or 0) .. "-"
+        .. tostring(math.floor(((clock() or 0) * 1000) % 1000000))
+  end
+
+  -- a wild or trainer fight of ours (a bot's is a trainer fight)
+  function BR:startRecording(battle)
+    if self.recorder or self.phase ~= "match" or not (self.relay and self.game) then return end
+    if not battle or battle.mirror or battle.ghost or battle.safari or battle.demo then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local Protocol = require("src.link.Protocol")
+    local save, data = self.game.save, self.game.data
+    local badges = {}
+    local okD, Damage = pcall(require, "src.battle.Damage")
+    local rows = (data.constants and data.constants.badgeBoosts)
+                 or (okD and Damage.BADGE_BOOSTS) or {}
+    for _, row in ipairs(rows) do
+      if save and save.inventory and save.inventory[row.badge] then badges[#badges + 1] = row.badge end
+    end
+    local b, sentTo = battleTag(), {}
+    local foeName = (battle.trainer and battle.trainer.name) or (battle.enemy and battle.enemy.name)
+    local ok, rec = pcall(Mirror.record, battle, {
+      kind = battle.kind == "trainer" and "trainer" or "wild",
+      pack = Protocol.packMon, myName = myName(), foeName = foeName, badges = badges,
+      hooked = type(battle.introText) == "string" and battle.introText:find("hooked") ~= nil,
+      send = mirrorSender(b, sentTo),
+    })
+    if not ok then
+      mod.log:warn("mirror: could not record this fight (%s)", tostring(rec))
+      return
+    end
+    rec.b, rec.sentTo = b, sentTo
+    self.recorder = rec
+  end
+
+  -- a duel: the lockstep messages are the record (opts are LinkState's)
+  function BR:startRecordingLink(battle, opts)
+    if self.recorder or self.phase ~= "match" or not (self.relay and self.battle) then return end
+    if not (battle and opts) then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local b, sentTo = battleTag(), {}
+    local peer = self.players[self.battle.opponentId]
+    local ok, rec = pcall(Mirror.recordLink, self.battle.channel, {
+      seed = opts.seed, isHost = self.battle.isHost == true,
+      me = opts.myParty, foe = opts.theirParty,
+      myName = myName(), foeName = opts.theirName or (peer and peer.name),
+      send = mirrorSender(b, sentTo),
+    })
+    if not ok then
+      mod.log:warn("mirror: could not record this duel (%s)", tostring(rec))
+      return
+    end
+    rec.b, rec.sentTo = b, sentTo
+    self.recorder = rec
+  end
+
+  function BR:stopRecording(result)
+    local rec = self.recorder
+    if not rec then return end
+    self.recorder = nil
+    self.lastRecorder = rec
+    rec:stop(result)
+  end
+
+  -- ------- the replica (while out and watching)
+
+  function BR:closeMirror(why)
+    local st = self.mirrorState
+    self.mirrorState = nil
+    if st and not st.mirrorClosed then st:mirrorClose(why) end
+  end
+
+  function BR:onMirrorClosed(st, why)
+    self.lastMirror = { why = why, result = st and st.result, turn = st and st.turnCount }
+    if self.mirrorState == st then self.mirrorState = nil end
+    local rx = self.mirrorRx
+    if rx and rx.opened and why == "idle" then
+      -- their fight went quiet on us; the next frame reopens it, caught up
+      rx.opened = false
+      rx.reopenAbove = rx.top
+    end
+  end
+
+  -- a frame from the trainer we watch.  Kept as a log, fed in order: the
+  -- resend to a late watcher and the live frames can interleave.
+  function BR:onMirrorFrame(fromId, msg)
+    if not (self.phase == "match" and self.status == "out") then return end
+    if fromId ~= self.watching or not (msg and msg.frame) then return end
+    local f = msg.frame
+    local rx = self.mirrorRx
+    if not rx or rx.from ~= fromId or rx.b ~= msg.b then
+      if f.k ~= "start" then return end      -- the log resend brings the start
+      self:closeMirror("new")
+      rx = { from = fromId, b = msg.b, frames = {}, fed = 0, top = 0,
+             opened = false, muted = false }
+      self.mirrorRx = rx
+    end
+    if rx.frames[f.n] then return end
+    rx.frames[f.n] = f
+    if f.n > rx.top then rx.top = f.n end
+    self:feedMirror()
+  end
+
+  function BR:feedMirror()
+    local rx, st = self.mirrorRx, self.mirrorState
+    if not (rx and st) or st.mirrorClosed then return end
+    while rx.frames[rx.fed + 1] do
+      rx.fed = rx.fed + 1
+      st:feed(rx.frames[rx.fed])
+    end
+  end
+
+  function BR:tickMirror()
+    local rx = self.mirrorRx
+    local st = self.mirrorState
+    if st and st.mirrorClosed then self.mirrorState, st = nil, nil end
+    if st and st.mirrorReplay then return end   -- a driver's local replay is its own
+    if not (self.phase == "match" and self.status == "out" and rx and rx.from == self.watching) then
+      if st then self:closeMirror("done") end
+      return
+    end
+    if st then return end
+    if rx.muted or rx.opened or not rx.frames[1] then return end
+    if rx.reopenAbove and rx.top <= rx.reopenAbove then return end
+    local game, ow = self.game, mod.world:overworld()
+    if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local ok, state, why = pcall(Mirror.open, game, rx.frames[1], {
+      log = function(...) mod.log:info(...) end,
+      onClosed = function(s, w) BR:onMirrorClosed(s, w) end,
+    })
+    if not ok or not state then
+      mod.log:warn("mirror: could not open %s's fight (%s)",
+                   tostring(rx.from), tostring(ok and why or state))
+      rx.muted = true
+      return
+    end
+    rx.opened, rx.reopenAbove, rx.fed = true, nil, 1
+    self.mirrorState = state
+    ow:pushBattle(state)       -- the encounter wipe, like the fight it shows
+    self:feedMirror()
+  end
+
+  -- the replica takes no input of the spectator's, but the spectator keeps
+  -- theirs: LEFT / RIGHT hop as they do on the map, B closes this fight's
+  -- screen and leaves the camera on them
+  function BR:mirrorInput(input)
+    local st = self.mirrorState
+    if not (st and input and input.pressQueue) then return false end
+    if self.game.stack:top() ~= st then return false end
+    local hop, close = nil, false
+    for _, btn in ipairs(input.pressQueue) do
+      if btn == "left" then hop = -1
+      elseif btn == "right" then hop = 1
+      elseif btn == "b" then close = true end
+    end
+    input.pressQueue = {}
+    if input.state then input.state.left, input.state.right = false, false end
+    if hop then
+      self:hop(hop)
+    elseif close then
+      if self.mirrorRx then self.mirrorRx.muted = true end
+      self:closeMirror("closed")
+    end
+    return true
+  end
+  end
+
   -- LEFT / RIGHT while out: a hop, not a turn.  input.step runs before the
   -- engine promotes this tick's presses, so the queue is where they can
   -- still be taken back.
   function BR:spectatorInput(game)
     if not (self.phase == "match" and self.status == "out") then return end
     local input = game and game.input
+    if self:mirrorInput(input) then return end
     local ow = mod.world:overworld()
     if not (input and input.pressQueue and ow and game.stack:top() == ow) then return end
     local queue, kept, hop = input.pressQueue, {}, nil
@@ -5966,6 +6195,7 @@ return function(mod)
   -- BattleState says battle.started -- LinkBattle never emits it -- and
   -- PvP and bot fights hold tickFog off via status anyway.
   mod.events:on("battle.started", function(ev)
+    if ev and ev.battle and ev.battle.mirror then return end   -- a spectator's replica
     -- inSession(), not inRound(): a battle that opens at "over" -- a
     -- scripted one, which no phase guard the mod can reach refuses (see the
     -- script.command wrap below) -- was invisible here, so liveLocalBattle
@@ -6004,14 +6234,23 @@ return function(mod)
         onFlee = function() BR.fleeing = opponent end,
       })
     end
+    -- ...and whoever is watching us follows us in (lib/mirror.lua).  After
+    -- the bot clamp above: the parties go out as they stand at turn one.
+    if ev and ev.battle and ev.battle.kind ~= "link" then BR:startRecording(ev.battle) end
   end)
 
+
+  -- a send-out of ours no switch announced is a replacement (lib/mirror.lua)
+  mod.events:on("battle.battler_switched", function(ev)
+    if BR.recorder and ev and ev.battle and not ev.battle.mirror then BR.recorder:onSwitched(ev) end
+  end)
 
   -- A ball that closed is a catch in flight until Party.add runs: the
   -- engine says "was caught!" first and stores the mon after the page
   -- (BattleState.storeCaughtMon).  Held here so the buzzer's close waits
   -- for it and the page is not left to a player's thumb.
   mod.events:on("battle.ball_thrown", function(ev)
+    if ev and ev.battle and ev.battle.mirror then return end
     if ev and ev.caught and BR:inRound() then BR.catchPending = ev.battle end
   end)
 
@@ -6027,6 +6266,10 @@ return function(mod)
   -- battle.ended rather than link.battle_ended.  A loss blacks the player
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
+    if ev and ev.battle and ev.battle.mirror then return end   -- a spectator's replica
+    if ev and ev.battle and BR.recorder and BR.recorder.battle == ev.battle then
+      BR:stopRecording(ev.result)
+    end
     BR.localBattle = nil
     BR.catchPending = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
@@ -6172,6 +6415,7 @@ return function(mod)
   function BR:onBattleClosed(_opponentId)
     -- the channel closed (LinkState:exitWith); the result arrives separately
     -- on link.battle_ended, so here we only drop our handle
+    if self.recorder and self.recorder.link then self:stopRecording("closed") end
     if self.battle then self.battle = nil end
   end
 
@@ -6179,6 +6423,7 @@ return function(mod)
   -- damage the real save.party never does under cable rules.  Party is
   -- health here, so we copy the damage back and a wiped party is elimination.
   mod.events:on("link.battle_ended", function(ev)
+    if BR.recorder and BR.recorder.link then BR:stopRecording(ev and ev.result) end
     if not (BR.phase == "match" and BR.game) then return end
     local save = BR.game.save
     -- self.battle is usually already gone here (LinkState closes the channel
@@ -6582,6 +6827,7 @@ return function(mod)
         BR:tickLevels()
         BR:spectatorInput(game)
         BR:tickWatch()
+        BR:tickMirror()
       end
     end
 
@@ -8177,4 +8423,46 @@ return function(mod)
   -- derivation, not the last frame sent: in a solo room the frame is
   -- suppressed (POK-102) and there would be nothing to read otherwise.
   mod.exports.busy = function() return myBusy() end
+
+  -- The fight on the battle screen (lib/mirror.lua), both ends of it, for
+  -- drivers.  mirrorLog is what we recorded of our own last fight;
+  -- replayMirror opens a replica of a log on THIS client, through the
+  -- wire's own encode/decode, which is how a single client proves a
+  -- recorded fight replays to the same ending.
+  mod.exports.mirror = function()
+    local st, rx = BR.mirrorState, BR.mirrorRx
+    return { open = st ~= nil and not st.mirrorClosed, kind = st and st.kind,
+             turn = st and st.turnCount, pending = st and #st.mirrorPending,
+             result = st and st.result, why = st and st.mirrorWhy,
+             frames = rx and rx.top, from = rx and rx.from,
+             watchers = #BR:liveWatchers(), recording = BR.recorder ~= nil,
+             last = BR.lastMirror }
+  end
+  mod.exports.mirrorLog = function()
+    local rec = BR.recorder or BR.lastRecorder
+    if not rec then return nil end
+    local out = {}
+    for i, f in ipairs(rec.log) do out[i] = f end
+    return out
+  end
+  mod.exports.replayMirror = function(frames)
+    local Mirror = require("mods.battle_royale.lib.mirror")
+    local decoded = {}
+    for _, f in ipairs(frames or {}) do
+      local m = Wire.decode(Wire.mirror("replay", f))
+      if m then decoded[#decoded + 1] = m.frame end
+    end
+    if not decoded[1] then return nil, "no start frame" end
+    local state, why = Mirror.open(BR.game, decoded[1], {
+      log = function(...) mod.log:info(...) end,
+      onClosed = function(s, w) BR:onMirrorClosed(s, w) end,
+    })
+    if not state then return nil, why end
+    state.mirrorReplay = true
+    BR.mirrorState = state
+    local ow = mod.world:overworld()
+    if ow then ow:pushBattle(state) else BR.game.stack:push(state) end
+    for i = 2, #decoded do state:feed(decoded[i]) end
+    return true
+  end
 end

@@ -5107,5 +5107,156 @@ do
   ok(found, "a short town stays on one row")
 end
 
+-- ------------------------------------------------------------------
+-- the fight a spectator is shown, on the battle screen (lib/mirror.lua)
+-- ------------------------------------------------------------------
+do
+  local Mirror = require("mods.battle_royale.lib.mirror")
+  eq(Wire.PROTOCOL, 11, "a battle frame is not a protocol bump: a peer without it leaves the mark up")
+
+  -- the recorder, over a plain table shaped like the BattleState it wraps
+  local moves = { { id = "TACKLE", pp = 35 }, { id = "GROWL", pp = 40 } }
+  local monA = { species = "CHARMANDER", level = 12, hp = 30, stats = { hp = 30 }, moves = moves }
+  local monB = { species = "PIDGEY", level = 10, hp = 20, stats = { hp = 20 }, moves = {} }
+  local foeMon = { species = "RATTATA", level = 9, hp = 22, stats = { hp = 22 }, moves = {} }
+  local sent, calls = {}, {}
+  local battle = {
+    kind = "wild", playerParty = { monA, monB },
+    player = { mon = monA, curMoves = moves, stages = { attack = 1 } },
+    enemy = { mon = foeMon },
+    playerPartyView = function(s) return s.playerParty end,
+    resolveTurn = function() calls[#calls + 1] = "turn" end,
+    resolveSwitch = function() calls[#calls + 1] = "switch" end,
+    tryRun = function() calls[#calls + 1] = "run" end,
+    throwBall = function(_, b) calls[#calls + 1] = "ball:" .. b end,
+    itemUsed = function() calls[#calls + 1] = "item" end,
+    sayChoice = function(s, _, onChoose) s.lastChoice = onChoose end,
+    introText = "Wild RATTATA\nappeared!",
+  }
+  local rec = Mirror.record(battle, {
+    kind = "wild", seed = 4242, myName = "RED", foeName = "RATTATA",
+    badges = { "BOULDERBADGE" }, send = function(f) sent[#sent + 1] = f end,
+    pack = function(m) return { species = m.species, level = m.level, hp = m.hp, moves = m.moves } end,
+  })
+  ok(type(battle.rng) == "function", "the recorded battle rolls on the mirror's stream")
+  eq(battle.rng(1, 6), Mirror.makeRng(4242)(1, 6), "...seeded as advertised")
+  eq(#sent, 1, "recording opens with the start frame")
+  eq(sent[1].k, "start", "...which is a start")
+  eq(sent[1].seed, 4242, "...carrying the seed")
+  eq(#sent[1].me, 2, "...our party")
+  eq(sent[1].foe[1].species, "RATTATA", "...and theirs")
+  eq(sent[1].badges[1], "BOULDERBADGE", "...and the badges the copies hit with")
+
+  battle:resolveTurn(moves[2])
+  eq(sent[2].k, "move", "a move is a move frame")
+  eq(sent[2].slot, 2, "...by slot")
+  eq(sent[2].hp.me, 30, "...with our HP")
+  eq(sent[2].hp.foe, 22, "...and theirs")
+  eq(calls[1], "turn", "...and the battle still resolves it")
+  battle:resolveTurn({ id = "STRUGGLE", pp = 1, struggle = true })
+  eq(sent[3].k, "struggle", "Struggle is its own frame")
+  battle:resolveSwitch(monB)
+  eq(sent[4].k, "switch", "a switch is a switch frame")
+  eq(sent[4].index, 2, "...by party index")
+  rec:onSwitched({ battle = battle, side = { index = 1 }, battler = { mon = monB } })
+  eq(#sent, 4, "the send-out that switch causes is not a second frame")
+  rec:onSwitched({ battle = battle, side = { index = 1 }, battler = { mon = monA } })
+  eq(sent[5].k, "replace", "a send-out no switch announced is a replacement")
+  eq(sent[5].index, 1, "...by party index")
+  rec:onSwitched({ battle = battle, side = { index = 2 }, battler = { mon = foeMon } })
+  eq(#sent, 5, "the foe's send-outs are theirs to derive")
+  battle:tryRun()
+  eq(sent[6].k, "run", "a run is a run frame")
+  battle:throwBall("POKE_BALL")
+  eq(sent[7].k, "ball", "a ball is a ball frame")
+  eq(sent[7].item, "POKE_BALL", "...naming the ball")
+  eq(calls[#calls], "ball:POKE_BALL", "...and it is still thrown")
+  battle.player.mon.hp = 12
+  battle:itemUsed({ "RED used\nPOTION!" })
+  eq(sent[8].k, "item", "an item is an item frame")
+  eq(sent[8].snap.hp, 12, "...with the mon as the bag left it")
+  eq(sent[8].snap.stages.attack, 1, "...stages included")
+  eq(sent[8].msgs[1], "RED used\nPOTION!", "...and the bag's own words")
+  battle:sayChoice("Will you change?", function(yes) battle.answered = yes end)
+  battle.lastChoice(true)
+  eq(sent[9].k, "choice", "a yes/no is a choice frame")
+  eq(sent[9].yes, true, "...carrying the answer")
+  eq(battle.answered, true, "...and the engine still gets it")
+  rec:stop("win")
+  eq(sent[10].k, "end", "stopping sends the end")
+  eq(sent[10].result, "win", "...with the result")
+  battle:tryRun()
+  eq(#sent, 10, "nothing after the end")
+  local numbered = true
+  for i, f in ipairs(sent) do if f.n ~= i then numbered = false end end
+  ok(numbered, "frames are numbered in order")
+  eq(#rec.log, #sent, "the log is what was sent")
+
+  -- every frame crosses the wire whole
+  for _, f in ipairs(sent) do
+    local m = Wire.decode(Wire.mirror("m1", f))
+    ok(m ~= nil, "frame " .. f.k .. " crosses the wire")
+    if m then
+      eq(m.b, "m1", "...naming the battle")
+      eq(m.frame.k, f.k, "...as itself")
+      eq(m.frame.n, f.n, "...numbered")
+    end
+  end
+  local st = Wire.decode(Wire.mirror("m1", sent[1])).frame
+  eq(st.me[1].species, "CHARMANDER", "a packed mon keeps its species")
+  eq(st.me[1].moves[1].id, "TACKLE", "...and its moves")
+  eq(st.me[1].hp, 30, "...and its HP")
+  eq(st.myName, "RED", "...and the names ride along")
+  eq(st.trainer, nil, "a wild fight names no trainer")
+  local lk = Wire.decode(Wire.mirror("m2", { n = 3, k = "link", side = "guest",
+                                             m = { type = "action", kind = "move", slot = 2, junk = "x" } })).frame
+  eq(lk.side, "guest", "a lockstep frame keeps its side")
+  eq(lk.m.slot, 2, "...and the slot")
+  eq(lk.m.junk, nil, "...and nothing else")
+
+  -- and what the door refuses
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "start", kind = "safari", me = {}, foe = {} } }),
+     "an unknown battle kind is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "move" } }), "a move without a slot is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "move", slot = "x" } }), "...or with a slot that is not one")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "start", kind = "wild", me = { { species = 5 } }, foe = {} } }),
+     "a mon with no species name is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { n = 1, k = "dance" } }), "an unknown frame kind is refused")
+  ok(not Wire.decode({ t = "bmir", b = "m", m = { k = "run" } }), "a frame without a number is refused")
+  ok(not Wire.decode({ t = "bmir", m = { n = 1, k = "run" } }), "a frame naming no battle is refused")
+  local big = {}
+  for i = 1, 9 do big[i] = { species = "RATTATA" } end
+  eq(#Wire.decode(Wire.mirror("m", { n = 1, k = "start", kind = "wild", me = big, foe = big })).frame.me, 6,
+     "a party is six at most")
+  ok(not Wire.decode(Wire.mirror("m", { n = 1, k = "link", side = "ref", m = { type = "action" } })),
+     "a lockstep frame needs a side")
+  ok(not Wire.decode(Wire.mirror("m", { n = 1, k = "link", side = "host", m = { type = "hash" } })),
+     "...and a message the observer reads")
+
+  -- a duel's recorder taps the channel
+  local outbox, lsent = {}, {}
+  local ch = setmetatable({}, { __index = { send = function(_, m) outbox[#outbox + 1] = m end } })
+  local lrec = Mirror.recordLink(ch, {
+    seed = 77, isHost = false, me = { { species = "PIKACHU" } }, foe = { { species = "EEVEE" } },
+    myName = "ASH", foeName = "GARY", send = function(f) lsent[#lsent + 1] = f end,
+  })
+  eq(lsent[1].k, "start", "a duel opens with a start frame")
+  eq(lsent[1].kind, "link", "...of the link kind")
+  eq(lsent[1].host, "foe", "...saying who hosts")
+  ch:send({ type = "action", kind = "move", slot = 1 })
+  eq(#outbox, 1, "the cable still gets our action")
+  eq(lsent[2].k, "link", "...and so do the watchers")
+  eq(lsent[2].side, "guest", "...as the guest's")
+  eq(lsent[2].m.slot, 1, "...by slot")
+  ch:send({ type = "hash", value = 1 })
+  eq(#lsent, 2, "a hash is the cable's business")
+  lrec:onTheirs({ type = "action", kind = "switch", index = 3 })
+  eq(lsent[3].side, "host", "the other cable's action is the host's")
+  eq(lsent[3].m.index, 3, "...by index")
+  lrec:stop("draw")
+  eq(lsent[4].k, "end", "the duel ends with an end frame")
+  eq(rawget(ch, "send"), nil, "and the tap comes off the channel")
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)

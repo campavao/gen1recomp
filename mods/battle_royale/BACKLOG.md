@@ -254,6 +254,33 @@ attempted under a menu used to fail silently). The first living trainer
 is picked automatically on elimination. A spectator's A press no longer
 turns a ghost to face an invisible body.
 
+### BR-27 · Watch the fight itself — DONE (2026-09-05)
+
+**Resolved 2026-09-05:** a replay, not a stream. The watched client records
+its battle -- the seed it rolls on (`BattleState.rng` is swapped for a
+Park-Miller stream at `battle.started`), both parties packed with
+`Protocol.packMon` as they stood at turn one, and every committed choice
+(`resolveTurn` / `resolveSwitch` / `tryRun` / `throwBall` / `itemUsed` /
+`sayChoice` wrapped on the instance, replacement picks off
+`battle.battler_switched`) -- and unicasts the frames (`bmir`) to whoever
+has peeked at it inside the last three peeks. The spectator's client runs
+a BattleState of the same kind from those frames, with the engine's menus
+replaced by waits for the frame that says what was chosen and the
+spectator's input replaced by a stand-in that only turns pages. A duel
+rides the lockstep messages themselves into `LinkBattle.newSpectator`, the
+engine's tournament observer. A late watcher gets the whole log and
+fast-forwards. Every action frame carries both actives' HP and the replica
+snaps to it, so drift heals at the next turn. Not a protocol bump: a peer
+without it leaves its spectators with the mark over its head. Proved by
+`mirror_replay.lua` (one client) and the `spectate` PvP scenario (two,
+over the relay). No engine change: `LinkBattle.newSpectator`,
+`BattleState.makeBattler` / `trainerSprite` and `Protocol.packMon` were
+already there.
+
+Known limits: a move learned mid-fight is not learned on the replica, a
+nickname prompt after a catch is skipped, and the "<PLAYER> used <ITEM>!"
+line reads the spectator's own name. Bot-vs-bot fights have no screen.
+
 ### BR-13 · See the spectated player's party and items — DONE (POK-18)
 
 **Resolved 2026-08-24:** pull, not push. A spectator unicasts `peek` to
