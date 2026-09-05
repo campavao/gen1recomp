@@ -2733,6 +2733,54 @@ end
 -- for an alive player after the drop.  luacheck would say so; it is not on
 -- this machine, so this says so.
 
+-- ------- a catch on its "was caught!" page survives the buzzer
+--
+-- The engine stores a caught mon AFTER the caught page is dismissed
+-- (BattleState.storeCaughtMon runs behind sayNextWaitSfx), and the buzzer
+-- closes an open battle after BUZZER_BATTLE_GRACE.  A MAGMAR caught with
+-- seconds left sat on its page -- fanfare, then a prompt -- until the
+-- close discarded it, and its trainer was out for catching nothing.  So:
+-- a closed ball marks the catch pending until pokemon.caught, the page is
+-- pressed through at once, and closeLiveBattle waits on it.
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if f then
+    local src = f:read("*a")
+    f:close()
+    ok(src:find('mod%.events:on%("battle%.ball_thrown"') ~= nil,
+       "a closed ball is watched for")
+    local thrown = src:match('mod%.events:on%("battle%.ball_thrown".-\n  end%)')
+    ok(thrown and thrown:find("ev%.caught") and thrown:find("BR%.catchPending = ev%.battle"),
+       "...and a caught one is a catch pending")
+    local landed = src:match('mod%.events:on%("pokemon%.caught".-\n  end%)')
+    ok(landed and landed:find("BR%.catchPending = nil"), "which pokemon.caught lands")
+    local ended = src:match('mod%.events:on%("battle%.ended".-\n  end%)')
+    ok(ended and ended:find("BR%.catchPending = nil"), "and a closed battle clears")
+    local close = src:match("function BR:closeLiveBattle%(.-\n  end\n")
+    ok(close and close:find('if self%.catchPending == battle then return "waiting" end'),
+       "the buzzer's close waits on a pending catch")
+    local auto = src:match("function BR:tickAutoResolve%(.-\n  end\n")
+    ok(auto and auto:find("self%.catchPending == lb"),
+       "and the caught page is pressed through at once")
+    -- ...a second in: the jingle is cut, and the page says less
+    ok(auto and auto:find("self%.caughtPage%.seconds") and auto:find("pcall%(src%.stop, src%)"),
+       "the caught jingle is cut at caughtPage.seconds")
+    local page = src:match("BR%.caughtPage = {.-\n  }\n")
+    ok(page and page:find("seconds = 1,"), "which is one second")
+    ok(page and page:find('text = "All right!\\n%s was\\ncaught!"', 1, true),
+       "the engine's caught page is the catalog id")
+    ok(page and page:find('match = "%s was\\ncaught!"', 1, true),
+       "and the match's reads without the All right!")
+    ok(src:find("Data%.strings%[BR%.caughtPage%.text%] = BR%.caughtPage%.match") ~= nil,
+       "swapped in with the throwaway world")
+    local reset = src:match("function BR:resetMatch%(.-\n  end\n")
+    ok(reset and reset:find("Data%.strings%[self%.caughtPage%.text%] = self%.caughtPage%.text"),
+       "and back at resetMatch, for a real playthrough")
+    ok(src:find("mod%.content%.strings:override%(BR%.caughtPage%.text, BR%.caughtPage%.text%)") ~= nil,
+       "with an identity entry at load so the catalog is live")
+  end
+end
+
 -- ------- a guest leaving mid-match does not hand the host the match
 --
 -- The roster handler forgets whoever is no longer on the relay's member

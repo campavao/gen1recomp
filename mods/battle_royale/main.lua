@@ -167,6 +167,16 @@ local SAFARI_BEAT_SECONDS = 5     -- how often the host re-announces the clock
 -- (POK-92).  Long enough for a ball already in the air to land -- a throw
 -- and its shakes run about two seconds -- and far too short to hide in.
 local BUZZER_BATTLE_GRACE = 3
+-- The caught page, in a match (the user's call, 2026-09-05): "HORSEA was
+-- caught!" rather than "All right! HORSEA was caught!", and the page
+-- closes itself a second in -- the jingle is cut short and the prompt is
+-- pressed.  The wording rides the engine's string catalog
+-- (src/core/Strings.lua): the source is the id, and the match swaps the
+-- entry in at its start and back at its end, so a real playthrough with
+-- the mod enabled still reads the original.
+-- (Held as BR.caughtPage, below, rather than as a local: the mod's main
+-- function sits exactly at LuaJIT's sixty-upvalue cap, and a field on a
+-- table it already captures costs nothing.)
 -- How long a finished match stays standing (POK-144).  The banner gets read
 -- before the world goes, and nothing holds a match that is already over
 -- open past the deadline -- a screen that never goes quiet is exactly the
@@ -458,6 +468,11 @@ return function(mod)
     return myBuild
   end
   BR.buildOf = build
+  BR.caughtPage = {
+    text = "All right!\n%s was\ncaught!",   -- the engine's, and the catalog id
+    match = "%s was\ncaught!",
+    seconds = 1,
+  }
 
   local function broadcastPlace()
     if not (BR.relay and BR.relay:isOpen()) then return end
@@ -1198,6 +1213,10 @@ return function(mod)
     -- state, and losing that costs a match, while losing this costs a
     -- stranger their overworld for the session (POK-134).  Idempotent, so
     -- the save-event net behind it is still free to arrive.
+    do  -- the caught page's original wording, for a real playthrough
+      local Data = require("src.core.Data")
+      if type(Data.strings) == "table" then Data.strings[self.caughtPage.text] = self.caughtPage.text end
+    end
     self:unsuspendMods()
     self:restoreSpeed()
     -- ...and the ENGINE gets its cheap script dispatch back (POK-155).  This
@@ -1748,6 +1767,9 @@ return function(mod)
       save.pokedex.seen[id] = true
       save.pokedex.owned[id] = true
     end
+    -- ...and the caught page says less (CAUGHT_TEXT_MATCH); resetMatch
+    -- puts the original back
+    if type(Data.strings) == "table" then Data.strings[BR.caughtPage.text] = BR.caughtPage.match end
     -- Every town is a FLY destination from frame one (POK-52): the map is
     -- the arena, and travel is strategy, not a diary of where you have
     -- been.  The same trick as the dex above.
@@ -3660,6 +3682,10 @@ return function(mod)
   function BR:closeLiveBattle(since, grace, why)
     local battle = self:liveLocalBattle()
     if not battle then return "none" end
+    -- never over a catch that has not landed: the ball has closed, the
+    -- page is being pressed through (tickAutoResolve), and Party.add is
+    -- a moment away -- closing here is what lost the MAGMAR
+    if self.catchPending == battle then return "waiting" end
     local game, now = self.game, clock()
     if not (game and now and since) then return "waiting" end
     if (now - since) < (grace or 0) then return "waiting" end
@@ -4675,10 +4701,30 @@ return function(mod)
     -- them out on its own, and the move menu is not "messages" at all.
     local lb = self.localBattle
     if lb and top == lb then
+      -- the caught page's jingle holds the queue until it stops sounding
+      -- (BattleState.waitingSound); in a match it gets caughtPage.seconds
+      -- and is cut, and the prompt that follows is pressed at once below
+      if self.catchPending == lb and lb.waitingSound then
+        self.catchPageSince = self.catchPageSince or now
+        local src = lb.waitingSound
+        if (now - self.catchPageSince) >= self.caughtPage.seconds and src.stop then
+          pcall(src.stop, src)
+        end
+      else
+        self.catchPageSince = nil
+      end
       local waiting = lb.phase == "messages" and (lb.msgWaiting or lb.msgPrompt)
       if waiting then
         self.battleTextSince = self.battleTextSince or now
-        if (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
+        -- A catch on its way into the party gets no three seconds: the
+        -- "was caught!" page is the one thing between the ball closing
+        -- and Party.add, and under the Safari clock a MAGMAR sat on that
+        -- page until the buzzer's grace ran out and closed the battle
+        -- over it -- caught, never stored, "You caught nothing" (the
+        -- user's 2026-09-05 match).  The page is pressed through the
+        -- frame it can be; the jingle still plays under it.
+        if self.catchPending == lb
+           or (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
           self.battleTextSince = nil
           press("b")
         end
@@ -5961,8 +6007,17 @@ return function(mod)
   end)
 
 
+  -- A ball that closed is a catch in flight until Party.add runs: the
+  -- engine says "was caught!" first and stores the mon after the page
+  -- (BattleState.storeCaughtMon).  Held here so the buzzer's close waits
+  -- for it and the page is not left to a player's thumb.
+  mod.events:on("battle.ball_thrown", function(ev)
+    if ev and ev.caught and BR:inRound() then BR.catchPending = ev.battle end
+  end)
+
   -- the record keeps count (POK-47)
   mod.events:on("pokemon.caught", function()
+    BR.catchPending = nil   -- landed
     if BR:inRound() and BR.stats then
       BR.stats.catches = BR.stats.catches + 1
     end
@@ -5973,6 +6028,7 @@ return function(mod)
   -- out, which world.blacked_out below turns into elimination.
   mod.events:on("battle.ended", function(ev)
     BR.localBattle = nil
+    BR.catchPending = nil
     BR:reclaimGhostLead()   -- the Safari's stand-in leaves with the screen
     -- a breather after any fight in a match (POK-174): a bot's, a route
     -- trainer's, a wild one's -- the queue of bots outside does not care
@@ -7368,6 +7424,9 @@ return function(mod)
   -- ------- reaching it from START
 
   mod.content.screens:register(SCREEN, BRMenu.build(mod, BR))
+  -- an identity entry, so the catalog is live and the match can swap the
+  -- caught page's wording in and out (CAUGHT_TEXT_MATCH)
+  pcall(function() mod.content.strings:override(BR.caughtPage.text, BR.caughtPage.text) end)
 
   mod.hooks:wrap("ui.start_menu.items", function(next, game, items)
     local out = next(game, items)
