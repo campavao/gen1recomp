@@ -79,7 +79,7 @@ where the team is your health. The Safari is closed for the rest of the
 match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
 RATTATA.
 
-**The zone has a shape.** Each match draws its own twelve species from the match seed, and the draw is three slices: a theme (one type the seed picks, so a match is a WATER match or a BUG match and reads that way in two minutes), a rare slice (the Safari's own residents and Kanto's one-offs, guaranteed a few places every match), and the open rest. The log names the theme. Bots draft their first Pokémon from the same zone, so what a fallen bot drops carries the match's character.
+**The zone has a shape.** Each match draws its own twelve species from the match seed, and the draw is three slices: a theme (one type the seed picks, so a match is a WATER match or a BUG match and reads that way in two minutes), a rare slice (the Safari's own residents and Kanto's one-offs, guaranteed a few places every match), and the open rest. The log names the theme. Bots draft their first Pokémon from the same zone, so what a fallen bot drops carries the match's character — and a bot's lines evolve with the rung exactly as yours do (a stone at a seeded rung, a trade when it loots somebody else's ball), so the last ring is MUK and GENGAR, not GRIMER and HAUNTER. The starters, the fossils and the Dojo's two are in the zone too, since OAK's LAB is locked for the match. Every gift a match hands out — the Celadon EEVEE, a revived fossil — lands at the rung, not at the story's level.
 
 You start with **all eight badges and all five HMs**, because a match is
 twenty minutes and Kanto is gated for a campaign. The badges are what Gen 1

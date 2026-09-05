@@ -3449,6 +3449,18 @@ do
                         "LICKITUNG", "TANGELA", "ELECTABUZZ", "MAGMAR", "JYNX", "DITTO" }) do
     ok(candSet[sp], "the one-offs the report missed are candidates: " .. sp)
   end
+  -- POK-183: the starters in the open slice, the fossils and the Dojo's
+  -- two in the rare slice -- OAK's LAB is locked for the match, and the
+  -- lab and the Dojo hand out one copy each
+  for _, sp in ipairs({ "BULBASAUR", "CHARMANDER", "SQUIRTLE" }) do
+    ok(candSet[sp] and not rareSet[sp], "a starter is an open candidate: " .. sp)
+  end
+  for _, sp in ipairs({ "OMANYTE", "KABUTO", "AERODACTYL", "HITMONLEE", "HITMONCHAN" }) do
+    ok(candSet[sp] and rareSet[sp], "a fossil or Dojo prize is in the rare slice: " .. sp)
+  end
+  for _, sp in ipairs({ "MEWTWO", "MEW", "ARTICUNO", "ZAPDOS", "MOLTRES" }) do
+    ok(not candSet[sp], "no legendary in the zone: " .. sp)
+  end
 
   -- with data that knows types, the seed picks a theme and the zone leans
   -- into it; NORMAL never is one, and a thin type never is either
