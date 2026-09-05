@@ -1028,6 +1028,26 @@ do
   end
 end
 
+-- ------- a gift lands at the rung (POK-182), read off the source: the
+-- before_give listener clamps the level ahead of everything else it does.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the gift-rung scan: main.lua not found)")
+    io.write(string.char(10))
+  else
+    local src = f:read("*a")
+    f:close()
+    local give = src:match('mod%.events:on%("pokemon%.before_give", function%(gift%).-\n  end%)\n')
+    T.check(give ~= nil, "found the before_give listener")
+    local clamp = give and give:find("if tonumber(gift.level) and gift.level > rung then gift.level = rung end", 1, true)
+    local full = give and give:find("#(save.party or {}) >= 6", 1, true)
+    T.check(clamp ~= nil, "a gift above the rung is clamped to it")
+    T.check(clamp and full and clamp < full, "...before the full-party return, so every gift is clamped")
+  end
+end
+
 -- ------- a bot's team evolves (POK-181), read off the source: every
 -- read of a record goes through the evolution, and a looted ball marks
 -- the row as changed hands.

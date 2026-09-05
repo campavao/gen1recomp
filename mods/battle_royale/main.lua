@@ -6502,6 +6502,14 @@ return function(mod)
   -- ScriptRunner under it, so script.command never fires for it.
   mod.events:on("pokemon.before_give", function(gift)
     if not (inMatch() and gift and gift.ctx) then return end
+    -- A gift lands AT the rung (POK-182).  Kanto's givers hand out the
+    -- levels the story wants -- the Celadon EEVEE at 25, the Dojo's two
+    -- and the revived fossils at 30 -- and the rung only ever pulls a mon
+    -- UP (Levels.needsScaling), so a level-25 gift at rung 5 was a free
+    -- early lead nobody could match.  The gift table is the engine's own
+    -- seam for changing what is about to be created.
+    local rung = BR:level()
+    if tonumber(gift.level) and gift.level > rung then gift.level = rung end
     local save = BR.game and BR.game.save
     if not (save and #(save.party or {}) >= 6) then return end
     BR.pendingGift = { ctx = gift.ctx }
