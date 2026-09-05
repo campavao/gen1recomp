@@ -18,7 +18,8 @@ can claim. See "What's here / what's next" below.
 **On your own, from a cold start:** pick `BATTLE ROYALE` on the title
 screen, then `SOLO VS BOTS`, then `START MATCH`. That is the whole setup.
 No server to run, no save to make, no Oak. A solo room fills itself with
-eight bots if you haven't picked a number, and the `BOTS` row changes it.
+eight bots if you haven't picked a number, and `MAX` under `OPTIONS`
+changes it.
 
 Solo needs no relay because there is nobody to relay to: `lib/localroom.lua`
 answers the room protocol for a room of one, so the mod hosts, broadcasts
@@ -47,15 +48,19 @@ port-forwarding.
    machine). Both are remembered.
 3. One player picks **HOST GAME** and reads out the six-character room code.
 4. Everyone else picks **JOIN BY CODE** and enters it.
-5. The host can add **BOTS** (the row steps 0, 1, 2, 3, 5, 8, 12, 16, 20,
-   25, 30 and wraps) to fill the match out, or set **FILL TO** a number of
-   trainers and let bots make up whatever the humans don't. The two compose
-   by taking whichever wants more, and `TRAINERS:` shows the total the drop
-   will actually hold. Fill is the one you want when you can't know how many
-   people turn up.
-6. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
+5. The lobby is a room: every trainer as the sprite they wear and their
+   name, eight seats a page, a `▼` when there are more. The host's
+   **OPTIONS** button opens the settings over it; a guest's button is
+   `LEAVE`. Press A on a trainer for their card — name, HOST, their wins —
+   and, as the host, `REMOVE` to show them the door.
+6. Under **OPTIONS**, **FILL: ON** tops the roster up to **MAX** with bots
+   at the start (the row steps 2, 4, 6, 8, 12, 16, 20, 26, 30 and wraps),
+   and the room draws an outline in every seat a bot will take. Fill is
+   the one you want when you can't know how many people turn up; off, the
+   match is exactly who is in the room.
+7. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
    without a code. Rooms are private until you say otherwise.
-6. The host sees the roster fill in and picks **START MATCH**. Everyone
+8. The host sees the seats fill in and picks **START MATCH**. Everyone
    lands in the SAFARI ZONE at once.
 
 You can run a match entirely on your own: host, set some bots, start.
@@ -253,9 +258,10 @@ The start-menu row reads `ROYALE.` while you're in a lobby and `ROYALE*`
 once a match is live. The same screen is on the title menu, so a match is
 reachable before a save exists — which matters because a match throws its
 world away anyway. It is one screen: picking SOLO VS BOTS, QUICK PLAY,
-HOST GAME or JOIN BY CODE turns it into the lobby in place — the code, the
-roster filling in, BOTS / FILL TO, OPEN, the countdown — and you leave it
-by starting the match or backing out. During a match the same row is the
+HOST GAME or JOIN BY CODE turns it into the lobby in place — the code
+over a room of seats filling in, the countdown under it, OPTIONS for the
+host — and you leave it by starting the match or backing out. During a
+match the same row is the
 report: who's left, the Safari clock, the level, where the fog is. When a
 match ends every client leaves the finished world on its own and lands back
 on this screen — the result of the match at the top, the room still there
@@ -282,9 +288,10 @@ by a counter. The cost of that choice, plainly: somebody who only ever plays
 solo is never counted, and their whole history arrives at once the first
 time they touch multiplayer.
 
-`SEND STATS` in the lobby turns it off, and off stops the counting as well
-as the sending, so there is no backlog waiting to be flushed if it goes back
-on.
+`SEND STATS` in the launcher's mod options (with `FOG SECONDS` and the
+relay address) turns it off, and off stops the counting as well as the
+sending, so there is no backlog waiting to be flushed if it goes back on.
+It is a once-per-install choice, which is why it is not in the lobby.
 
 **Your name, your skin and your wins are yours.** They live beside the mod
 rather than inside a save file, which is what lets them survive closing the
@@ -730,7 +737,7 @@ carries the room code and the match seed —
 server prints the same room code on its own lines, so a client log and a
 server log for one game can be lined up afterwards.
 
-**DEBUG LOG** in the lobby turns on the tier below that: per-map detail,
+**DEBUG** under the lobby's OPTIONS turns on the tier below that: per-map detail,
 and anything else that would otherwise bury the story. It is off by
 default on purpose. `mod.exports.setDebug(true)` is the same switch, for
 a driver.

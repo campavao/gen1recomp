@@ -9,7 +9,9 @@
 -- envelope (see relay/server.js).  Field names are short because a step
 -- goes out roughly four times a second per player to every other player.
 --
---   {t="place", map=, x=, y=, f=, st=, sprite=}   where I am + my status
+--   {t="place", map=, x=, y=, f=, st=, sprite=, w=}   where I am + my status
+--                                                 (w: my career wins, for
+--                                                 the lobby's seat card)
 --   {t="step",  d=, x=, y=, map=}                 a step just committed
 --   {t="face",  f=, map=}                         a turn in place
 --
@@ -157,10 +159,14 @@ end
 -- `build` is { engine =, mod = } and is the sender's OWN (PROTOCOL 9).
 -- Bot places pass none: a bot is the host's puppet with no install of its
 -- own, and it never fights over the link, so it has no build to compare.
-function Wire.place(map, x, y, facing, status, sprite, as, build)
+-- `wins` is the sender's career count (lib/career.lua), read by the
+-- lobby's seat card and nothing else; absent is fine and means unknown.
+-- Additive: an older client's decoder drops fields it does not name.
+function Wire.place(map, x, y, facing, status, sprite, as, build, wins)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
            st = status, sprite = sprite, as = as,
-           ev = build and build.engine, mv = build and build.mod }
+           ev = build and build.engine, mv = build and build.mod,
+           w = tonumber(wins) and math.floor(tonumber(wins)) or nil }
 end
 
 function Wire.step(dir, x, y, map, as)
@@ -340,6 +346,8 @@ decoders.place = function(m)
            status = m.st, as = actorOf(m),
            sprite = type(m.sprite) == "string" and #m.sprite <= MAX_ID
                     and m.sprite or nil,
+           wins = (type(m.w) == "number" and m.w >= 0 and m.w == math.floor(m.w))
+                  and m.w or nil,
            build = (engine or modv) and { engine = engine, mod = modv } or nil }
 end
 

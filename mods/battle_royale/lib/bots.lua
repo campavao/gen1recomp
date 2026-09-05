@@ -52,10 +52,28 @@ function Bots.nextFill(n)
   return 0
 end
 
+-- What the lobby's MAX row cycles through once FILL is on: the same
+-- rungs without the off, topping out at a full room of thirty (Bots.MAX
+-- is the bot cap and the room cap alike).  Wraps to the bottom.
+Bots.MAXES = { 2, 4, 6, 8, 12, 16, 20, 26, Bots.MAX }
+
+function Bots.nextMax(n)
+  for _, step in ipairs(Bots.MAXES) do
+    if step > (tonumber(n) or 0) then return step end
+  end
+  return Bots.MAXES[1]
+end
+
 -- Names fit the 7-character Gen 1 box and read like trainers, not robots.
+-- At least Bots.MAX of them, so a full roster is dealt without the digit
+-- Bots.name falls back on past the end of the list: the lobby shows
+-- every seat by name now (lib/lobby.lua), and "TOBY1" read as a robot.
 local NAMES = {
   "JOEY", "MIKEY", "CALVIN", "LASS", "TIANA", "DUDLEY", "SETH", "PIA",
   "RUDY", "NOLAN", "IVY", "MAX", "REN", "KIM", "TOBY", "VIC",
+  "ANNA", "BEN", "CORA", "DANE", "ELLA", "FINN", "GINA", "HUGO",
+  "IRIS", "JUNE", "KAI", "LEON", "MIA", "NED", "OTIS", "PAM",
+  "QUINN", "ROSA", "SAM", "TESS",
 }
 
 -- A shallow common-Kanto pool: every one of these is a real Red species and

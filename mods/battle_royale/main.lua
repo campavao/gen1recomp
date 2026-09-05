@@ -303,6 +303,10 @@ return function(mod)
     -- a RATTATA, which is what the smoke drivers still expect
     { key = "safari", label = "SAFARI SECONDS", type = "number",
       default = DEFAULT_SAFARI_SECONDS, min = 0, max = 600 },
+    -- POK-124's opt-out, here rather than in the lobby since 2026-09-05:
+    -- it is a once-per-install choice, and the lobby's OPTIONS box is the
+    -- match's.  Off stops the counting as well as the sending.
+    { key = "stats", label = "SEND STATS", type = "toggle", default = true },
   })
 
   -- The career (POK-120) comes off mod.cache, which is keyed by mod id
@@ -424,6 +428,13 @@ return function(mod)
   end
 
   local function mySprite()
+    -- The skin I picked, whether or not I am standing in a match world
+    -- yet.  The lobby draws every trainer from the place they sent
+    -- (lib/lobby.lua), and before applySkinWalk the field's own walk is
+    -- still the stock one -- so this used to advertise RED to a room you
+    -- were sitting in as a HIKER.
+    local walk = BR.skinWalk and BR:skinWalk()
+    if walk then return walk end
     local field = BR.game and BR.game.data and BR.game.data.field
     return field and field.playerSprites and field.playerSprites.walk
   end
@@ -451,7 +462,7 @@ return function(mod)
     local h = here()
     BR.relay:broadcast(Wire.place(h and h.mapId, h and h.x, h and h.y,
                                   h and h.facing, BR.status, mySprite(),
-                                  nil, build()))
+                                  nil, build(), BR:winCount()))
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
@@ -518,7 +529,9 @@ return function(mod)
   -- The player's say in POK-124.  Off means nothing is counted and nothing
   -- is sent -- the solo counter stops moving too, so turning it off does
   -- not leave a backlog to be flushed the moment it goes back on.
-  function BR:statsOn() return not stats.off end
+  function BR:statsOn()
+    return not stats.off and mod.options:get("stats") ~= false
+  end
   function BR:setStatsOn(on)
     return not Stats.setOff(mod, stats, not on, log)
   end
@@ -546,6 +559,20 @@ return function(mod)
     if self.matchWorld then self:applySkinWalk() end
     if self.relay and self.relay:isOpen() then broadcastPlace() end
     return entry.id
+  end
+
+  -- The walk sheet my skin means on this build: what the lobby draws in
+  -- my seat and what every place message advertises.  A sheet this build
+  -- lacks falls back to the stock one, exactly as applySkinWalk does.
+  function BR:skinWalk()
+    local Skins = require("mods.battle_royale.lib.skins")
+    local data = self.game and self.game.data
+    local walk = Skins.get(self.skin).walk
+    if data and data.sprites and not data.sprites[walk] then
+      local ps = data.field and data.field.playerSprites
+      return self.stockWalk or (ps and ps.walk) or "SPRITE_RED"
+    end
+    return walk
   end
 
   function BR:applySkinWalk()
@@ -639,7 +666,7 @@ return function(mod)
       -- connection, which exists for its own reasons (POK-124).  Relay:stat
       -- refuses a LocalRoom, so a solo room cannot eat the count, and the
       -- counter is only cleared once the send is actually accepted.
-      local m = Stats.message(stats, mod.version)
+      local m = BR:statsOn() and Stats.message(stats, mod.version)
       if m and relay:stat(m) then Stats.flushed(mod, stats, log) end
       -- Say who we are AT THE JOIN (POK-142).  Until the door there was no
       -- reason to: the first place used to go out at the drop (onStart),
@@ -794,10 +821,28 @@ return function(mod)
 
   function BR:setFill(n)
     self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
+    -- a number set is a number remembered: FILL: OFF then ON comes back
+    -- to the MAX it had, not to the default
+    if self.fillTo > 0 then self.fillTarget = self.fillTo end
     return self.fillTo
   end
 
   function BR:nextFill() return Bots.nextFill(self.fillTo) end
+
+  -- The lobby's two rows for the same knob (the user's sketch, 2026-09-05):
+  -- FILL: ON/OFF is whether bots top the roster up at all, MAX: n is how
+  -- far.  fillTo stays the one number botsAtStart reads, so nothing
+  -- downstream learns a second representation.
+  function BR:fillOn() return (self.fillTo or 0) > 0 end
+  function BR:fillMax() return self.fillTarget or Bots.MAX end
+  function BR:setFillOn(on)
+    if on then self:setFill(self:fillMax()) else self.fillTo = 0 end
+    return self:fillOn()
+  end
+  function BR:cycleFillMax()
+    self:setFill(Bots.nextMax(self:fillMax()))
+    return self:fillMax()
+  end
 
   -- QUICK PLAY: join whatever is open, and if nothing is, become the thing
   -- that is open.  The fallback rides the SAME connection -- no_open_rooms
@@ -820,7 +865,7 @@ return function(mod)
     local ok, err = relay:quickJoin(myName())
     if not ok then return false, err end
     self.relay = relay
-    self.fillTo = QUICK_FILL
+    self:setFill(QUICK_FILL)
     self.quick = true
     return true
   end
@@ -845,7 +890,7 @@ return function(mod)
     if not ok then return false, err end
     self.relay = relay
     self.dailyLobby = true
-    self.fillTo = DAILY_FILL
+    self:setFill(DAILY_FILL)
     return true
   end
 
@@ -1422,7 +1467,7 @@ return function(mod)
     -- Net:connectTCP blocks for up to five seconds and the player just
     -- asked for the offline mode.  The count rides the next real relay
     -- connection instead.
-    if self.solo then Stats.recordSolo(mod, stats, log) end
+    if self.solo and self:statsOn() then Stats.recordSolo(mod, stats, log) end
     local ids = {}
     for _, m in ipairs(relay.members) do ids[#ids + 1] = m.id end
     table.sort(ids)
@@ -1935,6 +1980,7 @@ return function(mod)
       self.players[actor] = p
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
+      p.wins = msg.wins or p.wins
       p.status = msg.status
       -- keep the first answer rather than the latest: a resync from a bot
       -- the host is puppeting carries no build, and "no build in this
@@ -7433,6 +7479,11 @@ return function(mod)
   mod.exports.setOpen = function(v) return BR:setOpen(v ~= false) end
   mod.exports.isOpen = function() return BR:isOpen() end
   mod.exports.setFill = function(n) return BR:setFill(n) end
+  mod.exports.setFillOn = function(on) return BR:setFillOn(on ~= false) end
+  -- the room as the lobby draws it (lib/lobby.lua), for a driver
+  mod.exports.lobbySeats = function()
+    return require("mods.battle_royale.lib.lobby").seats(BR)
+  end
   mod.exports.botsAtStart = function() return BR:botsAtStart() end
   mod.exports.startsIn = function() return BR:startsIn() end
   mod.exports.readyUp = function() return BR:readyUp() end
