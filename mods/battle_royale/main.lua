@@ -2816,6 +2816,12 @@ return function(mod)
   -- mon from the seed at the floor rung -- so no message is needed until
   -- the record actually changes; every change after that arrives as a
   -- botrec broadcast and replaces the copy wholesale.
+  -- This bot's stone rung and pick (POK-181): the seeded moment its
+  -- stone line "used a stone", handed to every read of its record.
+  function BR:botEvo(id)
+    return Bots.stoneRung(self.matchSeed, id)
+  end
+
   function BR:botRecord(id)
     local rec = self.botRecords[id]
     if not rec then
@@ -2881,7 +2887,10 @@ return function(mod)
       log:say("LOOTED: %s took %s's bag", tostring(p.name),
               tostring(ball.name or "someone"))
     elseif ball.species and #rec < Bots.recordCap() then
-      rec[#rec + 1] = { species = ball.species, hpFrac = 1 }
+      -- a ball somebody else dropped is a change of hands (POK-181, the
+      -- bots' half of POK-179): the row's trade line finishes
+      rec[#rec + 1] = { species = ball.species, hpFrac = 1,
+                        traded = (not Spills.isOwn(key, id)) or nil }
       log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
               tostring(ball.species), #rec)
     else
@@ -5282,7 +5291,8 @@ return function(mod)
     if not (data and p and p.map and p.x and p.y) then return end
     -- the team it actually built (POK-158), fainted included -- what hits
     -- the ground is the record, not a synth
-    local party = Bots.spillRows(self:botRecord(id), self:level())
+    local stone, pick = self:botEvo(id)
+    local party = Bots.spillRows(self:botRecord(id), self:level(), data, stone, pick)
     local bag = self:botBag(id)
     bag.name = p.name
     -- A surfing bot can die ON the water (the fog mid-crossing), and the
@@ -5393,13 +5403,15 @@ return function(mod)
     -- come from the bot's RECORD (POK-158) -- the team it has actually
     -- built and the wounds it is actually carrying -- not a fresh synth.
     local rec = self:botRecord(botId)
-    local rows, idx = Bots.fightRows(rec, self:level())
+    -- each line at what it has reached by this rung (POK-181)
+    local stone, pick = self:botEvo(botId)
+    local rows, idx = Bots.fightRows(rec, self:level(), game.data, stone, pick)
     if #rows == 0 then
       -- cannot happen short of a desynced record (a wiped team is an
       -- eliminated bot); heal it rather than opening an unwinnable fight
       mod.log:warn("bot %s had no healthy mon; record reset", tostring(botId))
       for _, m in ipairs(rec) do m.hpFrac = 1 end
-      rows, idx = Bots.fightRows(rec, self:level())
+      rows, idx = Bots.fightRows(rec, self:level(), game.data, stone, pick)
     end
     self.botParty = rows
     self.botFightIdx = idx
@@ -7936,6 +7948,14 @@ return function(mod)
   mod.exports.safariPool = function() return BR.safariPool, BR.safariTheme end
   mod.exports.myId = function() return BR.myId end
   mod.exports.botRecord = function(id) return BR:botRecord(id) end
+  -- the rows a fight with this bot would open on, at the current rung or
+  -- the one given (POK-181), and its seeded stone rung
+  mod.exports.botRows = function(id, rung)
+    local stone, pick = BR:botEvo(id)
+    return (Bots.fightRows(BR:botRecord(id), rung or BR:level(),
+                           BR.game and BR.game.data, stone, pick))
+  end
+  mod.exports.botStone = function(id) return BR:botEvo(id) end
   mod.exports.dailyPlay = function() return BR:dailyPlay() end
   mod.exports.dailyStartsIn = function() return BR:dailyStartsIn() end
   mod.exports.isDailyLobby = function() return BR.dailyLobby == true end

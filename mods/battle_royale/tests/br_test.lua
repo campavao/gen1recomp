@@ -2442,6 +2442,91 @@ do
   ok(not Bots.recordAlive({ { species = "A", hpFrac = 0 } }),
      "a wiped record is not")
 
+  -- ------- a bot's team evolves (POK-181): derived at read time
+
+  local evo = { pokemon = {
+    GRIMER = { evolutions = { { method = "LEVEL", level = 38, species = "MUK" } } },
+    MUK = { evolutions = {} },
+    CATERPIE = { evolutions = { { method = "LEVEL", level = 7, species = "METAPOD" } } },
+    METAPOD = { evolutions = { { method = "LEVEL", level = 10, species = "BUTTERFREE" } } },
+    BUTTERFREE = { evolutions = {} },
+    GEODUDE = { evolutions = { { method = "LEVEL", level = 25, species = "GRAVELER" } } },
+    GRAVELER = { evolutions = { { method = "TRADE", level = 1, species = "GOLEM" } } },
+    GOLEM = { evolutions = {} },
+    NIDORAN_M = { evolutions = { { method = "LEVEL", level = 16, species = "NIDORINO" } } },
+    NIDORINO = { evolutions = { { method = "ITEM", item = "MOON_STONE", level = 1, species = "NIDOKING" } } },
+    NIDOKING = { evolutions = {} },
+    EEVEE = { evolutions = {
+      { method = "ITEM", item = "WATER_STONE", level = 1, species = "VAPOREON" },
+      { method = "ITEM", item = "THUNDER_STONE", level = 1, species = "JOLTEON" },
+      { method = "ITEM", item = "FIRE_STONE", level = 1, species = "FLAREON" } } },
+    VAPOREON = {}, JOLTEON = {}, FLAREON = {},
+    KADABRA = { evolutions = { { method = "TRADE", level = 1, species = "ALAKAZAM" } } },
+    ALAKAZAM = {},
+    DRATINI = { evolutions = { { method = "LEVEL", level = 30, species = "DRAGONAIR" } } },
+    DRAGONAIR = { evolutions = { { method = "LEVEL", level = 55, species = "MISSING" } } },
+  } }
+  eq(Bots.evolveAt(evo, "GRIMER", 37), "GRIMER", "below the level, the line waits")
+  eq(Bots.evolveAt(evo, "GRIMER", 38), "MUK", "at the level it has evolved")
+  eq(Bots.evolveAt(evo, "CATERPIE", 15), "BUTTERFREE", "a two-step line walks both steps")
+  eq(Bots.evolveAt(evo, "CATERPIE", 8), "METAPOD", "...or one, when the rung only reaches one")
+  eq(Bots.evolveAt(evo, "GEODUDE", 100), "GRAVELER", "a trade line stops at the trade without a change of hands")
+  eq(Bots.evolveAt(evo, "GEODUDE", 100, { traded = true }), "GOLEM", "...and finishes with one")
+  eq(Bots.evolveAt(evo, "GEODUDE", 24, { traded = true }), "GEODUDE", "a change of hands does not skip the level step")
+  eq(Bots.evolveAt(evo, "KADABRA", 5, { traded = true }), "ALAKAZAM", "a trade needs no level")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 50), "NIDORINO", "a stone line stops at the stone with no stone rung")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 50, { stoneRung = 40 }), "NIDOKING", "...and finishes once the stone rung is reached")
+  eq(Bots.evolveAt(evo, "NIDORAN_M", 30, { stoneRung = 40 }), "NIDORINO", "...not before")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0 }), "VAPOREON", "several stones: the pick chooses")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0.5 }), "JOLTEON", "...deterministically")
+  eq(Bots.evolveAt(evo, "EEVEE", 30, { stoneRung = 20, pick = 0.999 }), "FLAREON", "...across the whole range")
+  eq(Bots.evolveAt(evo, "DRATINI", 60), "DRAGONAIR", "a target the build lacks stops the walk rather than asserting")
+  eq(Bots.evolveAt(evo, "MEW", 100), "MEW", "a species the data lacks stands")
+  eq(Bots.evolveAt(nil, "GRIMER", 100), "GRIMER", "no data, no evolution")
+  eq(Bots.evolveAt(evo, nil, 100), nil, "no species, nothing")
+
+  -- the stone rung: seeded per bot, banded by tier, never for a ROOKIE
+  local bands = { seen = {} }
+  for id = 1001, 1060 do
+    local tier = Bots.tier(9, id).id
+    local rung, pick = Bots.stoneRung(9, id)
+    local r2, p2 = Bots.stoneRung(9, id)
+    ok(rung == r2 and pick == p2, "the stone rung is derived (bot " .. id .. ")")
+    if tier == "ROOKIE" then
+      ok(rung == nil, "a ROOKIE never used a stone")
+    else
+      local band = Bots.STONE_RUNG[tier]
+      ok(rung >= band[1] and rung <= band[2],
+         ("a %s's stone rung sits in its band (%d)"):format(tier, rung))
+      ok(pick >= 0 and pick < 1, "...with a pick fraction in [0,1)")
+      bands.seen[tier] = true
+    end
+  end
+  ok(bands.seen.REGULAR and bands.seen.ACE, "both stone tiers turn up in sixty bots")
+
+  -- the reads carry it: the fight, the spill
+  local line = { { species = "GRIMER", hpFrac = 1 }, { species = "KADABRA", hpFrac = 1, traded = true },
+                 { species = "NIDORAN_M", hpFrac = 0 } }
+  local frows = Bots.fightRows(line, 50, evo, 40, 0)
+  eq(frows[1].species .. "," .. frows[2].species, "MUK,ALAKAZAM",
+     "the fight is built from what each line has reached")
+  eq(#frows, 2, "...healthy rows only, as before")
+  local srows = Bots.spillRows(line, 50, evo, 40, 0)
+  eq(srows[3].species, "NIDOKING", "the spill drops the evolved form, fallen included")
+  eq(Bots.fightRows(line, 50)[1].species, "GRIMER", "without data the old rows stand")
+
+  -- the wire carries the change-of-hands mark
+  local Wire = require("mods.battle_royale.lib.wire")
+  local back = Wire.decode(Wire.botrec(1001, line)).record
+  ok(back[2].traded == true and back[1].traded == nil,
+     "botrec carries `traded` on the row that changed hands, and only that one")
+
+  -- ...and the peek shows the same team the fight would
+  local Peek = require("mods.battle_royale.lib.peek")
+  local peeked = Peek.botParty(Bots, 9, 1001, evo, 50, line)
+  ok(peeked[1].species == "MUK" and peeked[2].species == "ALAKAZAM",
+     "a spectator sees the evolved team")
+
   -- catches: capped by tier, paced by chance, drawn from the map's table
   local slots = { { species = "CATERPIE", level = 4 } }
   local always = function(a, b) if a then return a end return 0 end

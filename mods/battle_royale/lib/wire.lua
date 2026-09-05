@@ -198,7 +198,8 @@ function Wire.botrec(id, record)
   local rows = {}
   for i, m in ipairs(record or {}) do
     if i > 6 then break end
-    rows[i] = { s = m.species, f = m.hpFrac }
+    -- `t`: this row changed hands (POK-181), so its trade line evolves
+    rows[i] = { s = m.species, f = m.hpFrac, t = m.traded and true or nil }
   end
   local out = { t = "botrec", id = id, mons = rows }
   local bag = record and record.bag
@@ -454,7 +455,8 @@ decoders.botrec = function(m)
     local f = tonumber(r.f)
     if not f then return nil, "bad record hp" end
     record[#record + 1] = { species = r.s,
-                            hpFrac = math.max(0, math.min(1, f)) }
+                            hpFrac = math.max(0, math.min(1, f)),
+                            traded = (r.t == true) or nil }
   end
   if #record == 0 then return nil, "empty record" end
   if m.bag ~= nil then
