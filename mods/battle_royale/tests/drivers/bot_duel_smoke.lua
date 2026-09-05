@@ -101,6 +101,41 @@ return function(game)
   end
   U.log("DUEL: the fight is on the spectator's screen")
   shot("duel_open")
+
+  -- BR_DUEL_HOP=1: look away and come back mid-fight.  The frames missed
+  -- while watching the third bot must be topped up on return (the log had
+  -- a hole otherwise, and the replica idled at it: the user's 2026-09-05
+  -- "it fought two or three times, faster each time").
+  if os.getenv("BR_DUEL_HOP") then
+    U.wait(180)
+    E.hop(1)   -- the other duelist
+    U.wait(30)
+    E.hop(1)   -- the third bot, away from the fight
+    if E.watching() ~= bots[3].id then
+      return C.fail("could not look away (watching " .. tostring(E.watching()) .. ")")
+    end
+    if E.mirror().open then return C.fail("the replica stayed open after hopping away") end
+    U.log("DUEL: looked away; waiting while the fight goes on")
+    U.wait(420)
+    E.hop(-1)
+    U.wait(30)
+    E.hop(-1)
+    if E.watching() ~= a.id then
+      return C.fail("could not look back (watching " .. tostring(E.watching()) .. ")")
+    end
+    local again = false
+    for _ = 1, 600 do
+      U.wait(5)
+      if E.mirror().open then again = true break end
+    end
+    if not again then
+      local m = E.mirror()
+      return C.fail(("the fight did not reopen on return (frames %s, duel %s)")
+        :format(tostring(m.frames), tostring(#(E.botDuels() or {}))))
+    end
+    U.log("DUEL: back, and the fight reopened caught up")
+  end
+
   local closed, peak, duelTurns = false, 0, 0
   for i = 1, 6000 do
     U.wait(10)

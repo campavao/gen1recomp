@@ -4568,21 +4568,32 @@ return function(mod)
     end
   end
 
+  -- rec.sentTo[subject][id] is the last frame number that watcher was
+  -- handed AS that subject.  A watcher who looked away -- hopped to
+  -- somebody else, dropped a peek -- was not sent the frames in between,
+  -- and a log with a hole in it is a replica that waits forever (the
+  -- user's 2026-09-05 "it fought two or three times, faster each time":
+  -- idle close, reopen, catch up to the hole, idle again).  So a peek tops
+  -- the watcher up from where they were.  Per subject, because one duel
+  -- is two subjects and a frame handed over as one bot's fight lands in
+  -- that bot's log, not the other's.
+  local function seenBy(rec, subject)
+    rec.sentTo[subject] = rec.sentTo[subject] or {}
+    return rec.sentTo[subject]
+  end
+
   function BR:noteWatcher(id, subject)
     subject = subject or "me"
-    local now = clock() or 0
     self.watchers[subject] = self.watchers[subject] or {}
-    local prev = self.watchers[subject][id]
-    self.watchers[subject][id] = now
+    self.watchers[subject][id] = clock() or 0
     local rec = self:recorderFor(subject)
     if not (rec and not rec.stopped) then return end
-    -- a watcher who is new, or who was away long enough to have dropped
-    -- the fight, gets the log from the top
-    if not prev or (now - prev) > WATCH_TTL then rec.sentTo[id] = nil end
-    if rec.sentTo[id] then return end
-    rec.sentTo[id] = true
     local as = subject ~= "me" and subject or nil
-    for _, f in ipairs(rec.log) do self:deliverFrame(id, rec.b, f, as) end
+    local seen = seenBy(rec, subject)
+    for n = (seen[id] or 0) + 1, #rec.log do
+      self:deliverFrame(id, rec.b, rec.log[n], as)
+    end
+    seen[id] = #rec.log
   end
 
   function BR:liveWatchers(subject)
@@ -4598,20 +4609,31 @@ return function(mod)
     return out
   end
 
-  -- the sender every recorder shares: unicast to the live watchers of each
-  -- subject, tagged as that subject, and remember who has the log so far
+  -- The sender every recorder shares: unicast to each subject's watchers,
+  -- tagged as that subject, and remember who has what.  A watcher who has
+  -- been handed any frame of this fight keeps getting the rest even after
+  -- their peeks stop: a fight is a few dozen bytes a turn, and a log that
+  -- never gets its end is a replica that reopens a finished fight the
+  -- next time they look.  Locally the same rule: every subject we hold a
+  -- log for stays topped up, not just the one we are looking at.
   function BR:mirrorSender(b, sentTo, subjects)
     subjects = subjects or { "me" }
     return function(frame)
       for _, subject in ipairs(subjects) do
         local as = subject ~= "me" and subject or nil
-        for _, id in ipairs(BR:liveWatchers(subject)) do
+        sentTo[subject] = sentTo[subject] or {}
+        local seen = sentTo[subject]
+        local to = {}
+        for _, id in ipairs(BR:liveWatchers(subject)) do to[id] = true end
+        for id in pairs(seen) do if id ~= "local" then to[id] = true end end
+        for id in pairs(to) do
           BR:deliverFrame(id, b, frame, as)
-          sentTo[id] = true
+          seen[id] = frame.n
         end
-        if as and BR.status == "out" and BR.watching == subject then
+        if as and BR.status == "out"
+           and (BR.watching == subject or BR.mirrorRx[subject] ~= nil) then
           BR:deliverFrame("local", b, frame, as)
-          sentTo["local"] = true
+          seen["local"] = frame.n
         end
       end
     end
@@ -4735,6 +4757,7 @@ return function(mod)
     if rx.frames[f.n] then return end
     rx.frames[f.n] = f
     if f.n > rx.top then rx.top = f.n end
+    if f.k == "end" then rx.ended = true end
     self:feedMirror()
   end
 
@@ -4764,6 +4787,10 @@ return function(mod)
     local rx = self.mirrorRx[watching]
     if not rx or rx.muted or rx.done or rx.opened or not rx.frames[1] then return end
     if rx.reopenAbove and rx.top <= rx.reopenAbove then return end
+    -- a fight that has already ended is not reopened: a spectator coming
+    -- back to a trainer whose fight finished while they looked away sees
+    -- the map, not a replay of a result the room already knows
+    if rx.ended then rx.done = true return end
     local game, ow = self.game, mod.world:overworld()
     if not (game and ow and game.stack:top() == ow and not ow.transitioning) then return end
     local Mirror = require("mods.battle_royale.lib.mirror")
@@ -5748,7 +5775,9 @@ return function(mod)
   -- wounds the winner walks away with are the fight's, not a formula's.
   -- The coin flip stays as the fallback when a fight cannot be built.
 
-  local DUEL_LIMIT = 150   -- seconds of wall clock before a fight is called on HP
+  local DUEL_LIMIT = 420   -- seconds of wall clock before a fight is called on HP
+                           -- (a 22-turn fight at a person's pace is legitimately
+                           -- longer than the 150 the first cut allowed)
 
   local function clampToRecord(party, idx, rec)
     for k, recI in ipairs(idx or {}) do
@@ -5810,7 +5839,8 @@ return function(mod)
     -- 2026-09-05 "it got fast").  SET, so no SHIFT prompt to answer.
     local pace = { animations = true, battleStyle = "set" }
     -- A's team, through a throwaway fight of its own
-    local pgA = Mirror.proxyGame(game, { name = a.p.name, party = {}, options = pace })
+    local standIn = { require("src.pokemon.Pokemon").new(game.data, "RATTATA", 5) }
+    local pgA = Mirror.proxyGame(game, { name = a.p.name, party = standIn, options = pace })
     local mine, idxA = self:botDuelParty(pgA, a.id)
     if not mine then return false end
     local partyA = mine.enemyParty

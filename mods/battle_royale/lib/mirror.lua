@@ -645,6 +645,22 @@ local function openLocal(game, start, opts)
     end
   end
   local function applyFrame(self)
+    -- Out of step: the fight replaced a fainted mon while ours still
+    -- stands, or answered a prompt we never asked.  Rather than wait for
+    -- an action that cannot come, take the replacement through the
+    -- engine's own picker (the stub answers it from the frame) and drop
+    -- the stray answer.
+    local head = self:peekFrame()
+    if head and head.k == "replace" then
+      log("mirror: turn %d, a replacement arrived with %s still standing; sending it out",
+          self.turnCount or 0, tostring(self.player and self.player.name))
+      self.phase = "menu"
+      self:openReplacementMenu()
+      return true
+    elseif head and head.k == "choice" then
+      self:takeFrame()
+      return true
+    end
     local f = self:takeIf(ACTIONS)
     if not f then return false end
     self.phase = "menu"
