@@ -541,8 +541,9 @@ Two sizes of fix:
    heal. Needs the interior's walkable cells and the door warp pair;
    nothing new on the wire.
 
-Take (1) with BR-34's walk-up work; (2) falls out of BR-32 once bots walk
-through seams instead of appearing on the far side.
+**Decision (the user, 2026-09-05): (2).** A bot goes in like a real player
+would; that is the expectation. (1) is not a stepping stone -- build the
+door warp with BR-32 and walk the interior. The spectator follows them in.
 
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
