@@ -498,6 +498,11 @@ fence), one or both walk up until adjacent and facing, the marks go up,
 and only THEN does `startBotDuel` open the fight. Until they are adjacent
 they are still walking bots and either may be jumped or fogged. Not the
 pacing bug: those two were not mid-replay, they were standing.
+A second sighting the same session: two bots three cells apart on a
+DIAGONAL, both marked, neither facing the other. Chebyshev distance is
+what NOTICE measures, so a diagonal counts; a walk-up should end
+orthogonally adjacent and facing, the only way two trainers ever meet
+in Kanto.
 
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
