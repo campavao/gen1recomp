@@ -72,12 +72,15 @@ return function(game)
   end
   local room = screen.room
 
-  -- ------- FILL off: the room is who is here
+  -- ------- FILL off: the room is who is here, and MAX 30 open seats
   local seats = E.lobbySeats()
   U.log(("LOBBY: %d seats with FILL off"):format(#seats))
-  if #seats ~= 1 then return C.fail("expected my seat alone, got " .. #seats) end
+  if #seats ~= 30 then return C.fail("expected my seat and 29 open ones, got " .. #seats) end
   if not (seats[1].me and seats[1].host and seats[1].name == "HOSTY") then
     return C.fail("seat 1 is not me, the host")
+  end
+  if not (seats[2].empty and seats[30].empty) then
+    return C.fail("with FILL off the open seats are not open")
   end
   shot("30-lobby-alone")
 
@@ -98,23 +101,20 @@ return function(game)
   if #box.items > (box.maxVisible or math.huge) then
     return C.fail("the OPTIONS box scrolls: something is hidden under a room")
   end
-  if not rows:find("^FILL: OFF|OPEN: ") then
-    return C.fail("a hosted box does not start FILL / OPEN")
+  if not rows:find("^FILL: OFF|MAX: 30|OPEN: ") then
+    return C.fail("a hosted box does not start FILL / MAX / OPEN")
   end
   if not (rows:find("START MATCH", 1, true) and rows:find("|LEAVE$")) then
     return C.fail("the box is missing START MATCH / LEAVE")
   end
-  if rows:find("MAX", 1, true) then
-    return C.fail("MAX shows with FILL off")
-  end
   shot("31-lobby-box")
 
-  -- ------- FILL on: MAX appears, the room fills with outlines, and pages
+  -- ------- FILL on: the same thirty seats become bots
   U.tap(game, "a") U.wait(5)   -- FILL: OFF -> ON
   rows = labels(box.items)
   U.log("LOBBY: options | " .. rows)
   if not rows:find("^FILL: ON|MAX: 30|OPEN: ") then
-    return C.fail("FILL on did not grow a MAX row at 30")
+    return C.fail("FILL on changed more than FILL")
   end
   if #box.items > (box.maxVisible or math.huge)
      or (box.ty or 0) + box.th > CANVAS_ROWS then
@@ -122,7 +122,10 @@ return function(game)
   end
   seats = E.lobbySeats()
   if #seats ~= 30 then return C.fail("FILL to 30 is not 30 seats: " .. #seats) end
-  if not seats[30].empty then return C.fail("the last seat is not an outline") end
+  if not (seats[2].bot and seats[30].bot and seats[30].name) then
+    return C.fail("with FILL on the open seats did not become bots")
+  end
+  U.log(("LOBBY: FILL on deals %s ... %s"):format(seats[2].name, seats[30].name))
   U.tap(game, "b") U.wait(10)
   if game.stack:top() ~= screen then
     return C.fail("B did not close the box back to the room")
@@ -142,13 +145,18 @@ return function(game)
   U.log(("LOBBY: reached seat %d, window rows %d..%d")
     :format(room.cur, room.scroll, room.scroll + Lobby.ROWS - 1))
   shot("32-lobby-bottom")
-  for _ = 1, 20 do U.tap(game, "up") U.wait(2) end
-  if room.cur ~= 2 and room.cur ~= 1 then
-    return C.fail("ups did not climb back to the top: " .. tostring(room.cur))
+  for _ = 1, 14 do U.tap(game, "up") U.wait(2) end
+  if room.cur ~= 2 then
+    return C.fail("fourteen ups did not climb back to the top row: " .. tostring(room.cur))
   end
   if room.scroll ~= 0 then
     return C.fail("the top row did not scroll the room back up")
   end
+  -- ...and one more wraps to the button, and down from it is seat 1
+  U.tap(game, "up") U.wait(3)
+  if room.cur ~= 0 then return C.fail("up off the top row is not the button") end
+  U.tap(game, "down") U.wait(3)
+  if room.cur ~= 1 then return C.fail("down from the button is not the first seat") end
 
   U.log("LOBBY OK")
   love.event.quit(0)

@@ -80,7 +80,11 @@ function Lobby.seats(BR)
   for _, f in ipairs((BR.flaggedAbsent and BR:flaggedAbsent()) or {}) do
     out[#out + 1] = { name = tostring(f.name or "?"), absent = true, flag = true }
   end
-  local seed = Lobby.seedOf(BR)
+  -- MAX minus the humans here: bots when FILL is on and the seed is
+  -- known, open seats otherwise (the user's call: a MAX of thirty with
+  -- FILL off is twenty-nine faded seats, so the size of the game is on
+  -- the screen whether or not bots will take it)
+  local seed = Lobby.fillOn(BR) and Lobby.seedOf(BR) or nil
   local Bots = require("mods.battle_royale.lib.bots")
   local data = BR.game and BR.game.data
   for i = 1, Lobby.emptySeats(BR, #members) do
@@ -106,15 +110,12 @@ function Lobby.seedOf(BR)
   return hp and hp.lobbySeed or nil
 end
 
--- Seats drawn as outlines: what bots will make up at the start.  A solo
--- room's MAX is its bot count outright; a hosted room with FILL on tops
--- the roster up to MAX and the humans already here take the first of
--- those seats.  FILL off in a hosted room shows nothing extra -- the room
--- is whoever turns up.
---
--- A guest reads the HOST's fill, which rides the host's place message
--- (Wire.place's `fl`): FILL is a host setting, and a guest's own fillTo
--- is whatever their last room left in it.
+-- The seats past the humans: MAX less who is here.  A solo room's MAX is
+-- its bot count outright; a hosted room's is the size the relay holds it
+-- to, which the roster carries (relay.max) and the host has locally as
+-- fillMax.  The host's place message says whether FILL is on (`fl` > 0),
+-- which decides whether those seats draw as bots or as open seats -- a
+-- guest's own fillTo is whatever their last room left in it.
 function Lobby.emptySeats(BR, humans)
   local Bots = require("mods.battle_royale.lib.bots")
   local relay = BR.relay
@@ -122,16 +123,33 @@ function Lobby.emptySeats(BR, humans)
   if BR.solo then
     n = tonumber(BR.botCount) or 0
   else
-    local fill
-    if relay and relay:isHost() then
-      fill = tonumber(BR.fillTo) or 0
-    else
-      local hp = BR.players and relay and BR.players[relay.hostId]
-      fill = tonumber(hp and hp.fill) or 0
-    end
-    n = fill > 0 and (fill - (tonumber(humans) or 0)) or 0
+    n = Lobby.roomMax(BR) - (tonumber(humans) or 0)
   end
   return math.max(0, math.min(Bots.MAX, math.floor(n)))
+end
+
+-- The room's size as this client knows it: the host's own MAX; a guest's
+-- roster (an older relay sends none -- then the host's FILL target, if
+-- on, since that is at least what the drop will hold).
+function Lobby.roomMax(BR)
+  local relay = BR.relay
+  if not relay then return 0 end
+  if relay:isHost() then
+    return tonumber(BR.fillMax and BR:fillMax()) or 0
+  end
+  local hp = BR.players and BR.players[relay.hostId]
+  return tonumber(relay.max) or tonumber(hp and hp.fill) or 0
+end
+
+-- Whether the open seats will be bots: the host's own switch, or the
+-- FILL target the host's place message carried.
+function Lobby.fillOn(BR)
+  local relay = BR.relay
+  if not relay then return false end
+  if BR.solo then return true end
+  if relay:isHost() then return (tonumber(BR.fillTo) or 0) > 0 end
+  local hp = BR.players and BR.players[relay.hostId]
+  return (tonumber(hp and hp.fill) or 0) > 0
 end
 
 -- The line over the room.

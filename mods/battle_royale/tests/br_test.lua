@@ -2978,8 +2978,10 @@ do
     -- from the TITLE as well as from the start menu, and with no overworld
     -- under it there is nothing to queue a text box onto at all.
     do
+      -- (a MAX of two throughout: the door tests read the whole room, and
+      -- open seats past the humans are another test's business)
       local marked = fakeBR({
-        relay = room(true),
+        relay = room(true), fillTarget = 2,
         trouble = { [2] = "build" },
         troubleLabel = "! UPDATE THE GAME",
       })
@@ -3002,7 +3004,7 @@ do
       -- a trainer the door turned away leaves a trace, because on the host
       -- that trace is the only sign they were ever there
       local bounced = fakeBR({
-        relay = room(true),
+        relay = room(true), fillTarget = 2,
         troubleLabel = "! GAME MISMATCH",
         absent = { { id = 9, name = "GUESTB",
                      build = { engine = "9.9.9", mod = "0.34.1" } } },
@@ -3053,7 +3055,7 @@ do
 
       -- ...and a fightable room says none of it.  The "!" is the whole
       -- signal, so nothing else in the room may carry one.
-      local clean = fakeBR({ relay = room(true) })
+      local clean = fakeBR({ relay = room(true), fillTarget = 2 })
       eq(names(Lobby.seats(clean)), "RED|BLUE", "a fightable room has no ! in it")
       eq(Lobby.status(clean), nil, "and nothing on the status line")
       ok(not labels(Lobby.seatItems(clean, Lobby.seats(clean)[2])):find("CANNOT", 1, true),
@@ -3139,7 +3141,8 @@ do
     eq(Lobby.header(BR), "CODE ABCDEF", "the code over the room")
     eq(Lobby.status(BR), "STARTS IN 12", "the countdown under it, for everyone")
     eq(Lobby.button(BR), "OPTIONS", "the host's button opens the box")
-    eq(names(Lobby.seats(BR)), "RED|BLUE", "FILL off: the room is who is here")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|" .. ("_|"):rep(27) .. "_",
+       "FILL off: the room is who is here, and the open seats to thirty")
     find(items, "FILL: OFF").onSelect()
     items = BRMenu.items({}, BR, {})
     eq(labels(items),
@@ -3159,14 +3162,14 @@ do
     items = BRMenu.items({}, BR, {})
     ok(find(items, "FILL: OFF") ~= nil and find(items, "MAX: 4") ~= nil,
        "FILL off keeps MAX: it is the room's size, with or without bots")
-    eq(#Lobby.seats(BR), 2, "...and no bot seats with FILL off")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|_|_", "...and the open seats stay, as seats")
     find(items, "MAX: 4").onSelect()
     ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil, "MAX still steps with FILL off")
-    eq(#Lobby.seats(BR), 2, "...without dealing bots")
+    eq(names(Lobby.seats(BR)), "RED|BLUE|_|_|_|_", "...and the room grows, still open")
     BR:setFillOn(true)
     ok(find(BRMenu.items({}, BR, {}), "MAX: 6") ~= nil,
        "...and FILL back on fills to the MAX it had")
-    eq(#Lobby.seats(BR), 6, "which the room now shows")
+    ok(#Lobby.seats(BR) == 6 and Lobby.seats(BR)[3].bot, "which the room now shows as bots")
     BR:setFillOn(false)
     BR.startsIn = function() return nil end
 
@@ -3349,24 +3352,39 @@ do
       eq(Lobby.PAGE, 8, "eight a page")
       eq(Lobby.NAME_MAX, 7, "a name is the Gen 1 name box")
 
-      -- empty seats: what bots will make up
+      -- the seats past the humans: MAX less who is here
       eq(Lobby.emptySeats({ solo = true, botCount = 5 }, 1), 5,
          "solo: MAX is the bot count outright")
-      local hostRoom = room(true)
-      eq(Lobby.emptySeats({ fillTo = 8, relay = hostRoom }, 3), 5,
-         "hosted: FILL to 8 with three here is five")
-      eq(Lobby.emptySeats({ fillTo = 8, relay = hostRoom }, 9), 0,
-         "an over-full room shows no outlines")
-      eq(Lobby.emptySeats({ fillTo = 0, relay = hostRoom }, 1), 0, "FILL off shows none")
-      eq(Lobby.emptySeats({ fillTo = 31, relay = hostRoom }, 1), Bots.MAX,
-         "and never more outlines than there can be bots")
-      -- a guest reads the host's fill off the host's place, never their own
-      local guest = fakeBR({ relay = room(false), fillTo = 8 })
-      eq(Lobby.emptySeats(guest, 2), 0, "a guest's own fillTo means nothing")
-      guest.players[1] = { name = "RED", fill = 8 }
-      eq(Lobby.emptySeats(guest, 2), 6, "the host's advertised fill draws the seats")
+      local function hosted(max, fillTo)
+        return fakeBR({ relay = room(true), fillTarget = max, fillTo = fillTo })
+      end
+      eq(Lobby.emptySeats(hosted(8, 8), 3), 5, "hosted: MAX 8 with three here is five")
+      eq(Lobby.emptySeats(hosted(8, 8), 9), 0, "an over-full room shows no seats")
+      eq(Lobby.emptySeats(hosted(8, 0), 3), 5,
+         "FILL off shows the same five: the size of the game is on the screen")
+      ok(not Lobby.fillOn(hosted(8, 0)) and Lobby.fillOn(hosted(8, 8)),
+         "...and FILL is what says whether they are bots")
+      eq(names(Lobby.seats(hosted(8, 0))), "RED|BLUE|_|_|_|_|_|_",
+         "FILL off: open seats, faded")
+      local on = hosted(8, 8)
+      on.lobbySeed = 4242
+      ok(Lobby.seats(on)[3].bot, "FILL on: the same seats are bots")
+      eq(Lobby.emptySeats(hosted(30, 31), 1), 29, "MAX 30 alone is twenty-nine seats")
+      -- a guest reads the size off the roster and FILL off the host's
+      -- place, never their own settings
+      local guest = fakeBR({ relay = room(false), fillTo = 8, fillTarget = 8 })
+      eq(Lobby.emptySeats(guest, 2), 0, "a guest's own MAX and FILL mean nothing")
+      guest.relay.max = 8
+      eq(Lobby.emptySeats(guest, 2), 6, "the roster's size draws the seats")
       eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_",
-         "...as unknown seats until the host's seed arrives")
+         "...open, since the host has not said FILL is on")
+      guest.players[1] = { name = "RED", fill = 8 }
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_",
+         "...and unknown bots until the host's seed arrives")
+      guest.relay.max = nil
+      eq(Lobby.emptySeats(guest, 2), 6,
+         "an older relay sends no size: the host's FILL target stands in")
+      guest.relay.max = 8
       guest.players[1].lobbySeed = 4242
       local dealt = Lobby.seats(guest)
       ok(dealt[3].bot and dealt[3].name == Bots.name(4242, Bots.idFor(1)),
@@ -3376,7 +3394,8 @@ do
       eq(labels(Lobby.seatItems(guest, dealt[3])), dealt[3].name .. "|BOT|BACK",
          "a bot's card says so, and offers nothing else")
       guest.players[1].fill = 0
-      eq(Lobby.emptySeats(guest, 2), 0, "and the host turning it off clears them")
+      eq(Lobby.emptySeats(guest, 2), 6, "the host turning FILL off keeps the seats")
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_", "...open again")
 
       -- QUICK PLAY has no host to speak of: the button is LEAVE for
       -- everyone, until the host has a match to run back
