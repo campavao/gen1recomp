@@ -38,6 +38,19 @@ do
      "and so is a negative one off the wire")
   eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", w = 2.5 }).wins, nil,
      "and a fraction")
+  -- ...and the host's FILL target and room seed, the same way
+  eq(m.fill, nil, "no fill sent reads as unknown")
+  eq(m.lobbySeed, nil, "and no seed")
+  local hostPlace = Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive",
+                                           "SPRITE_RED", nil, nil, nil, 8, 4242))
+  eq(hostPlace.fill, 8, "the host's fill is read")
+  eq(hostPlace.lobbySeed, 4242, "and the room's seed")
+  eq(Wire.decode(Wire.place("PALLET_TOWN", 5, 6, "down", "alive", "SPRITE_RED",
+                            nil, nil, nil, 0)).fill, 0, "off is zero, not absent")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", fl = -1 }).fill, nil,
+     "a negative fill is dropped")
+  eq(Wire.decode({ t = "place", v = Wire.PROTOCOL, st = "alive", sd = 0 }).lobbySeed, nil,
+     "and a zero seed")
   ok(m ~= nil, "place round-trips")
   eq(m and m.status, "alive", "place carries status")
   eq(m and m.sprite, "SPRITE_RED", "place carries sprite")
@@ -3083,7 +3096,14 @@ do
     eq(labels(items), "MAX: 3|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH|LEAVE",
        "solo: max, the two clocks, the log, start, leave")
     eq(Lobby.header(BR), "SOLO VS BOTS", "a solo room has no code to read out")
-    eq(names(Lobby.seats(BR)), "RED|_|_|_", "...and MAX: 3 is three empty seats")
+    eq(names(Lobby.seats(BR)), "RED|_|_|_",
+       "...and MAX: 3 is three seats, unknown until the room has a seed")
+    BR.lobbySeed = 4242
+    local solo = Lobby.seats(BR)
+    ok(solo[2].bot and solo[3].bot and solo[4].bot, "with a seed they are bots")
+    ok(solo[2].name ~= solo[3].name and solo[3].name ~= solo[4].name,
+       "each their own: " .. names(solo))
+    ok(not names(solo):find("%d"), "and none wears a digit")
     find(items, "MAX").onSelect()
     eq(BR.botCount, 5, "the MAX row steps the bot ladder")
     eq(#Lobby.seats(BR), 6, "and the seats follow")
@@ -3126,8 +3146,8 @@ do
        "FILL: ON|MAX: 30|OPEN: NO|FOG: 120s|SAFARI: 120s|DEBUG: OFF|START MATCH (12)|LEAVE",
        "FILL on grows a MAX row, at a full room by default")
     eq(#Lobby.seats(BR), 30, "...and the room shows the seats bots will take")
-    ok(Lobby.seats(BR)[3].empty and not Lobby.seats(BR)[2].empty,
-       "humans first, outlines after")
+    ok(Lobby.seats(BR)[3].bot and Lobby.seats(BR)[2].id,
+       "humans first, the dealt bots after")
     find(items, "MAX: 30").onSelect()
     items = BRMenu.items({}, BR, {})
     ok(find(items, "MAX: 2") ~= nil, "MAX wraps from a full room to the bottom rung: "
@@ -3327,11 +3347,51 @@ do
       -- empty seats: what bots will make up
       eq(Lobby.emptySeats({ solo = true, botCount = 5 }, 1), 5,
          "solo: MAX is the bot count outright")
-      eq(Lobby.emptySeats({ fillTo = 8 }, 3), 5, "hosted: FILL to 8 with three here is five")
-      eq(Lobby.emptySeats({ fillTo = 8 }, 9), 0, "an over-full room shows no outlines")
-      eq(Lobby.emptySeats({ fillTo = 0 }, 1), 0, "FILL off shows none")
-      eq(Lobby.emptySeats({ fillTo = 31 }, 1), Bots.MAX,
+      local hostRoom = room(true)
+      eq(Lobby.emptySeats({ fillTo = 8, relay = hostRoom }, 3), 5,
+         "hosted: FILL to 8 with three here is five")
+      eq(Lobby.emptySeats({ fillTo = 8, relay = hostRoom }, 9), 0,
+         "an over-full room shows no outlines")
+      eq(Lobby.emptySeats({ fillTo = 0, relay = hostRoom }, 1), 0, "FILL off shows none")
+      eq(Lobby.emptySeats({ fillTo = 31, relay = hostRoom }, 1), Bots.MAX,
          "and never more outlines than there can be bots")
+      -- a guest reads the host's fill off the host's place, never their own
+      local guest = fakeBR({ relay = room(false), fillTo = 8 })
+      eq(Lobby.emptySeats(guest, 2), 0, "a guest's own fillTo means nothing")
+      guest.players[1] = { name = "RED", fill = 8 }
+      eq(Lobby.emptySeats(guest, 2), 6, "the host's advertised fill draws the seats")
+      eq(names(Lobby.seats(guest)), "RED|BLUE|_|_|_|_|_|_",
+         "...as unknown seats until the host's seed arrives")
+      guest.players[1].lobbySeed = 4242
+      local dealt = Lobby.seats(guest)
+      ok(dealt[3].bot and dealt[3].name == Bots.name(4242, Bots.idFor(1)),
+         "with the seed, the seats are the bots the drop will hold: " .. names(dealt))
+      ok(dealt[8].sprite ~= nil and dealt[8].sprite:find("^SPRITE_"),
+         "each with the face it will wear (" .. tostring(dealt[8].sprite) .. ")")
+      eq(labels(Lobby.seatItems(guest, dealt[3])), dealt[3].name .. "|BOT|BACK",
+         "a bot's card says so, and offers nothing else")
+      guest.players[1].fill = 0
+      eq(Lobby.emptySeats(guest, 2), 0, "and the host turning it off clears them")
+
+      -- QUICK PLAY has no host to speak of: the button is LEAVE for
+      -- everyone, until the host has a match to run back
+      local quickHost = fakeBR({ relay = room(true), quick = true })
+      eq(Lobby.button(quickHost), "LEAVE", "a quick room's host sees no OPTIONS")
+      quickHost.lastResult = { won = true, at = 0 }
+      eq(Lobby.button(quickHost), "READY UP", "...until there is a match to run back")
+      quickHost.startsIn = function() return 42 end
+      eq(Lobby.button(quickHost), "LEAVE", "and LEAVE again while the clock runs")
+      eq(Lobby.status(quickHost), "STARTS IN 42", "which the room shows")
+      local quickGuest = fakeBR({ relay = room(false), quick = true,
+                                  lastResult = { won = false, at = 0 } })
+      eq(Lobby.button(quickGuest), "LEAVE", "a quick guest only ever leaves")
+
+      -- the daily says its clock once: the header has it
+      local daily = fakeBR({ relay = room(true), dailyLobby = true,
+                             dailyStartsIn = function() return 36146 end,
+                             startsIn = function() return 36146 end })
+      eq(Lobby.header(daily), "STARTS IN 10H02M", "the header")
+      eq(Lobby.status(daily), nil, "and not the status line as well")
 
       -- the cursor: seats in reading order, the button below
       eq(Lobby.move(0, 0, "up"), 0, "an empty room has only the button")

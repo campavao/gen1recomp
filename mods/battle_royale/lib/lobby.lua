@@ -40,13 +40,24 @@ Lobby.PAGE = Lobby.COLS * Lobby.ROWS
 -- dealt from a list that fits it; a human's is cleaned to it on the wire.
 Lobby.NAME_MAX = 7
 
+-- what a seat whose trainer is not known yet is drawn as, faded
+Lobby.EMPTY_SPRITE = "SPRITE_RED"
+
 -- ------- the room, as data
 
 -- Who is here, in roster order, then whoever the door turned away (dim,
--- flagged), then the seats still to fill.  Each seat:
---   { id=, name=, sprite=, me=, host=, flag=, next=, wins=, absent=, empty= }
--- A seat with an id is a trainer you can open; an absent or empty one is
--- a picture.
+-- flagged), then the bots that will take the seats still open -- by name
+-- and face, the same ones the match will spawn (the user's sketch had
+-- "BOT" in a seat like anyone else).  Each seat:
+--   { id=, name=, sprite=, me=, host=, flag=, next=, wins=, absent=, bot=, empty= }
+-- A seat with an id is a trainer you can open; a bot's is a picture, and
+-- an empty one is a seat whose bot is not known yet (a guest before the
+-- host's place has arrived).
+--
+-- A bot is dealt from the room's seed and its position, exactly as
+-- onStart deals it: the host rolls the seed when the room opens rather
+-- than at START MATCH, and says it on its place message (lib/wire.lua's
+-- `sd`), so every client shows the same bots the drop will hold.
 function Lobby.seats(BR)
   local relay = BR.relay
   local out = {}
@@ -69,10 +80,30 @@ function Lobby.seats(BR)
   for _, f in ipairs((BR.flaggedAbsent and BR:flaggedAbsent()) or {}) do
     out[#out + 1] = { name = tostring(f.name or "?"), absent = true, flag = true }
   end
-  for _ = 1, Lobby.emptySeats(BR, #members) do
-    out[#out + 1] = { empty = true }
+  local seed = Lobby.seedOf(BR)
+  local Bots = require("mods.battle_royale.lib.bots")
+  local data = BR.game and BR.game.data
+  for i = 1, Lobby.emptySeats(BR, #members) do
+    if seed then
+      local id = Bots.idFor(i)
+      local look = Bots.look(seed, id, data)
+      out[#out + 1] = { bot = true, name = Bots.name(seed, id),
+                        sprite = look and look.walk or nil }
+    else
+      out[#out + 1] = { empty = true }
+    end
   end
   return out
+end
+
+-- The seed the room's bots are dealt from: the host's own, or the one the
+-- host's place message carried.  nil until it is known.
+function Lobby.seedOf(BR)
+  local relay = BR.relay
+  if not relay then return nil end
+  if relay:isHost() then return BR.lobbySeed end
+  local hp = BR.players and BR.players[relay.hostId]
+  return hp and hp.lobbySeed or nil
 end
 
 -- Seats drawn as outlines: what bots will make up at the start.  A solo
@@ -80,15 +111,25 @@ end
 -- the roster up to MAX and the humans already here take the first of
 -- those seats.  FILL off in a hosted room shows nothing extra -- the room
 -- is whoever turns up.
+--
+-- A guest reads the HOST's fill, which rides the host's place message
+-- (Wire.place's `fl`): FILL is a host setting, and a guest's own fillTo
+-- is whatever their last room left in it.
 function Lobby.emptySeats(BR, humans)
   local Bots = require("mods.battle_royale.lib.bots")
+  local relay = BR.relay
   local n
   if BR.solo then
     n = tonumber(BR.botCount) or 0
-  elseif (tonumber(BR.fillTo) or 0) > 0 then
-    n = (tonumber(BR.fillTo) or 0) - (tonumber(humans) or 0)
   else
-    n = 0
+    local fill
+    if relay and relay:isHost() then
+      fill = tonumber(BR.fillTo) or 0
+    else
+      local hp = BR.players and relay and BR.players[relay.hostId]
+      fill = tonumber(hp and hp.fill) or 0
+    end
+    n = fill > 0 and (fill - (tonumber(humans) or 0)) or 0
   end
   return math.max(0, math.min(Bots.MAX, math.floor(n)))
 end
@@ -117,7 +158,9 @@ function Lobby.status(BR)
   local host = relay and relay:isHost()
   local trouble = BR.buildTroubleLabel and BR:buildTroubleLabel()
   if trouble then return trouble end
-  local countdown = BR.startsIn and BR:startsIn()
+  -- (the daily's clock is the header; it armed the same countdown, and
+  -- saying it twice on one screen was the first thing the user saw)
+  local countdown = not BR.dailyLobby and BR.startsIn and BR:startsIn()
   if countdown then return "STARTS IN " .. tostring(countdown) end
   if BR.lastResult then
     if BR.lastResult.won then return "YOU WIN!" end
@@ -133,9 +176,23 @@ end
 -- What the bottom-right button says.  OPTIONS is the host's, and only
 -- where there are options: the daily game has none (the clock starts
 -- it), so its host leaves like everyone else.
+--
+-- QUICK PLAY has no host to speak of (the user's call, 2026-09-05): the
+-- room fills itself with bots and counts itself down, so whoever the
+-- relay made host sees the same button as everyone else.  The one thing
+-- that room needs a hand for is the match after the first (POK-167), so
+-- once there is a result and no clock running, that host's button arms
+-- it -- and then it is LEAVE again while the clock runs.
 function Lobby.button(BR)
   local relay = BR.relay
-  if relay and relay:isHost() and not BR.dailyLobby then return "OPTIONS" end
+  local host = relay and relay:isHost()
+  if BR.quick then
+    if host and BR.lastResult and not (BR.startsIn and BR:startsIn()) then
+      return "READY UP"
+    end
+    return "LEAVE"
+  end
+  if host and not BR.dailyLobby then return "OPTIONS" end
   return "LEAVE"
 end
 
@@ -192,6 +249,7 @@ function Lobby.seatItems(BR, seat)
                           onSelect = function() end }
   end
   row(tostring(seat.name))
+  if seat.bot then row("BOT") end
   if seat.host then row("HOST") end
   if seat.next then row("PLAYS NEXT") end
   if seat.wins then row("WINS: " .. tostring(seat.wins)) end
@@ -315,10 +373,17 @@ function Screen:update(dt)
       require("src.core.Sound").play(self.game.data, "Press_AB")
     end)
     if self.cur == 0 then
-      if Lobby.button(BR) == "OPTIONS" then self:openOptions() else self:leave() end
+      local button = Lobby.button(BR)
+      if button == "OPTIONS" then
+        self:openOptions()
+      elseif button == "READY UP" then
+        if BR.readyUp then BR:readyUp() end
+      else
+        self:leave()
+      end
     else
       local seat = seats[self.cur]
-      if seat and seat.id then self:openSeat(seat) end
+      if seat and (seat.id or seat.bot) then self:openSeat(seat) end
     end
   elseif input:wasPressed("b") or input:wasPressed("start") then
     -- the screen closes; the room stays (the START menu's ROYALE row
@@ -361,10 +426,17 @@ function Screen:draw()
     local sy = GRID_Y + row * ROW_PITCH
     local ny = sy + 16
     if seat.empty then
-      -- where a trainer will stand; the cursor sits beside the outline,
-      -- since there is no name for it to lead
-      g.setColor(0.55, 0.55, 0.6, 1)
-      g.rectangle("line", cx - 8 + 0.5, sy + 0.5, 15, 15)
+      -- a seat whose trainer is not known yet: a faded RED, the one
+      -- sprite every build has.  The cursor sits beside it, since there
+      -- is no name for it to lead.
+      local ghost = self:walkFrame(Lobby.EMPTY_SPRITE)
+      if ghost then
+        g.setColor(1, 1, 1, 0.3)
+        g.draw(ghost.img, ghost.quad, cx - 8, sy)
+      else
+        g.setColor(0.55, 0.55, 0.6, 1)
+        g.rectangle("line", cx - 8 + 0.5, sy + 0.5, 15, 15)
+      end
       g.setColor(0, 0, 0, 1)
       if idx == self.cur then Font.drawCode(Theme.cursor, cx - 20, sy + 4) end
     else

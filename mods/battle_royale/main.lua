@@ -460,9 +460,19 @@ return function(mod)
   local function broadcastPlace()
     if not (BR.relay and BR.relay:isOpen()) then return end
     local h = here()
+    -- The host tells the room its FILL target and the seed its bots are
+    -- dealt from, so every lobby shows the seats the drop will hold
+    -- (lib/lobby.lua reads both off the host).  The seed is rolled HERE,
+    -- at the first place a host sends, rather than at START MATCH.
+    local fill, seed
+    if BR.relay:isHost() then
+      fill = BR.fillTo or 0
+      BR.lobbySeed = BR.lobbySeed or BR:rollSeed()
+      seed = BR.lobbySeed
+    end
     BR.relay:broadcast(Wire.place(h and h.mapId, h and h.x, h and h.y,
                                   h and h.facing, BR.status, mySprite(),
-                                  nil, build(), BR:winCount()))
+                                  nil, build(), BR:winCount(), fill, seed))
     if h then BR.sentMap, BR.sentFacing = h.mapId, h.facing end
   end
 
@@ -824,7 +834,16 @@ return function(mod)
     -- a number set is a number remembered: FILL: OFF then ON comes back
     -- to the MAX it had, not to the default
     if self.fillTo > 0 then self.fillTarget = self.fillTo end
+    -- the room's guests draw their seats from this
+    if self.relay and self.relay:isOpen() then broadcastPlace() end
     return self.fillTo
+  end
+
+  -- a match seed; the room rolls one when it opens (broadcastPlace) and
+  -- startMatch uses that one, so the lobby's bots are the drop's bots
+  function BR:rollSeed()
+    local rand = (love and love.math and love.math.random) or math.random
+    return rand(1, 2 ^ 30)
   end
 
   function BR:nextFill() return Bots.nextFill(self.fillTo) end
@@ -836,7 +855,7 @@ return function(mod)
   function BR:fillOn() return (self.fillTo or 0) > 0 end
   function BR:fillMax() return self.fillTarget or Bots.MAX end
   function BR:setFillOn(on)
-    if on then self:setFill(self:fillMax()) else self.fillTo = 0 end
+    if on then self:setFill(self:fillMax()) else self:setFill(0) end
     return self:fillOn()
   end
   function BR:cycleFillMax()
@@ -1262,6 +1281,7 @@ return function(mod)
     self.wasHost = false
     self.runningMatch = nil   -- the POK-133 offer dies with the connection
     self.armKick = nil
+    self.lobbySeed = nil
     self.dailyLobby = nil
     self.lootMenu = nil
   end
@@ -1476,7 +1496,10 @@ return function(mod)
     for i = 1, self:botsAtStart() do
       ids[#ids + 1] = Bots.idFor(i)
     end
-    local seed = love.math.random(1, 2 ^ 30)
+    -- the seed the lobby already showed (rolled at the room's first
+    -- place), spent here so the NEXT lobby deals fresh bots
+    local seed = self.lobbySeed or self:rollSeed()
+    self.lobbySeed = nil
     local rng = Spawn.rng(seed)
     local data = self.game.data
     -- the Safari opening: everyone on one map, together.  0 seconds is the
@@ -1981,6 +2004,8 @@ return function(mod)
       p.map, p.x, p.y, p.facing = msg.map, msg.x, msg.y, msg.facing
       p.sprite = msg.sprite or p.sprite
       p.wins = msg.wins or p.wins
+      if msg.fill ~= nil then p.fill = msg.fill end
+      if msg.lobbySeed ~= nil then p.lobbySeed = msg.lobbySeed end
       p.status = msg.status
       -- keep the first answer rather than the latest: a resync from a bot
       -- the host is puppeting carries no build, and "no build in this

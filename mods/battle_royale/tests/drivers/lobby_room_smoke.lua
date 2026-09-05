@@ -81,9 +81,19 @@ return function(game)
   if seats[1].sprite ~= "SPRITE_RED" then
     return C.fail("my seat does not wear my skin: " .. tostring(seats[1].sprite))
   end
-  if not seats[2].empty or not seats[13].empty then
-    return C.fail("the bot seats are not outlines")
+  -- the bots are DEALT in the lobby (the seed is rolled at the room's
+  -- first place), so every seat past mine is a named bot with a face
+  if not (seats[2].bot and seats[13].bot) then
+    return C.fail("the bot seats are not bots")
   end
+  if not (seats[2].name and seats[2].sprite) then
+    return C.fail("a bot seat has no name or face: " .. tostring(seats[2].name)
+                  .. " / " .. tostring(seats[2].sprite))
+  end
+  if seats[2].name == seats[3].name then
+    return C.fail("two bots share a name: " .. seats[2].name)
+  end
+  U.log(("ROOM: bots %s, %s ... %s"):format(seats[2].name, seats[3].name, seats[13].name))
   shot("top")
 
   -- ------- 2. the cursor walks every seat and the room scrolls
@@ -108,6 +118,19 @@ return function(game)
   end
   U.tap(game, "right") U.wait(3)
   if room.cur ~= 2 then return C.fail("right did not walk to seat 2") end
+  -- a bot's card: its name, BOT, and out
+  U.tap(game, "a") U.wait(10)
+  local botCard = game.stack:top()
+  if botCard == screen or not (botCard and botCard.items) then
+    return C.fail("A on a bot did not open its card")
+  end
+  local botRows = labels(botCard.items)
+  U.log("ROOM: bot card | " .. botRows)
+  if botRows ~= seats[2].name .. "|BOT|BACK" then
+    return C.fail("a bot's card is not NAME / BOT / BACK")
+  end
+  shot("botcard")
+  U.tap(game, "b") U.wait(10)
   U.tap(game, "left") U.wait(3)
   U.log(("ROOM: cursor walks (cur=%d scroll=%d)"):format(room.cur, room.scroll))
 

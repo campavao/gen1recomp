@@ -9,9 +9,13 @@
 -- envelope (see relay/server.js).  Field names are short because a step
 -- goes out roughly four times a second per player to every other player.
 --
---   {t="place", map=, x=, y=, f=, st=, sprite=, w=}   where I am + my status
---                                                 (w: my career wins, for
---                                                 the lobby's seat card)
+--   {t="place", map=, x=, y=, f=, st=, sprite=, w=, fl=, sd=}
+--                                                 where I am + my status
+--                                                 (w: my career wins, for the
+--                                                 lobby's seat card; fl / sd:
+--                                                 the host's FILL target and
+--                                                 the room's seed, so a guest's
+--                                                 lobby shows the same bots)
 --   {t="step",  d=, x=, y=, map=}                 a step just committed
 --   {t="face",  f=, map=}                         a turn in place
 --
@@ -162,11 +166,18 @@ end
 -- `wins` is the sender's career count (lib/career.lua), read by the
 -- lobby's seat card and nothing else; absent is fine and means unknown.
 -- Additive: an older client's decoder drops fields it does not name.
-function Wire.place(map, x, y, facing, status, sprite, as, build, wins)
+-- `fill` is the host's FILL target (0 = off) and `seed` the room's match
+-- seed, both sent by the host only, both for the lobby's seats.
+local function count(v)
+  v = tonumber(v)
+  return v and math.floor(v) or nil
+end
+
+function Wire.place(map, x, y, facing, status, sprite, as, build, wins, fill, seed)
   return { t = "place", v = Wire.PROTOCOL, map = map, x = x, y = y, f = facing,
            st = status, sprite = sprite, as = as,
            ev = build and build.engine, mv = build and build.mod,
-           w = tonumber(wins) and math.floor(tonumber(wins)) or nil }
+           w = count(wins), fl = count(fill), sd = count(seed) }
 end
 
 function Wire.step(dir, x, y, map, as)
@@ -348,6 +359,10 @@ decoders.place = function(m)
                     and m.sprite or nil,
            wins = (type(m.w) == "number" and m.w >= 0 and m.w == math.floor(m.w))
                   and m.w or nil,
+           fill = (type(m.fl) == "number" and m.fl >= 0 and m.fl == math.floor(m.fl))
+                  and m.fl or nil,
+           lobbySeed = (type(m.sd) == "number" and m.sd >= 1 and m.sd == math.floor(m.sd))
+                  and m.sd or nil,
            build = (engine or modv) and { engine = engine, mod = modv } or nil }
 end
 
