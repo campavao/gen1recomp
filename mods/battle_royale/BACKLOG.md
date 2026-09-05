@@ -482,6 +482,23 @@ Related: a bot eliminated while on water spills where it stood.
 the centre cell when none are near, so a team can hit the sea. It should
 walk the search to the nearest shore instead.
 
+### BR-34 · Two bots fight from where they noticed each other, not face to face — OPEN
+
+**Seen 2026-09-05 (the user, spectating, screenshot):** NED and another
+bot both wearing the fighting mark, four or five cells apart with a fence
+between them, standing still. That is how a bot duel opens: `tickBotFights`
+starts one the beat two bots are within `Bots.NOTICE` (3 cells, Chebyshev,
+walls ignored), and `inDuel` freezes both where they stood. The fight
+itself is real (BR-28); the approach is missing. When a bot engages the
+PLAYER it has one: the `!` flash, then `walkUpThen` brings it adjacent
+before the screen opens (POK-85). A duel should be the same scene from
+the outside: the two notice each other along an eyeline (`Engage.sightLine`
+with the map's `blocked`, the rule players are engaged by -- not through a
+fence), one or both walk up until adjacent and facing, the marks go up,
+and only THEN does `startBotDuel` open the fight. Until they are adjacent
+they are still walking bots and either may be jumped or fogged. Not the
+pacing bug: those two were not mid-replay, they were standing.
+
 ### BR-31 · TAKE ALL on a dropped bag — OPEN
 
 Looting a bag is one row at a time through the loot list. A player who
