@@ -10,6 +10,7 @@
 --   lib/menu.lua     the BATTLE ROYALE start-menu screen
 --   lib/career.lua   the name/skin/wins that outlive a playthrough
 --   lib/stats.lua    how much play there has been (never opens a socket)
+--   lib/pace.lua     the host's TEXT SPEED / BATTLE ANIMATION for a match
 --   this file        the wiring
 --
 -- The loop, once a match starts: everyone drops onto a random Kanto cell
@@ -365,6 +366,9 @@ return function(mod)
     myName = career.name, -- chosen on the NAME row; nil falls back to the save
     skin = career.skin,   -- the walk sheet every other trainer sees (POK-79)
     wins = Career.cleanWins(career.wins),  -- career wins: the wardrobe's key
+    -- the host's match options (POK-186), off the same cache as the career
+    pace = require("mods.battle_royale.lib.pace").load(mod),
+    paceSaved = nil,      -- this player's own two rows, held for the way out
     matchWorld = false,   -- in a BR world: SAVE stays vetoed until a real save
     tearingDown = false,  -- an exit is already in flight (POK-115)
     wasHost = false,      -- were we the host as of the last roster (POK-116)
@@ -1278,6 +1282,9 @@ return function(mod)
         self.game and self.game.data, self.moonStonePrice)
       self.moonStonePrice = nil
     end
+    -- ...and this player's own TEXT SPEED and BATTLE ANIMATION (POK-186),
+    -- here for the same reason as the TMs: every exit comes through
+    self:restorePace()
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
     self.peeked, self.lastPeekAt = nil, nil
@@ -1590,9 +1597,11 @@ return function(mod)
       spawns[i] = { id = id, map = drops[i].map, x = drops[i].x, y = drops[i].y }
     end
     relay:lock(true)                       -- no late joiners mid-match
-    relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds()))
+    -- the host's pace rides the start (POK-186), the way the fog does
+    local pace = self:matchPace()
+    relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds(), pace))
     self:onStart({ seed = seed, spawns = spawns, safari = safari,
-                   fog = self:fogSeconds() })
+                   fog = self:fogSeconds(), pace = pace })
   end
 
   function BR:onStart(msg)
@@ -1732,6 +1741,12 @@ return function(mod)
     local ok, err = pcall(self.game.startNewGame, self.game, { intro = false })
     self.arming = nil
     if not ok then error(err, 0) end
+    -- The host's TEXT SPEED and BATTLE ANIMATION, on every client for the
+    -- length of the match (POK-186).  AFTER startNewGame, which reloads
+    -- this player's own options.lua into save.options: what applyPace
+    -- holds for the way out is theirs, and resetMatch hands it back.  No
+    -- pace on the start is an older host; this client keeps its own.
+    if msg.pace then self:applyPace(msg.pace) end
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     self.sentBusy = false    -- not nil: nil is "not busy", a real answer
     broadcastPlace()
@@ -8896,6 +8911,64 @@ return function(mod)
     log:say("deep logging %s", log:isDeep() and "on" or "off")
     return log:isDeep()
   end
+
+  -- The host's match options (POK-186): TEXT SPEED and BATTLE ANIMATION,
+  -- set in the lobby's MATCH OPTIONS box, saved beside the career
+  -- (mod.cache, so they outlive the throwaway NEW GAME), and sent on the
+  -- start so every client plays the match at one pace.  Solo and hosted
+  -- rooms are the host's to shape; the daily and quick play run at the
+  -- mod's core settings whatever this host has saved, so a stranger's
+  -- game is never somebody else's slow text.  (lib/pace.lua is required
+  -- where it is used: main's closure is at LuaJIT's upvalue cap.)
+  function BR:matchPace()
+    local Pace = require("mods.battle_royale.lib.pace")
+    if self.quick or self.dailyLobby then return Pace.clean(Pace.DEFAULT) end
+    return Pace.clean(self.pace)
+  end
+
+  -- one writer, so the row, the file and the next start cannot disagree
+  function BR:setPace(pace)
+    local Pace = require("mods.battle_royale.lib.pace")
+    self.pace = Pace.clean(pace)
+    Pace.save(mod, self.pace, log)
+    log:say("match options: %s", Pace.describe(self.pace))
+    return self.pace
+  end
+  function BR:cyclePaceSpeed()
+    return self:setPace(require("mods.battle_royale.lib.pace").cycleSpeed(self.pace))
+  end
+  function BR:togglePaceAnimations()
+    return self:setPace(require("mods.battle_royale.lib.pace").toggleAnimations(self.pace))
+  end
+  function BR:revertPace()
+    return self:setPace(require("mods.battle_royale.lib.pace").DEFAULT)
+  end
+
+  -- The pace a start carried, into this client's live options.  The
+  -- first apply of a match owns the way back; a second only re-applies,
+  -- so nothing can overwrite the player's own rows with the host's.
+  function BR:applyPace(pace)
+    local Pace = require("mods.battle_royale.lib.pace")
+    local saved = Pace.apply(self.game, pace)
+    if not saved then return false end
+    self.paceSaved = self.paceSaved or saved
+    log:say("pace: %s (the host's)", Pace.describe(pace))
+    return true
+  end
+
+  function BR:restorePace()
+    if not self.paceSaved then return false end
+    local Pace = require("mods.battle_royale.lib.pace")
+    local saved = self.paceSaved
+    self.paceSaved = nil
+    Pace.restore(self.game, saved)
+    log:say("pace: %s (mine again)", Pace.describe(saved))
+    return true
+  end
+
+  mod.exports.setPace = function(pace) return BR:setPace(pace) end
+  mod.exports.pace = function() return BR:matchPace() end
+  mod.exports.revertPace = function() return BR:revertPace() end
 
   function BR:cycleFog()
     redefineOptions(nextRung(FOG_LADDER, self:fogSeconds()), self:safariSeconds())

@@ -60,6 +60,14 @@ port-forwarding.
    bots by name in their seats. Fill is the one you want when you can't
    know how many people turn up; off, the match is exactly who is in the
    room. (The relay itself seats sixteen humans at most.)
+   **MATCH OPTIONS** opens the pace of the match — **TEXT** (FAST, MEDIUM,
+   SLOW) and **ANIMATION** (ON, OFF), the two rows the game's own OPTION
+   screen hides for the length of a match — and what the host picks is
+   what *everyone* in the match plays at, so nobody is a page behind in a
+   duel. It is remembered between games and launches; **REVERT TO
+   DEFAULT** puts the game's own settings back (MEDIUM, ON). Solo and
+   hosted rooms only: the daily game and quick play always run at those
+   defaults. **DEBUG** (the log's deep tier, below) is in this box too.
 7. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
    without a code. Rooms are private until you say otherwise.
 8. The host sees the seats fill in and picks **START MATCH**. Everyone
@@ -851,7 +859,7 @@ carries the room code and the match seed —
 server prints the same room code on its own lines, so a client log and a
 server log for one game can be lined up afterwards.
 
-**DEBUG** under the lobby's OPTIONS turns on the tier below that: per-map detail,
+**DEBUG** under the lobby's OPTIONS → MATCH OPTIONS turns on the tier below that: per-map detail,
 and anything else that would otherwise bury the story. It is off by
 default on purpose. `mod.exports.setDebug(true)` is the same switch, for
 a driver.
