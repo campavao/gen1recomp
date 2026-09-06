@@ -6788,6 +6788,13 @@ return function(mod)
       return
     end
     self:botTrainerOverlay(battle, botId)
+    -- The wounds go on NOW, at build (the user's 2026-09-05 RHYHORN: a
+    -- full bar that lost a quarter before anybody moved).  They used to
+    -- be applied on battle.started, which the engine emits after the
+    -- intro has drawn the enemy's healthbox at full HP, so the bar was
+    -- seen dropping.  Same clamp a duel's party gets (clampToRecord);
+    -- the battle.started pass below is idempotent and stays as the net.
+    clampToRecord(battle.enemyParty, idx, rec)
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end
