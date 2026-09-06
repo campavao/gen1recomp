@@ -1168,16 +1168,91 @@ end
 -- lives by -- somebody on the team knows SURF -- read as capability
 -- from the team it built: a HEALTHY mon whose species takes HM03.  The
 -- "taught ahead of time" half of the goal; a fainted swimmer carries
--- nobody, which is also the player's rule.
-function Bots.canSurf(record, data)
+-- nobody, which is also the player's rule.  FLY and CUT read the same
+-- way (BR-30): a bot teaches every HM its team can take, and the
+-- teaching itself is the fight build (BR:teachBotMoves).
+local function knowsHM(record, data, move)
   for _, m in ipairs(record or {}) do
     if (m.hpFrac or 0) > 0
-       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species],
-                         "SURF") then
+       and Bots.canLearn(data and data.pokemon and data.pokemon[m.species], move) then
       return true
     end
   end
   return false
+end
+
+function Bots.canSurf(record, data) return knowsHM(record, data, "SURF") end
+function Bots.canFly(record, data) return knowsHM(record, data, "FLY") end
+function Bots.canCut(record, data) return knowsHM(record, data, "CUT") end
+
+-- the HMs a fight's movesets carry when the team can use them on the
+-- field: what a bot crosses the bay or the sky with, it can also throw
+Bots.HMS = { "SURF", "FLY" }
+
+-- ---------------------------------------------------------------- FLY (BR-30)
+--
+-- "If I have FLY, I use it to reach the ring's centre."  The one
+-- legitimate teleport: a bot with a FLY learner that is this far from the
+-- eye (squared town-map squares) flies to the fly town nearest it rather
+-- than walking three routes.  Also the way out of the fog, and the way
+-- to a nurse when the team is wrecked and nothing on this map serves.
+
+Bots.FLY_FAR = 9
+
+-- Which of `towns` to fly to: the one with the least `distOf`.  With
+-- `hereDist` given the flight has to be worth it -- here is at least
+-- FLY_FAR out and the town strictly closer -- so a bot a square off the
+-- eye walks the last stretch like anyone.  nil: stay on foot.
+function Bots.flyPick(towns, distOf, hereDist)
+  local best, bestD
+  for _, id in ipairs(towns or {}) do
+    local d = distOf and distOf(id)
+    if d and (not bestD or d < bestD) then best, bestD = id, d end
+  end
+  if not best then return nil end
+  if hereDist ~= nil and (hereDist < Bots.FLY_FAR or bestD >= hereDist) then
+    return nil
+  end
+  return best
+end
+
+-- ---------------------------------------------------------------- COVERAGE (BR-30)
+--
+-- "If I don't have full type coverage, I swap POKeMON out for better
+-- coverage."  A full team used to refuse every catch and every ball on
+-- the ground.  Now a species that brings a type the team lacks replaces
+-- a member whose every type somebody else already carries -- a fainted
+-- one first, never the lead.  `typesOf(species)` is the caller's, so the
+-- read can be of the line as it stands at the rung.  Returns the record
+-- index to replace, or nil when the newcomer adds nothing or nobody is
+-- redundant.
+function Bots.coverageSwap(record, species, typesOf)
+  if not (record and species and typesOf) then return nil end
+  local have, rowTypes = {}, {}
+  for i, m in ipairs(record) do
+    rowTypes[i] = typesOf(m.species) or {}
+    for _, t in ipairs(rowTypes[i]) do have[t] = (have[t] or 0) + 1 end
+  end
+  local gains = false
+  for _, t in ipairs(typesOf(species) or {}) do
+    if not have[t] then gains = true end
+  end
+  if not gains then return nil end
+  local pick, pickFainted
+  for i = #record, 2, -1 do
+    local redundant = #rowTypes[i] > 0
+    for _, t in ipairs(rowTypes[i]) do
+      if (have[t] or 0) < 2 then redundant = false end
+    end
+    if redundant then
+      if (record[i].hpFrac or 0) <= 0 then
+        if not pickFainted then pick, pickFainted = i, true end
+      elseif not pick then
+        pick = i
+      end
+    end
+  end
+  return pick
 end
 
 -- Is this record hurt enough that a trainer would walk to a Centre?
@@ -1217,12 +1292,25 @@ end
 -- (data.encounters[map].grass.slots), the same table the player's
 -- encounters roll on.  nil when the team is full, the map has no grass
 -- table, or the roll misses -- a dwell is a hunt, not a vending machine.
-function Bots.rollCatch(record, cap, slots, rng)
+--
+-- A FULL team still catches (BR-30) when the caller hands `typesOf` and
+-- the catch improves the team's coverage: the redundant member goes
+-- (Bots.coverageSwap) and comes back as the second return, the row let
+-- go, for the caller to log or drop.
+function Bots.rollCatch(record, cap, slots, rng, typesOf)
   if not (record and slots and #slots > 0) then return nil end
-  if #record >= (cap or 1) then return nil end
+  local full = #record >= (cap or 1)
+  if full and not typesOf then return nil end
   if rng() >= Bots.CATCH_CHANCE then return nil end
   local pick = slots[rng(1, #slots)]
   if not (pick and pick.species) then return nil end
+  if full then
+    local i = Bots.coverageSwap(record, pick.species, typesOf)
+    if not i then return nil end
+    local old = record[i]
+    record[i] = { species = pick.species, hpFrac = 1 }
+    return pick.species, old
+  end
   record[#record + 1] = { species = pick.species, hpFrac = 1 }
   return pick.species
 end

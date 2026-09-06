@@ -429,11 +429,29 @@ at a sliver or the team is half gone, on this map or one town over when
 the bag is empty; a potion the moment a trainer comes into view (one sip
 a beat while the stalk closes, `tickBots`) rather than standing down; a
 trainer on your map hunted regardless of wounds unless a nurse here is
-the better move; and everything a player would do at three left. Still
-open from the table: coverage swaps, deliberate HM/TM teaching beyond the
-looted TM, FLY, and CUT. The picker is still `Bots.chooseGoal` plus the
-gates in `tickBots`, now reading the same team state (`wantsHeal`,
-`hasPotion`, `botStandsDown`) rather than one flag.
+the better move; and everything a player would do at three left. The
+picker is still `Bots.chooseGoal` plus the gates in `tickBots`, now
+reading the same team state (`wantsHeal`, `hasPotion`, `botStandsDown`)
+rather than one flag.
+
+**The rest of the table, 2026-09-05 (second pass):** coverage -- a full
+team swaps for a catch or a ball that brings a type it lacks, letting a
+member go whose every type somebody else carries (`Bots.coverageSwap`;
+a grass catch releases it, a looted ball drops it where the bot stands).
+HMs -- FLY and CUT are read as team capability the way SURF was
+(`Bots.canFly`, `Bots.canCut`), and SURF/FLY are taught into the fight's
+movesets (`BR:teachBotMoves`, which duels now reach too). FLY --
+`BR:botFly` on the roam clock: to the nearest Centre town when wrecked
+with an empty bag and no nurse here, to the unfogged town nearest the
+eye when the fog has this map, or to the eye's town when it is
+`Bots.FLY_FAR` out and nothing is being hunted on foot; the landing is
+the engine's own `field.flyWarps` cell. No bird animation over the
+ghost: the wire carries none. CUT -- a cut tree (`Spawn.cuttable`, the
+engine's tryCut test) is a path cell for a team with the move
+(`botCross`), so the hunt, an errand and a seam walk go through it;
+other screens see the ghost walk through the tree, which is the same
+abstraction as the unwatched fight. Pinned by the `fly` leg of
+`bot_legs_smoke.lua` and `br_test`.
 
 **The user's own flow, 2026-09-05, written while spectating.** This is the
 spec the bot goal picker should be measured against, in priority order.

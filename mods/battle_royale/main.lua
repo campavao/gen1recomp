@@ -2663,20 +2663,28 @@ return function(mod)
   -- closure (a BFS asks thousands of times).  Goals, spawns and roam
   -- landings all stay on land -- water is TRANSIT: a route across a bay
   -- to the prey or the errand on the far shore, not a place to live.
+  -- ...and THROUGH a tree when it carries a CUT learner (BR-30): the
+  -- tree is a cell on the path, felled in passing, never a destination.
+  -- Nothing on the wire says so, so other screens see the ghost walk
+  -- through it -- the same abstraction as the fight nobody watches.
   local function botCross(id)
-    local surf
+    local surf, cut
     return function(mapId, x, y)
       if canWalk(mapId, x, y) then return true end
-      if surf == nil then
-        surf = (BR.matchSeed and Bots.canSurf(BR:botRecord(id),
-                                              BR.game and BR.game.data))
-          or false
-      end
-      if not surf then return false end
       local data = BR.game and BR.game.data
-      return data ~= nil
-        and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
-        and not Spawn.isWarp(data.maps, mapId, x, y)
+      if not (data and BR.matchSeed) then return false end
+      if surf == nil then
+        surf = Bots.canSurf(BR:botRecord(id), data) or false
+      end
+      if surf and Spawn.swimmable(data.maps, data.tilesets, mapId, x, y)
+         and not Spawn.isWarp(data.maps, mapId, x, y) then
+        return true
+      end
+      if cut == nil then
+        cut = Bots.canCut(BR:botRecord(id), data) or false
+      end
+      return cut and Spawn.cuttable(data.maps, data.tilesets, data.field, mapId, x, y)
+        or false
     end
   end
 
@@ -2847,11 +2855,15 @@ return function(mod)
       end
       return pool[p.rng(1, #pool)]
     end
+    local rec = BR:botRecord(id)
+    -- FLY first (BR-30): a bot with the move flies where a player would
+    -- -- to a nurse when wrecked, out of the fog, or to the eye when it
+    -- is far -- and only walks the seams when the sky has nothing to say
+    if BR:botFly(id, p, rec, hunt, dist, now) then return end
     -- THE CENTRE ONE TOWN OVER (BR-29): a hurt bot with nothing in the
     -- bag and no nurse on this map walks to the next map that has one,
     -- ring allowing, before the eye or the hunt get a say.  `heal` used
     -- to be only ever the door on THIS map.
-    local rec = BR:botRecord(id)
     local nurses = {}
     if Bots.wantsHeal(rec) and not Bots.hasPotion(rec.bag)
        and not BR:centerDoorOn(p.map) then
@@ -2880,6 +2892,60 @@ return function(mod)
       end
     end
     p.lastRoam = now   -- nowhere to walk: hold, and ask again on the clock
+  end
+
+  -- FLY (BR-30).  The one legitimate teleport: the engine's own fly
+  -- landing for the town (field.flyWarps, the cell before its Centre),
+  -- and the wire's usual place.  Three reasons, in the order a player
+  -- would have them: the team is wrecked with an empty bag and no nurse
+  -- here (the nearest Centre town, measured from here); the fog has this
+  -- map (the unfogged town nearest the eye); the eye is far and nothing
+  -- is being hunted on foot (the town nearest it, if that is a real gain
+  -- -- Bots.flyPick).  Fly towns the fog has taken are never a landing.
+  -- No bird animation over the ghost: the wire carries none, and a
+  -- despawn/place pair is what every other screen sees of any warp.
+  function BR:botFly(id, p, rec, hunt, dist, now)
+    local data = self.game and self.game.data
+    local warps = data and data.field and data.field.flyWarps
+    local locs = self.ringLocs
+    if not (warps and locs and locs[p.map] and Bots.canFly(rec, data)) then return false end
+    local towns = {}
+    for town in pairs(warps) do
+      if town ~= p.map and locs[town] and data.maps[town] and not self:fogOver(town) then
+        towns[#towns + 1] = town
+      end
+    end
+    table.sort(towns)
+    local target, why
+    local inFog = self:fogOver(p.map)
+    if Bots.wantsHeal(rec) and not Bots.hasPotion(rec.bag) and not self:centerDoorOn(p.map) then
+      local here = locs[p.map]
+      local nurses = {}
+      for _, t in ipairs(towns) do
+        if self:centerDoorOn(t) then nurses[#nurses + 1] = t end
+      end
+      target = Bots.flyPick(nurses, function(t)
+        local l = locs[t]
+        local dx, dy = l.x - here.x, l.y - here.y
+        return dx * dx + dy * dy
+      end, nil)
+      why = "nurse"
+    elseif dist and (inFog or not hunt) then
+      target = Bots.flyPick(towns, function(t) return dist[t] end,
+                            (not inFog) and dist[p.map] or nil)
+      why = inFog and "fog" or "eye"
+    end
+    if not target then return false end
+    local spot = warps[target]
+    p.goal, p.path, p.dwellUntil, p.dwellKind = nil, nil, nil, nil
+    if p.busy then self:markBot(id, p, nil) end
+    p.map, p.x, p.y, p.facing = target, spot.x, spot.y, "down"
+    p.lastRoam = now or 0
+    p.flights = (p.flights or 0) + 1
+    self.ghosts:despawn(id)
+    self.relay:broadcast(Wire.place(p.map, p.x, p.y, p.facing, p.status, p.sprite, id))
+    log:say("FLY: %s flew to %s (%s)", tostring(p.name), tostring(target), why)
+    return true
   end
 
   -- The crossing itself (BR-32): the bot stands on the edge cell and this
@@ -3100,11 +3166,34 @@ return function(mod)
     local enc = data and data.encounters and data.encounters[p.map]
     local slots = enc and enc.grass and enc.grass.slots
     local rec = self:botRecord(id)
-    local caught = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng)
+    -- a full team still hunts for coverage (BR-30): a catch that brings
+    -- a type the team lacks replaces a member whose types it already has
+    local caught, letGo = Bots.rollCatch(rec, Bots.recordCap(), slots, p.rng,
+                                         self:botTypesOf(id))
     if caught then
-      log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
-              tostring(caught), #rec)
+      if letGo then
+        log:say("SWAPPED: %s let %s go for %s", tostring(p.name),
+                tostring(letGo.species), tostring(caught))
+      else
+        log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
+                tostring(caught), #rec)
+      end
       if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
+  -- The types a record row has AT THE RUNG (BR-30): the line as it has
+  -- evolved by now, since that is what fights and what a swap should
+  -- weigh -- a GYARADOS is a Flying type its MAGIKARP was not.
+  function BR:botTypesOf(id)
+    local data = self.game and self.game.data
+    if not (data and data.pokemon) then return nil end
+    local stone, pick = self:botEvo(id)
+    local rung = self:level()
+    return function(species)
+      local ev = Bots.evolveAt(data, species, rung, { stoneRung = stone, pick = pick })
+      local def = data.pokemon[ev] or data.pokemon[species]
+      return def and def.types or {}
     end
   end
 
@@ -3133,6 +3222,32 @@ return function(mod)
                         traded = (not Spills.isOwn(key, id)) or nil }
       log:say("LOOTED: %s took %s (%d mons)", tostring(p.name),
               tostring(ball.species), #rec)
+    elseif ball.species then
+      -- a full team swaps for coverage (BR-30): the redundant member's
+      -- ball goes down where the bot stands, for whoever comes next
+      local i = Bots.coverageSwap(rec, ball.species, self:botTypesOf(id))
+      if not i then return end
+      local old = rec[i]
+      local data = self.game and self.game.data
+      local stone, pick = self:botEvo(id)
+      local dropped = Bots.evolveAt(data, old.species, self:level(),
+                                    { stoneRung = stone, pick = pick, traded = old.traded })
+      rec[i] = { species = ball.species, hpFrac = 1,
+                 traded = (not Spills.isOwn(key, id)) or nil }
+      p.swaps = (p.swaps or 0) + 1
+      local spill = { map = p.map, mons = { { key = id .. ":swap:" .. p.swaps,
+                                              x = p.x, y = p.y, species = dropped,
+                                              level = self:level() } } }
+      log:say("SWAPPED: %s let %s go for %s", tostring(p.name),
+              tostring(dropped), tostring(ball.species))
+      self.spills:take(key)
+      if self.relay then
+        self.relay:broadcast(Wire.took(key))
+        self.relay:broadcast(Wire.spill(spill.map, spill.mons, nil))
+        self.relay:broadcast(Wire.botrec(id, rec))
+      end
+      self.spills:add(spill)
+      return
     else
       return
     end
@@ -6207,7 +6322,7 @@ return function(mod)
     local stone, pick = self:botEvo(botId)
     local rows, idx = Bots.fightRows(rec, self:level(), self.game.data, stone, pick)
     if #rows == 0 then return nil end
-    self:teachBotMoves(rows)
+    self:teachBotMoves(rows, rec)
     local look = self.players[botId]
     local class = (look and look.class) or BOT_TRAINER_CLASS
     self.botParty = rows
@@ -6450,14 +6565,52 @@ return function(mod)
   -- and eating it would starve the TM economy POK-62 built.  Two teaches
   -- at most: a team that is nothing but machine moves reads as a hack,
   -- not an ace.
-  function BR:teachBotMoves(rows)
+  --
+  -- And the HMs (BR-30): a team that crosses the bay or flies to the
+  -- eye has SURF or FLY on somebody, so the fight's movesets carry them
+  -- too -- one learner each, the oldest move swapped out as for a TM.
+  -- `rec` is the record the rows came from; a duel passes its own, a
+  -- player's fight the bot it is fighting.
+  function BR:teachBotMoves(rows, rec)
     local data = self.game and self.game.data
-    local rec = self.botFight and self:botRecord(self.botFight)
+    rec = rec or (self.botFight and self:botRecord(self.botFight))
     local bag = rec and rec.bag
-    if not (data and bag) then return end
+    if not (data and rec) then return end
     local Pokemon = require("src.pokemon.Pokemon")
+    -- one move onto the first row that can take it and does not have
+    -- it; a row already taught by this pass keeps its list
+    local function teach(moveId, again)
+      if not (data.moves and data.moves[moveId]) then return false end
+      for _, row in ipairs(rows) do
+        if (again or not row.moves)
+           and Bots.canLearn(data.pokemon and data.pokemon[row.species], moveId) then
+          local ids, dup = {}, false
+          if row.moves then
+            for _, mid in ipairs(row.moves) do ids[#ids + 1] = mid end
+          else
+            local okM, built = pcall(Pokemon.new, data, row.species, row.level)
+            for _, mv in ipairs((okM and built and built.moves) or {}) do
+              ids[#ids + 1] = type(mv) == "table" and mv.id or mv
+            end
+          end
+          for _, mid in ipairs(ids) do if mid == moveId then dup = true end end
+          if dup then return false end
+          if #ids > 0 then
+            if #ids >= 4 then ids[1] = moveId else ids[#ids + 1] = moveId end
+            row.moves = ids
+            return true
+          end
+        end
+      end
+      return false
+    end
+    for _, hm in ipairs(Bots.HMS) do
+      local knows = (hm == "SURF" and Bots.canSurf(rec, data))
+        or (hm == "FLY" and Bots.canFly(rec, data))
+      if knows then teach(hm, true) end
+    end
     local taught = 0
-    for _, it in ipairs(bag.items or {}) do
+    for _, it in ipairs((bag and bag.items) or {}) do
       if taught >= 2 then break end
       local moveId = Bots.tmMove(it.id)
       if moveId and data.moves and data.moves[moveId] then
@@ -8831,6 +8984,7 @@ return function(mod)
     -- walk-up it was on
     p.goal, p.path, p.came, p.through = nil, nil, nil, nil
     p.dwellUntil, p.dwellKind = nil, nil
+    if p.busy then BR:markBot(id, p, nil) end
     if BR.botApproaching[id] then
       for seer, ap in pairs(BR.botApproach) do
         if seer == id or ap.to == id then
@@ -9090,7 +9244,7 @@ return function(mod)
           beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
           -- seams walked rather than skipped (BR-32), and the town a bot
           -- inside a Centre is judged on (BR-35)
-          seams = p.seamsWalked or 0,
+          seams = p.seamsWalked or 0, flights = p.flights or 0,
           came = p.came and p.came.id or nil,
           approaching = BR.botApproaching[id] and true or false,
           facing = p.facing, busy = p.busy,
@@ -9121,6 +9275,14 @@ return function(mod)
     end
     local rec = BR:botRecord(id)
     rec[#rec + 1] = { species = species, hpFrac = 1 }
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- a test hook: replace a bot's bag, so a driver can stage "no potion"
+  mod.exports.debugBotBag = function(id, items, money)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    rec.bag = { items = items or {}, money = money or 0 }
     if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
     return true
   end

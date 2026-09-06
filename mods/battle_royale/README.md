@@ -574,7 +574,12 @@ loot within a few cells before anything; the Centre when the lead is at a
 sliver or the team is half gone (one town over if this map has none and
 the bag is empty); a potion the moment a trainer comes into view; and at
 three left it hunts whoever shares its map every beat, healed or not —
-a wound with no Centre in reach is not a reason to pace.
+a wound with no Centre in reach is not a reason to pace. A full team still
+catches for coverage, letting go a member whose types it already has. And
+its team's HMs are its own: a FLY learner flies — to the nearest Centre
+when wrecked with nothing in the bag, out of the fog, or toward the eye
+when it is far — landing where FLY lands you; a CUT learner walks through
+the trees CUT fells; SURF and FLY are on its movesets in a fight.
 
 **How many bots?** Up to **30**, verified live end-to-end. Kanto has 34
 outdoor maps, so thirty bots each get a route or town of their own and the
@@ -776,7 +781,9 @@ onto the door facing down, with the spectator inside while it heals;
 spots it, walks up, both face, and only then does the duel open; **surf** —
 a bot with a SURF learner on PALLET's sea is drawn on the surf sheet and on
 the walk sheet ashore; **endgame** — the last two, both with a wrecked lead
-on a route with no Centre, walk at each other and meet. `BR_LEG` runs one.
+on a route with no Centre, walk at each other and meet; **fly** — a wrecked
+bot with a PIDGEOT, an empty bag and no Centre on its route flies to
+VIRIDIAN in one hop and lands on the fly landing. `BR_LEG` runs one.
 `LEGS OK` passes it.
 
 ```sh

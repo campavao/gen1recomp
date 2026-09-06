@@ -23,6 +23,7 @@
 
 local U = require("tests.drivers.util")
 local L = require("mods.battle_royale.tests.drivers.pvp.pvplib")
+local Spawn = require("mods.battle_royale.lib.spawn")
 
 return function(game)
   local C = L.ctx(game)
@@ -56,8 +57,25 @@ return function(game)
   local bots = E.bots() or {}
   table.sort(bots, function(x, y) return x.id < y.id end)
   if #bots < 3 then return C.fail("expected three bots, got " .. #bots) end
-  E.debugPlaceBot(bots[1].id, "CINNABAR_ISLAND", 10, 10)
-  E.debugPlaceBot(bots[2].id, "CINNABAR_ISLAND", 4, 4)
+  -- A on an open row in VIRIDIAN facing along it (BR-34: a duel opens on a
+  -- sighting and a walk-up now, so B has to be put where A can SEE it and
+  -- REACH it -- CINNABAR's lab door between them used to be fine for a
+  -- fight that ignored walls); the others far away and apart
+  local data = game.data
+  local function open(x, y)
+    return Spawn.walkable(data.maps, data.tilesets, "VIRIDIAN_CITY", x, y)
+       and not Spawn.isWarp(data.maps, "VIRIDIAN_CITY", x, y)
+  end
+  local rx, ry
+  for y = 18, 35 do
+    for x = 4, 30 do
+      if open(x, y) and open(x + 1, y) and open(x + 2, y) and open(x + 3, y) then rx, ry = x, y break end
+    end
+    if rx then break end
+  end
+  if not rx then return C.fail("no open row in VIRIDIAN") end
+  E.debugPlaceBot(bots[1].id, "VIRIDIAN_CITY", rx, ry, "right")
+  E.debugPlaceBot(bots[2].id, "CINNABAR_ISLAND", 8, 12)
   E.debugPlaceBot(bots[3].id, "SEAFOAM_ISLANDS_1F", 6, 6)
 
   -- out at the drop, camera on bot A
@@ -74,17 +92,28 @@ return function(game)
   U.wait(60)
   U.log(("DUEL: watching %s (%s); putting %s beside it"):format(tostring(a.name), tostring(a.id), tostring(b.name)))
 
-  -- now B walks up: adjacent cells, and the host notices within a tick
-  E.debugPlaceBot(b.id, "CINNABAR_ISLAND", 11, 10)
+  -- now B steps into A's eyeline two cells along the row: A spots it,
+  -- walks up, and the duel opens
+  local pa
+  for _, pr in ipairs(E.debugFightProbe().bots) do if pr.id == a.id then pa = pr end end
+  local bx = (pa and pa.facing == "left") and pa.x - 2 or pa.x + 2
+  if not open(bx, pa.y) then bx = pa.x + 2 end
+  E.debugPlaceBot(b.id, "VIRIDIAN_CITY", bx, pa.y, (bx > pa.x) and "left" or "right")
+  E.debugFaceBot(a.id, (bx > pa.x) and "right" or "left")
   local opened = false
   for _ = 1, 600 do
     U.wait(5)
     if #(E.botDuels() or {}) >= 1 then opened = true break end
   end
   if not opened then
-    local alive = 0
+    local alive, where = 0, {}
     for _, bt in ipairs(E.bots() or {}) do if bt.status == "alive" then alive = alive + 1 end end
-    return C.fail(("no duel opened (bots alive %d); the coin may still be flipping"):format(alive))
+    for _, pr in ipairs(E.debugFightProbe().bots) do
+      where[#where + 1] = ("%s@%s %s,%s %s busy=%s goal=%s hunt=%s ap=%s"):format(
+        tostring(pr.id), tostring(pr.map), tostring(pr.x), tostring(pr.y), tostring(pr.facing),
+        tostring(pr.busy), tostring(pr.goal), tostring(pr.hunting), tostring(pr.approaching))
+    end
+    return C.fail(("no duel opened (bots alive %d): %s"):format(alive, table.concat(where, " | ")))
   end
   U.log("DUEL: a real fight is running on the host")
 

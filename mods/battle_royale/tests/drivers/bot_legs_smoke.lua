@@ -18,9 +18,13 @@
 --           the surf sheet, and on the walk sheet ashore (BR-33);
 --   endgame the last two, both with a wrecked lead and no Centre on their
 --           route, walk at each other and fight rather than pacing until
---           the fog decides it (BR-29).
+--           the fog decides it (BR-29);
+--   fly     a wrecked bot with a FLY learner, an empty bag and no Centre
+--           on its route flies to the nearest Centre town in one hop, on
+--           the engine's own fly landing (BR-30).
 --
--- BR_LEG=seam|centre|walkup|surf|endgame runs one; unset runs all five.
+-- BR_LEG=seam|centre|walkup|surf|fly|endgame runs one; unset runs all six
+-- (endgame last: its duel can crown a winner and end the match).
 --
 --   SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 POKEPORT_GAME=red \
 --   POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_IDENTITY=br-legs POKEPORT_SPEED=3 \
@@ -34,7 +38,7 @@ local L = require("mods.battle_royale.tests.drivers.pvp.pvplib")
 local Spawn = require("mods.battle_royale.lib.spawn")
 
 -- two cells apart, or the banished pair spot each other and fight
-local FAR = { { map = "CINNABAR_ISLAND", x = 10, y = 10 },
+local FAR = { { map = "CINNABAR_ISLAND", x = 8, y = 12 },
               { map = "SEAFOAM_ISLANDS_1F", x = 6, y = 6 } }
 
 return function(game)
@@ -335,6 +339,59 @@ return function(game)
     end
     if sheet ~= "walk" then return C.fail("a bot ashore is drawn on " .. tostring(sheet)) end
     U.log("SURF: and on the walk sheet ashore")
+  end
+
+  -- ------------------------------------------------------------ fly
+  if leg("fly") then
+    local flier
+    for _, b in ipairs(E.bots() or {}) do
+      if b.status == "alive" then flier = b break end
+    end
+    if not flier then return C.fail("no bot left to fly") end
+    if not watch(flier.id) then return C.fail("could not watch the flier") end
+    local others = {}
+    for _, b in ipairs(E.bots() or {}) do
+      if b.id ~= flier.id then others[#others + 1] = b end
+    end
+    banish(unpack(others))
+    -- heal it first so the scar is the whole story, then a FLY learner,
+    -- an empty bag, a lead at a sliver, and a route with no Centre
+    E.debugScarBot(flier.id, 1)
+    E.debugBotMon(flier.id, "PIDGEOT")
+    E.debugBotBag(flier.id, {}, 0)
+    local fx, fy = openRow("ROUTE_1", 6, 16, 1)
+    local before = probe(flier.id)
+    local seams0, flights0 = before.seams or 0, before.flights or 0
+    E.debugPlaceBot(flier.id, "ROUTE_1", fx, fy)
+    E.debugScarBot(flier.id, 0.3)
+    U.log(("FLY: %s wounded on ROUTE_1 %d,%d with PIDGEOT and no potion"):format(flier.name, fx, fy))
+    local landed, last
+    for _ = 1, 3000 do
+      U.wait(3)
+      local b = botAt(flier.id)
+      if b.map ~= "ROUTE_1" then landed = { from = last, to = b } break end
+      last = b
+    end
+    if not landed then
+      local pr = probe(flier.id)
+      return C.fail(("the bot never flew (goal %s at %s,%s, flights %s)"):format(
+        tostring(pr.goal), tostring(pr.x), tostring(pr.y), tostring(pr.flights)))
+    end
+    local spot = data.field.flyWarps[landed.to.map]
+    if not spot then return C.fail("landed on " .. tostring(landed.to.map) .. ", not a fly town") end
+    -- the landing is the Centre's doorstep, so a wounded bot may already
+    -- have taken its first step up onto the door by the sample
+    if math.abs(landed.to.x - spot.x) + math.abs(landed.to.y - spot.y) > 1 then
+      return C.fail(("landed at %d,%d, not the fly landing %d,%d"):format(landed.to.x, landed.to.y, spot.x, spot.y))
+    end
+    if landed.to.map ~= "VIRIDIAN_CITY" then
+      return C.fail("flew to " .. landed.to.map .. ", not the nearest Centre town")
+    end
+    local pr = probe(flier.id)
+    if (pr.flights or 0) ~= flights0 + 1 then return C.fail("the hop was not counted as a flight") end
+    if (pr.seams or 0) ~= seams0 then return C.fail("the bot walked a seam instead of flying") end
+    shot("fly_landed")
+    U.log(("FLY: %s flew from ROUTE_1 to %s and landed before its Centre"):format(flier.name, landed.to.map))
   end
 
   -- ------------------------------------------------------------ endgame

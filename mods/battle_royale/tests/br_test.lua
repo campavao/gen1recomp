@@ -2902,6 +2902,103 @@ do
   ok(Bots.LONG_GOAL_SECONDS > Bots.GOAL_SECONDS, "a long errand gets a long clock")
 end
 
+-- ------- the rest of the flow chart: coverage, FLY, CUT, HMs (BR-30)
+
+do
+  local Bots = require("mods.battle_royale.lib.bots")
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local T = { RAT = { "NORMAL" }, BIRD = { "NORMAL", "FLYING" }, FISH = { "WATER" },
+              BUG = { "BUG", "POISON" }, ROCK = { "ROCK", "GROUND" }, GHOST = { "GHOST", "POISON" } }
+  local function typesOf(s) return T[s] end
+  local team = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                 { species = "FISH", hpFrac = 1 }, { species = "BUG", hpFrac = 1 } }
+  eq(Bots.coverageSwap(team, "ROCK", typesOf), 2,
+     "a new type replaces the member whose types the team already has")
+  eq(Bots.coverageSwap(team, "RAT", typesOf), nil, "a type the team has adds nothing")
+  eq(Bots.coverageSwap({ { species = "RAT", hpFrac = 1 }, { species = "BIRD", hpFrac = 1 } },
+                       "FISH", typesOf), nil,
+     "nobody redundant: nobody goes (the lead never does)")
+  local hurt = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                 { species = "RAT", hpFrac = 0 }, { species = "BUG", hpFrac = 1 } }
+  eq(Bots.coverageSwap(hurt, "ROCK", typesOf), 3, "a fainted redundant member goes first")
+  eq(Bots.coverageSwap({ { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 },
+                         { species = "GHOST", hpFrac = 0 } }, "ROCK", typesOf), 2,
+     "a fainted member whose type nobody else has is kept over a redundant one standing")
+  eq(Bots.coverageSwap(nil, "ROCK", typesOf), nil, "no record, no swap")
+
+  -- a full team still catches for coverage, and hands back what it let go
+  local full = { { species = "BIRD", hpFrac = 1 }, { species = "RAT", hpFrac = 1 } }
+  local always = function(a, b) if a == nil then return 0 end return a end
+  eq(Bots.rollCatch(full, 2, { { species = "FISH" } }, always), nil,
+     "full and no typesOf: the old refusal")
+  local got, letGo = Bots.rollCatch(full, 2, { { species = "FISH" } }, always, typesOf)
+  eq(got, "FISH", "full with typesOf: the newcomer is caught")
+  eq(letGo and letGo.species, "RAT", "...and the redundant member let go")
+  eq(#full, 2, "the team stays at the cap")
+  eq(full[2].species, "FISH", "in the slot it freed")
+  eq(Bots.rollCatch(full, 2, { { species = "RAT" } }, always, typesOf), nil,
+     "a catch that adds no type is not made")
+
+  -- FLY
+  local D = { A = 1, B = 16, C = 36 }
+  local dOf = function(id) return D[id] end
+  eq(Bots.flyPick({ "A", "B", "C" }, dOf, 49), "A", "far out: fly to the town nearest the eye")
+  eq(Bots.flyPick({ "A", "B", "C" }, dOf, 4), nil, "a square or two off the eye: walk")
+  eq(Bots.flyPick({ "B", "C" }, dOf, 9), nil, "no town closer than here: walk")
+  eq(Bots.flyPick({ "B", "C" }, dOf, nil), "B", "no distance to beat (fog, nurse): the nearest")
+  eq(Bots.flyPick({}, dOf, 100), nil, "no towns, no flight")
+
+  -- HMs as capability
+  local mons = { pokemon = { PIDGEOT = { tmhm = { "FLY" } }, ODDISH = { tmhm = { "CUT" } },
+                             LAPRAS = { tmhm = { "SURF" } } } }
+  ok(Bots.canFly({ { species = "PIDGEOT", hpFrac = 1 } }, mons), "a PIDGEOT flies")
+  ok(not Bots.canFly({ { species = "PIDGEOT", hpFrac = 0 } }, mons), "a fainted one carries nobody")
+  ok(Bots.canCut({ { species = "ODDISH", hpFrac = 1 } }, mons), "an ODDISH cuts")
+  ok(not Bots.canCut({ { species = "LAPRAS", hpFrac = 1 } }, mons), "a LAPRAS does not")
+
+  -- CUT trees, against Kanto: ROUTE_2 has them, and a team with CUT
+  -- reaches through one
+  local okData, maps = pcall(dofile, "data/generated/maps.lua")
+  local okTs, tilesets = pcall(dofile, "data/generated/tilesets.lua")
+  local okField, field = pcall(dofile, "data/generated/field.lua")
+  if okData and okTs and okField and maps and tilesets and field and maps.ROUTE_2 then
+    local trees = {}
+    local def = maps.ROUTE_2
+    for y = 0, def.height * 2 - 1 do
+      for x = 0, def.width * 2 - 1 do
+        if Spawn.cuttable(maps, tilesets, field, "ROUTE_2", x, y) then trees[#trees + 1] = { x = x, y = y } end
+      end
+    end
+    ok(#trees > 0, "ROUTE_2 has cut trees (" .. #trees .. ")")
+    local wall = trees[1]
+    ok(wall and not Spawn.walkable(maps, tilesets, "ROUTE_2", wall.x, wall.y),
+       "a cut tree is not walkable as it stands")
+    local function walk(x, y) return Spawn.walkable(maps, tilesets, "ROUTE_2", x, y) end
+    local function cut(x, y) return walk(x, y) or Spawn.cuttable(maps, tilesets, field, "ROUTE_2", x, y) end
+    -- through the first tree with walkable cells on two sides
+    local proved = false
+    for _, t in ipairs(trees) do
+      for _, pair in ipairs({ { { t.x - 1, t.y }, { t.x + 1, t.y } }, { { t.x, t.y - 1 }, { t.x, t.y + 1 } } }) do
+        local a, b = pair[1], pair[2]
+        if walk(a[1], a[2]) and walk(b[1], b[2]) then
+          local through = Bots.path(cut, { x = a[1], y = a[2] }, { x = b[1], y = b[2] })
+          local around = Bots.path(walk, { x = a[1], y = a[2] }, { x = b[1], y = b[2] })
+          eq(through and #through, 2, "with CUT the way through the tree is two steps")
+          ok(around == nil or #around > 2, "without it the way is round, or there is none")
+          proved = true
+          break
+        end
+      end
+      if proved then break end
+    end
+    ok(proved, "a tree with ground on both sides was found to walk through")
+    eq(Spawn.cuttable(maps, tilesets, field, "VIRIDIAN_POKECENTER", 3, 3), false,
+       "nothing indoors is a tree")
+  else
+    print("skip: cut trees (no generated Kanto data)")
+  end
+end
+
 -- ------- the Hall of Fame (POK-47)
 
 do
