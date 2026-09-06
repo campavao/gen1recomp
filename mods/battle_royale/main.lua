@@ -2933,10 +2933,17 @@ return function(mod)
         return dx * dx + dy * dy
       end, nil)
       why = "nurse"
-    elseif dist and (inFog or not hunt) then
-      target = Bots.flyPick(towns, function(t) return dist[t] end,
-                            (not inFog) and dist[p.map] or nil)
-      why = inFog and "fog" or "eye"
+    elseif inFog and dist then
+      target = Bots.flyPick(towns, function(t) return dist[t] end, nil)
+      why = "fog"
+    elseif dist and not hunt and self.ring
+           and (self.ring.radius or math.huge) <= Bots.FLY_RING then
+      -- toward the eye only once the ring has closed in: at the drop the
+      -- eye is far from everywhere, and every bot with a PIDGEY flew to
+      -- its town in the first minute -- a playtest probe watched a bot
+      -- placed beside the player vanish before its ghost was drawn
+      target = Bots.flyPick(towns, function(t) return dist[t] end, dist[p.map])
+      why = "eye"
     end
     if not target then return false end
     local spot = warps[target]
@@ -3637,8 +3644,23 @@ return function(mod)
         -- (the fog still outranks the hunt, as it does every errand:
         -- deferring roam on a fogged map would let prey bait a bot into
         -- the fog and camp there while it burned)
+        -- THE FOG DROPS EVERYTHING (BR-32's cost).  Leaving a map is a
+        -- walk now, not a hop, and a bot that finished its errand first
+        -- -- up to twenty seconds of goal and six of dwell -- then walked
+        -- a route in the fog died on the way: seven bots at one shrink in
+        -- the user's 2026-09-05 match.  A player moves the moment the
+        -- ring is announced, so a fogged bot lets go of whatever it was
+        -- doing and the seam clock fires on the next beat.  A bot inside
+        -- a Centre finishes its legs -- the way out is the door.
+        local fogged = self.phase == "match" and p.map and not p.came
+          and self:fogOver(self:botOutdoor(p))
+        if fogged and p.goal and p.goal.kind ~= "seam" then
+          p.goal, p.path, p.dwellUntil, p.dwellKind, p.through = nil, nil, nil, nil, nil
+          if p.busy then self:markBot(id, p, nil) end
+          p.lastRoam = 0
+        end
         local preyHere = false
-        if self.phase == "match" and p.map and not self:fogOver(self:botOutdoor(p))
+        if self.phase == "match" and p.map and not fogged
            and not self:botStandsDown(id, p, alive) then
           if meHere and meHere.mapId == p.map then preyHere = true end
           if not preyHere then
@@ -8885,6 +8907,14 @@ return function(mod)
   mod.exports.setFog = function(seconds)
     redefineOptions(seconds, BR:safariSeconds())
     return BR:fogSeconds()
+  end
+  -- the RUNNING round's fog length (POK-116 pinned it at start, so
+  -- setFog no longer reaches a live ring): a driver collapses it to
+  -- stage a shrink on demand
+  mod.exports.debugRoundFog = function(seconds)
+    if BR.phase ~= "match" or not (BR.relay and BR.relay:isHost()) then return false end
+    BR.matchFog = math.max(1, math.floor(tonumber(seconds) or 1))
+    return BR.matchFog
   end
   mod.exports.setSafari = function(seconds)
     redefineOptions(BR:fogSeconds(), seconds)
