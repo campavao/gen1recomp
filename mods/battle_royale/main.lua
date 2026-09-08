@@ -792,6 +792,17 @@ return function(mod)
       local amHost = relay:isHost()
       if amHost and not BR.wasHost then BR:onPromoted() end
       BR.wasHost = amHost
+      -- A watcher is a camera, not a trainer (see isWatcherId): whatever a
+      -- place of theirs put in the table comes back out, so they are never
+      -- counted, drawn, or waited for -- and the host shows them the match
+      -- they came to watch.
+      for _, m in ipairs(members) do
+        if m.spectate and BR.players[m.id] then
+          BR.ghosts:despawn(m.id)
+          BR.players[m.id] = nil
+        end
+      end
+      BR:serveWatchers()
       if BR:inRound() then BR:checkWinner() end
     end)
     relay:on("message", function(fromId, m) BR:onMessage(fromId, m) end)
@@ -1016,12 +1027,73 @@ return function(mod)
     return self.relay:spectate(rm.code, myName())
   end
 
+  -- The host shows each watcher the match they walked in on: one `late`
+  -- (lib/wire.lua) per watcher, once the drop is done -- a watcher who
+  -- arrives during the Safari waits for the buzzer, since the zone is a
+  -- clock nobody else can join.  Called from the roster and from the tick,
+  -- so a watcher seated before the drop is served the moment there is a
+  -- match to show.
+  function BR:serveWatchers()
+    local relay = self.relay
+    if not (relay and relay:isHost() and relay:isOpen()) then return 0 end
+    if self.phase ~= "match" then return 0 end
+    self.servedWatchers = self.servedWatchers or {}
+    local sent = 0
+    for _, m in ipairs(relay.members or {}) do
+      if m.spectate and m.id ~= self.myId and not self.servedWatchers[m.id] then
+        self.servedWatchers[m.id] = true
+        relay:send(m.id, self:lateMessage())
+        log:say("watcher: %s is shown the match", tostring(m.name))
+        sent = sent + 1
+      end
+    end
+    return sent
+  end
+
+  -- The match as it stands, in the start's own shape plus each trainer's
+  -- status and the ring: the seed deals the bots and the zone on the
+  -- watcher's side exactly as it did on everyone else's.
+  function BR:lateMessage()
+    local spawns = {}
+    local function add(id, map, x, y, status)
+      -- a trainer nobody has placed yet is nowhere; the wire refuses a
+      -- spawn without a cell, and their own resync names one within seconds
+      if id == nil or map == nil or x == nil or y == nil then return end
+      spawns[#spawns + 1] = { id = id, map = map, x = x, y = y,
+                              st = status == "out" and "out" or nil }
+    end
+    local here = mod.world:current()
+    add(self.myId, here and here.mapId, here and here.x, here and here.y, self.status)
+    for id, p in pairs(self.players) do
+      if not self:isWatcherId(id) then add(id, p.map, p.x, p.y, p.status) end
+    end
+    local ring = self.ring and {
+      phase = self.ring.phase, cx = self.ring.center.x, cy = self.ring.center.y,
+      r = self.ring.radius, place = self.ring.center.name,
+      e = self.matchStartedAt and ((clock() or 0) - self.matchStartedAt) or nil,
+    } or nil
+    return Wire.late(self.matchSeed, spawns, self:roundFog(), self:matchPace(), ring)
+  end
+
   -- Are WE the watcher?  The roster is the truth: the relay marks a
   -- spectator on arrival and clears the mark at the unlock that seats
   -- them, so this flips to false exactly when the next lobby begins.
   function BR:isSpectating()
     local relay = self.relay
     local m = relay and relay.id and relay:member(relay.id)
+    return (m and m.spectate) == true
+  end
+
+  -- Is this member a watcher?  The roster is the truth here too.  A watcher
+  -- is a camera, never a trainer: their place is not a body on any map,
+  -- they are not counted among the living, and the match does not wait for
+  -- them.  Found the hard way on 2026-09-07: a watcher's join place landed
+  -- in `players` with no status, aliveCount read that as alive, and a
+  -- fifteen-bot match sat at "2 LEFT" for twenty-five minutes with nobody
+  -- to find.
+  function BR:isWatcherId(id)
+    local relay = self.relay
+    local m = relay and id ~= nil and relay:member(id)
     return (m and m.spectate) == true
   end
 
@@ -1332,6 +1404,7 @@ return function(mod)
     self.announcedLevel = nil
     self.watching = nil
     self.lastHopAt = nil
+    self.servedWatchers = {}
     self:releaseCamera()
   end
 
@@ -1641,6 +1714,15 @@ return function(mod)
     for _, s in ipairs(msg.spawns) do
       if s.id == self.myId then mine = s break end
     end
+    -- A watcher arriving mid-match (`late`) has no drop of their own: the
+    -- camera opens beside the first trainer still standing, which is who
+    -- tickCamera picks first anyway.
+    if not mine and msg.late then
+      for _, s in ipairs(msg.spawns) do
+        if s.st ~= "out" then mine = s break end
+      end
+      mine = mine or msg.spawns[1]
+    end
     if not mine then
       say("The match started\nwithout a spawn\nfor you.")
       return
@@ -1668,9 +1750,12 @@ return function(mod)
                                        self.game and self.game.data) or nil
         self.players[s.id] = {
           name = bot and Bots.name(msg.seed, s.id) or self.relay:nameOf(s.id),
-          map = bot and s.map or nil,   -- a bot is where the host says at once
+          -- a bot is where the host says at once; so is everyone, for a
+          -- watcher joining a match already running (their resync lands
+          -- within seconds either way)
+          map = (bot or msg.late) and s.map or nil,
           x = s.x, y = s.y, facing = "down",
-          status = "alive", bot = bot or nil,
+          status = s.st == "out" and "out" or "alive", bot = bot or nil,
           sprite = look and look.walk or nil,
           class = look and look.class or nil,
         }
@@ -1747,10 +1832,31 @@ return function(mod)
     -- holds for the way out is theirs, and resetMatch hands it back.  No
     -- pace on the start is an older host; this client keeps its own.
     if msg.pace then self:applyPace(msg.pace) end
+    if msg.late then
+      -- A camera from the first frame: out, empty-handed, off the heir
+      -- list, and glued to whoever is still standing (tickCamera).  The
+      -- ring the host is on comes with the message so the map and the
+      -- FOG box read true at once rather than at the next shrink.
+      self.status = "out"
+      self.fellAt = nil
+      self.watching = nil
+      local save = self.game and self.game.save
+      if save then
+        save.party = {}
+        save.inventory = {}
+        save.bagOrder = nil
+        save.money = 0
+      end
+      if self.relay then self.relay:canHost(false) end
+      local r = msg.ring
+      if r then self:applyRing(r.phase, r.cx, r.cy, r.r, r.place, r.elapsed) end
+      log:say("watching: joined a match in progress, %d left", self:aliveCount())
+      sayLater("You're watching.\nLEFT and RIGHT\nswitch trainers.\fYou play the\nnext match.", 1.5)
+    end
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     self.sentBusy = false    -- not nil: nil is "not busy", a real answer
     broadcastPlace()
-    if safari > 0 then
+    if safari > 0 and not msg.late then
       -- a beat and a half after landing: past the held A that started the
       -- match, so the rules are actually readable (POK-50)
       sayLater(("Catch what you can!\nThe PA calls time\nin %d:%02d."):format(
@@ -2061,6 +2167,18 @@ return function(mod)
     return out
   end
 
+  -- The host waves a turned-away trainer's note off the screen before the
+  -- clock would (Door.NOTE_SECONDS).  Three refusals in ten seconds put
+  -- three flagged seats nobody could open in a lobby on 2026-09-07 and
+  -- read as a hang; the seat opens now, says they left, and offers this.
+  function BR:dismissFlag(id)
+    if id == nil then return false end
+    local had = (self.flagged and self.flagged[id]) or (self.oldPeers and self.oldPeers[id])
+    if self.flagged then self.flagged[id] = nil end
+    if self.oldPeers then self.oldPeers[id] = nil end
+    return had ~= nil
+  end
+
   -- ------- inbound room messages
 
   function BR:onMessage(fromId, raw)
@@ -2084,7 +2202,15 @@ return function(mod)
     end
     local p = self.players[actor]
 
-    if msg.t == "place" then
+    if msg.t == "place" and self:isWatcherId(actor) then
+      -- a watcher's place is where their camera is, not a body: never a
+      -- row in `players` (the roster handler sweeps one that slipped in)
+      if p then
+        self.ghosts:despawn(actor)
+        self.players[actor] = nil
+      end
+
+    elseif msg.t == "place" then
       p = p or { name = Bots.isBot(actor) and Bots.name(self.matchSeed, actor)
                         or self.relay:nameOf(actor),
                  bot = Bots.isBot(actor) or nil }
@@ -2214,6 +2340,13 @@ return function(mod)
 
     elseif msg.t == "winner" then
       if fromId == self.relay.hostId then self:onWinner(msg.id) end
+
+    elseif msg.t == "late" then
+      -- the match in progress, for a watcher who arrived after its start;
+      -- the host's to send, and only a watcher takes it
+      if fromId == self.relay.hostId and self:isSpectating() then
+        self:onStart(msg)
+      end
 
     elseif msg.t == "fame" then
       -- The champion's own team, and nobody else's to send: a parade from
@@ -7456,8 +7589,8 @@ return function(mod)
 
   function BR:aliveCount()
     local n = (self.status ~= "out") and 1 or 0
-    for _, p in pairs(self.players) do
-      if p.status ~= "out" then n = n + 1 end
+    for id, p in pairs(self.players) do
+      if p.status ~= "out" and not self:isWatcherId(id) then n = n + 1 end
     end
     return n
   end
@@ -7468,7 +7601,9 @@ return function(mod)
     local survivors = {}
     if self.status ~= "out" then survivors[#survivors + 1] = self.myId end
     for id, p in pairs(self.players) do
-      if p.status ~= "out" then survivors[#survivors + 1] = id end
+      if p.status ~= "out" and not self:isWatcherId(id) then
+        survivors[#survivors + 1] = id
+      end
     end
     if #survivors == 1 then
       self.relay:broadcast(Wire.winner(survivors[1]))
@@ -7603,6 +7738,12 @@ return function(mod)
     BR:tickPending()
     -- ...and the route trainers' sight lines stay down (POK-163)
     BR:tickTrainerTalk()
+    -- ...and a watcher seated before the drop gets the match once it is on
+    BR.watcherTick = (BR.watcherTick or 0) + 1
+    if BR.watcherTick >= 120 then
+      BR.watcherTick = 0
+      BR:serveWatchers()
+    end
 
     -- the quick-play countdown: a lobby that starts itself
     if relay and relay:isOpen() and BR.phase == "lobby"
@@ -8045,6 +8186,18 @@ return function(mod)
         if o.trainerClass and o.text then
           trainerTalk[mapId] = {}
           contribution.talk = trainerTalk[mapId]
+          -- The SECOND lever, for the engine that dropped the first
+          -- (POK-163, solved 2026-09-07).  Upstream 0.2.56 no longer skips
+          -- a trainer whose TEXT has a talk script; its checkTrainerSight
+          -- reads `view.noSight[TEXT]` instead, an ad-hoc map key its own
+          -- scripts never set.  The fork engine never reads it.  So every
+          -- map carries both, filled and emptied together: a build that
+          -- honours either one keeps the ambush down.  Held on BR rather
+          -- than in a new local: the enclosing chunk is at LuaJIT's
+          -- upvalue cap.
+          BR.sightOff = BR.sightOff or {}
+          BR.sightOff[mapId] = {}
+          contribution.noSight = BR.sightOff[mapId]
           break
         end
       end
@@ -8079,10 +8232,12 @@ return function(mod)
     for mapId, T in pairs(trainerTalk) do
       local touched = false
       local def = data.maps[mapId]
+      local N = self.sightOff and self.sightOff[mapId]
       for _, o in ipairs((def and def.objects) or {}) do
         if o.trainerClass and o.text and not T[o.text]
            and not MapScripts.baseTalk(mapId, o.text) then
           T[o.text] = trainerTalkHandler
+          if N then N[o.text] = true end
           touched = true
           armed = armed + 1
         end
@@ -8125,8 +8280,10 @@ return function(mod)
   function BR:disarmTrainerTalk()
     local okMS, MapScripts = pcall(require, "src.script.MapScripts")
     for mapId, T in pairs(trainerTalk) do
-      if next(T) then
+      local N = self.sightOff and self.sightOff[mapId]
+      if next(T) or (N and next(N)) then
         for k in pairs(T) do T[k] = nil end
+        if N then for k in pairs(N) do N[k] = nil end end
         if okMS then MapScripts.invalidate(mapId) end
       end
     end

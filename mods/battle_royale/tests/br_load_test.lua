@@ -158,6 +158,46 @@ do
   end
 end
 
+-- ------- route trainers carry BOTH sight levers (POK-150, POK-163)
+--
+-- The fork engine's checkTrainerSight skips a trainer whose TEXT has a
+-- talk script; upstream 0.2.56's skips only a TEXT named in the map
+-- contribution's `noSight` table, and never reads the talk one for that.
+-- Found 2026-09-07 with a player standing in a live match on 0.2.56 with
+-- every Nugget Bridge trainer engaging on sight.  Every map with a
+-- trainer object contributes both tables, live and empty out of a match.
+
+do
+  -- The per-map registrations are dealt from Data.maps at load, and the
+  -- headless loader carries no map roster -- so this is a structural pin
+  -- on whatever maps it DID see, and says so when that is none rather
+  -- than failing on an empty room.
+  local reg = run.loader.content and run.loader.content.map_scripts
+  local Data = require("src.core.Data")
+  local withMaps = 0
+  for _, mapId in ipairs({ "ROUTE_24", "CERULEAN_GYM", "PEWTER_GYM" }) do
+    if Data.maps and Data.maps[mapId] then
+      withMaps = withMaps + 1
+      local chain = reg and reg:chain(mapId)
+      local mine
+      for _, entry in ipairs(chain or {}) do
+        if type(entry) == "table" and entry.talk then mine = entry end
+      end
+      T.check(mine ~= nil, mapId .. ": the mod contributes a talk table")
+      T.check(mine and type(mine.noSight) == "table",
+              mapId .. ": ...and a noSight table beside it (upstream 0.2.56's lever)")
+      T.check(mine and next(mine.talk) == nil and next(mine.noSight) == nil,
+              mapId .. ": both empty out of a match, so vanilla sight is untouched")
+      T.check(mine and (mine.priority or 0) == 50,
+              mapId .. ": ranked above another mod's default contribution")
+    end
+  end
+  if withMaps == 0 then
+    T.check(true, "no map roster headless; the noSight pin is exercised by "
+                  .. "npc_sight_smoke / misty probes in the real game")
+  end
+end
+
 -- ------- the other lockstep walks stand down too (POK-126, POK-127)
 --
 -- Same composition contract as the Pewter block above: in the chain so it

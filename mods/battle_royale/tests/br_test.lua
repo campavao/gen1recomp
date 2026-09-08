@@ -422,6 +422,35 @@ do
   ok(Wire.decode({ t = "ring", phase = 1, cx = 1, cy = 1, r = -7 }) == nil,
      "but an arbitrary negative radius is still refused")
 
+  -- `late`: the match in progress, for a watcher who arrived after the
+  -- start (2026-09-07).  A start with statuses and the ring riding along.
+  local late = Wire.decode(Wire.late(77,
+    { { id = 1, map = "CERULEAN_CITY", x = 4, y = 5 },
+      { id = 2, map = "ROUTE_24", x = 11, y = 22, st = "out" },
+      { id = 1001, map = "PEWTER_CITY", x = 1, y = 1, st = "alive" } },
+    240, { textSpeed = 3, animations = false },
+    { phase = 2, cx = 8, cy = 9, r = 7, place = "CELADON CITY", e = 301.5 }))
+  ok(late ~= nil and late.t == "late" and late.late == true, "a late decodes as a late")
+  eq(late and late.seed, 77, "with the match seed")
+  eq(late and #late.spawns, 3, "every trainer's cell")
+  eq(late and late.spawns[2].st, "out", "the fallen marked out")
+  eq(late and late.spawns[3].st, nil, "and nobody else marked at all")
+  eq(late and late.safari, 0, "no Safari for a watcher")
+  eq(late and late.fog, 240, "the host's fog length")
+  eq(late and late.pace and late.pace.textSpeed, 3, "and the host's pace")
+  eq(late and late.ring and late.ring.phase, 2, "the ring the host is on")
+  eq(late and late.ring and late.ring.elapsed, 301.5, "...with its clock")
+  eq(late and late.ring and late.ring.place, "CELADON CITY", "...and its eye")
+  ok(Wire.decode(Wire.late(77, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } }, 240)).ring == nil,
+     "a late before the first ring carries none")
+  ok(Wire.decode({ t = "late", seed = 1, spawns = { { id = 1, map = "ROUTE_1", x = 1, y = 1 } },
+                   ring = { phase = 1, cx = 1, cy = 1, r = -7 } }) == nil,
+     "a late with a bad ring is refused whole")
+  ok(Wire.decode({ t = "late", seed = 1, spawns = {} }) == nil,
+     "and one with nobody in it")
+  eq(Wire.decode(Wire.start(5, { { id = 1, map = "ROUTE_1", x = 1, y = 1 } })).late, nil,
+     "a plain start is not a late")
+
   -- `as`: the host relaying a bot's movement
   eq(Wire.decode(Wire.step("up", 1, 2, "ROUTE_1", 1001)).as, 1001,
      "step carries the relayed actor")
@@ -3275,6 +3304,7 @@ do
         flaggedAbsent = function(self) return self.absent or {} end,
         clearRefusal = function(self) self.refused = nil end,
         kick = function(self, id) self.kicked = id return true end,
+        dismissFlag = function(self, id) self.dismissed = id return true end,
       }
       for k, v in pairs(over or {}) do BR[k] = v end
       return BR
@@ -3390,7 +3420,20 @@ do
       })
       eq(names(Lobby.seats(bounced)), "RED|BLUE|GUESTB!?",
          "the turned-away trainer sits under the roster, dim and flagged")
-      ok(Lobby.seats(bounced)[3].id == nil, "...and cannot be opened")
+      -- 2026-09-07: three refusals in ten seconds left three of these on a
+      -- host's screen, and a seat A does nothing on reads as a hang.  It
+      -- opens now, says they left and what they were on, and can be waved
+      -- off ahead of the door's own clock -- but not REMOVEd: they are gone.
+      local gone = Lobby.seats(bounced)[3]
+      eq(gone.id, 9, "...and opens like any seat")
+      local note = labels(Lobby.seatItems(bounced, gone))
+      ok(note:find("|LEFT: CANNOT BATTLE|", 1, true),
+         "the card says they left: " .. note)
+      ok(note:find("|GAME v9.9.9|", 1, true), "...and names their build")
+      ok(note:find("|DISMISS|", 1, true), "...and offers to wave the note off")
+      ok(not note:find("|REMOVE|", 1, true), "...but not to remove somebody gone")
+      find(Lobby.seatItems(bounced, gone), "DISMISS").onSelect()
+      eq(bounced.dismissed, 9, "DISMISS clears that trainer's note")
 
       -- ------- the face a refused guest actually lands on
       --
@@ -3615,7 +3658,7 @@ do
     items, view = BRMenu.items({}, BR, {})
     eq(view, "running", "a running match is its own face")
     eq(labels(items),
-       "MATCH IN PROGRESS|3 TRAINERS IN IT|JOIN NEXT MATCH|SOLO VS BOTS|LEAVE",
+       "MATCH IN PROGRESS|3 TRAINERS IN IT|WATCH, PLAY NEXT|SOLO VS BOTS|LEAVE",
        "the offer: watch-and-play-next, or bots right now")
     for _, it in ipairs(items) do
       ok(#it.label <= 17, ("offer row fits (%d): %s"):format(#it.label, it.label))
@@ -3864,7 +3907,8 @@ do
       eq(labels(Lobby.seatItems(plain, { id = 1, name = "RED", me = true, host = true, wins = 0 })),
          "RED|HOST|WINS: 0|BACK", "myself")
       eq(labels(Lobby.seatItems(plain, { name = "GONE", absent = true, flag = true })),
-         "GONE|CANNOT BATTLE|BACK", "a trainer the door turned away: nothing to remove")
+         "GONE|LEFT: CANNOT BATTLE|BACK",
+         "a trainer the door turned away: nothing to remove, nothing to dismiss without an id")
       for _, it in ipairs(Lobby.seatItems(plain, { id = 2, name = "BLUE", flag = true,
                                                    next = true, wins = 12 })) do
         ok(#it.label <= 17, ("seat card row fits (%d): %s"):format(#it.label, it.label))

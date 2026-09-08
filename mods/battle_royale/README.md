@@ -32,6 +32,12 @@ sixty while it waits for company — the room is thirty seats, and bots fill
 whatever are still empty when the clock runs out. Nobody types a code and nobody has to press start,
 so a newcomer with the mod installed is in a real match inside a minute.
 
+If the only game around is already under way, `QUICK PLAY` offers
+`WATCH, PLAY NEXT`: you land in that match as a camera — the same view an
+eliminated trainer gets, `LEFT` / `RIGHT` between whoever is still standing
+— and when it ends you are seated for the next one with everybody else. A
+watcher is never counted among the living and never holds a match up.
+
 The relay picks the *fullest* joinable room rather than the first, so a
 handful of strangers arriving at once becomes one match instead of three
 lonely lobbies.
@@ -129,6 +135,14 @@ shows the prompt Oak's lab uses —
 — take or leave. The Pokémon joins your party at 1 HP, exactly as it fell;
 leaving puts the ball back for the next trainer, and a full party leaves it
 too. Reopen `ROYALE` any time to leave the match.
+
+**Kanto's own trainers wait to be asked.** For the length of a match a route
+or gym trainer never ambushes you across their sight line; walk past, or
+press A on them for the vanilla fight and its reward. The mod tells the
+engine this two ways, because the two engines say it differently: a talk
+handler on every trainer (the fork's gate) and a `noSight` entry beside it
+(upstream 0.2.56's). Both are filled at the drop and emptied on the way
+out, so a real playthrough keeps its ambushes.
 
 **Beaten means gone.** When anything falls — a player, a bot, or one of
 Kanto's own route trainers — its sprite disappears for every client and
