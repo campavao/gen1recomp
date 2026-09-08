@@ -881,6 +881,21 @@ return function(mod)
     return math.max(0, math.min(want, Bots.MAX))
   end
 
+  -- the humans who will fight: every member who is not a watcher
+  function BR:trainerCount()
+    local n = 0
+    for _, m in ipairs((self.relay and self.relay.members) or {}) do
+      if not m.spectate then n = n + 1 end
+    end
+    return n
+  end
+
+  -- Whether a start would open a match anyone could win (POK-197): the
+  -- roster startMatch is about to build, counted before it is built.
+  function BR:canStart()
+    return Bots.canStart(self:trainerCount(), self:botsAtStart())
+  end
+
   function BR:setFill(n)
     self.fillTo = math.max(0, math.min(Bots.MAX + 1, math.floor(tonumber(n) or 0)))
     -- a number set is a number remembered: FILL: OFF then ON comes back
@@ -1131,6 +1146,10 @@ return function(mod)
     local relay = self.relay
     if not (relay and relay:isHost() and relay:isOpen()) then return false end
     if self.phase ~= "lobby" or self.autoStartAt then return false end
+    -- a countdown to a start that would be refused is a countdown to a
+    -- text box (POK-197): say it now, and arm nothing
+    local can, why = self:canStart()
+    if not can then say(why) return false, why end
     self.autoStartAt = love.timer.getTime() + QUICK_START_SECONDS
     log:say("ready: the next match starts in %ds", QUICK_START_SECONDS)
     return true
@@ -1638,6 +1657,14 @@ return function(mod)
     -- started the next match on the same frame.  "The room just went
     -- again": no result read, no party checked, no way out.
     self.autoStartAt = nil
+    -- Nobody to beat is no match (POK-197): the START row, the countdown
+    -- and the drivers' start all land here, so the one refusal covers
+    -- every entry, and says why rather than doing nothing.
+    local can, why = self:canStart()
+    if not can then
+      say(why)
+      return false, why
+    end
     -- A solo match is the one nothing else can see: it runs on a LocalRoom
     -- and never opens a socket (POK-124).  This is a counter bump and a
     -- local file write -- deliberately NOT a connection, because
@@ -1684,6 +1711,7 @@ return function(mod)
     relay:broadcast(Wire.start(seed, spawns, safari, self:fogSeconds(), pace))
     self:onStart({ seed = seed, spawns = spawns, safari = safari,
                    fog = self:fogSeconds(), pace = pace })
+    return true
   end
 
   function BR:onStart(msg)

@@ -65,7 +65,12 @@ port-forwarding.
    whatever seats are still empty at the start, and the room shows those
    bots by name in their seats. Fill is the one you want when you can't
    know how many people turn up; off, the match is exactly who is in the
-   room. (The relay itself seats sixteen humans at most.)
+   room. (The relay itself seats sixteen humans at most.) A match needs
+   two trainers on the roster, humans and bots together: START with
+   nobody to beat — a hosted room with FILL: OFF and no guests, a solo
+   room with BOTS at 0 — is refused with a `Need at least 2 trainers`
+   box rather than opening a match that reads `1 LEFT` until the fog
+   ends it.
    **MATCH OPTIONS** opens the pace of the match — **TEXT** (FAST, MEDIUM,
    SLOW) and **ANIMATION** (ON, OFF), the two rows the game's own OPTION
    screen hides for the length of a match — and what the host picks is
@@ -896,6 +901,16 @@ shelf, the ROM's own cures still there, the MASTER BALL at its match price
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-marts   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/mart_tiers_smoke.lua lovec .
+```
+
+### A room of one does not start
+
+`empty_room_smoke.lua` hosts a solo room, sets BOTS to 0 and presses start:
+refused, with the reason, and the phase stays in the lobby. BOTS at 1 then
+starts a match of two. `EMPTY OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-empty-room   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/empty_room_smoke.lua lovec .
 ```
 
 ### The playtest probes

@@ -478,6 +478,20 @@ do
   ok(seen[Bots.MAX], "the ladder reaches the cap")
   eq(Bots.LADDER[#Bots.LADDER], Bots.MAX, "the ladder ends at the cap")
 
+  -- a match needs somebody to beat (POK-197): the roster rule every start
+  -- entry asks first
+  ok(not Bots.canStart(1, 0), "one human and no bots cannot start")
+  ok(not Bots.canStart(0, 1), "one bot and nobody cannot start")
+  ok(not Bots.canStart(0, 0), "an empty roster cannot start")
+  ok(Bots.canStart(1, 1), "one human and one bot can start")
+  ok(Bots.canStart(2, 0), "two humans and no bots can start")
+  ok(Bots.canStart(1, Bots.MAX), "a full house can start")
+  ok(not Bots.canStart(nil, nil), "no counts at all cannot start")
+  local _, why = Bots.canStart(1, 0)
+  ok(type(why) == "string" and why:find("2 trainers", 1, true),
+     "the refusal says how many it needs")
+  eq(Bots.MIN_TRAINERS, 2, "two is the floor")
+
   ok(Bots.isBot(Bots.ID_BASE), "ID_BASE is a bot id")
   ok(not Bots.isBot(1), "a room id is not a bot")
   ok(not Bots.isBot(nil), "nil is not a bot")
