@@ -874,6 +874,18 @@ POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_catch_told_smoke.lua lovec .
 ```
 
+### An Elite Four room does not seal you in
+
+`e4_door_smoke.lua` teleports into LORELEI's room mid-match and reads the
+block above the exit warp straight off the map: open. It walks north into
+BRUNO's room, checks LORELEI still reads as unbeaten (the door is opened
+by hearing the seal land, never by her flag), then leaves the match and
+finds the vanilla seal holding again. `DOOR OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-e4-door   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/e4_door_smoke.lua lovec .
+```
+
 ### The Marts climb
 
 `mart_tiers_smoke.lua` opens VIRIDIAN MART's BUY list at ring 1 (POKé BALL,

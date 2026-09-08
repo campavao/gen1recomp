@@ -1513,6 +1513,47 @@ do
      "no items, nothing to price")
 end
 
+  -- ------- the Elite Four exit doors (POK-143)
+
+do
+  local Lockstep = require("mods.battle_royale.lib.lockstep")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 2, 0, 0x24), 0x05, "Lorelei's closed door reopens")
+  eq(Lockstep.reopen("BRUNOS_ROOM", 2, 0, 0x24), 0x05, "so does Bruno's")
+  eq(Lockstep.reopen("AGATHAS_ROOM", 2, 0, 0x3b), 0x0e, "and Agatha's, with her own blocks")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 2, 0, 0x05), nil, "the open door is left alone (no loop)")
+  eq(Lockstep.reopen("LORELEIS_ROOM", 3, 0, 0x24), nil, "another cell is not the door")
+  eq(Lockstep.reopen("LANCES_ROOM", 2, 0, 0x24), nil, "Lance's room gates its entrance, not here")
+  eq(Lockstep.reopen("CERULEAN_CITY", 2, 0, 0x24), nil, "and no other map has a door to reopen")
+  for room in pairs(Lockstep.E4_DOORS) do
+    ok(Lockstep.CELLS[room] ~= nil, room .. " is also a lockstep mouth (POK-128)")
+  end
+end
+
+-- ------- a seed two launches do not share (POK-157)
+
+do
+  local Spawn = require("mods.battle_royale.lib.spawn")
+  local a = Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12345)
+  eq(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12345), a, "deterministic over its inputs")
+  ok(a >= 1 and a <= 2 ^ 30 and a == math.floor(a), "a seed in 1 .. 2^30")
+  ok(Spawn.seedFrom("fedcba9876543210", 1757300000, 0.25, 12345) ~= a,
+     "another install, the same second: another seed")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.26, 12345) ~= a,
+     "the same install a hundredth of a second later: another seed")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300001, 0.25, 12345) ~= a,
+     "or a second later")
+  ok(Spawn.seedFrom("0123456789abcdef", 1757300000, 0.25, 12346) ~= a,
+     "or with another draw from the shared generator")
+  ok(Spawn.seedFrom(nil, nil, nil, nil) >= 1, "nothing to mix still seeds")
+  -- the old roll: the same second, the same number -- which is the bug
+  local seen, n = {}, 0
+  for i = 1, 200 do
+    local v = Spawn.seedFrom("0123456789abcdef", 1757300000, i / 1000, 1)
+    if not seen[v] then seen[v] = true n = n + 1 end
+  end
+  eq(n, 200, "two hundred launches inside one second are two hundred seeds")
+end
+
 -- ------- the tiered stores (POK-192)
 
 do

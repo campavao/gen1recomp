@@ -908,9 +908,16 @@ return function(mod)
 
   -- a match seed; the room rolls one when it opens (broadcastPlace) and
   -- startMatch uses that one, so the lobby's bots are the drop's bots
+  -- Not the process-global generator alone (POK-157): two clients
+  -- launched in the same second drew the same seed from it.  The install
+  -- id, the clock, a sub-second fraction and one draw are mixed by
+  -- Spawn.seedFrom; the shared generator is read, never reseeded.
   function BR:rollSeed()
     local rand = (love and love.math and love.math.random) or math.random
-    return rand(1, 2 ^ 30)
+    local secs = (os and os.time and os.time()) or 0
+    local frac = (love and love.timer and love.timer.getTime and love.timer.getTime())
+      or ((os and os.clock and os.clock()) or 0)
+    return Spawn.seedFrom(stats and stats.id, secs, frac, rand(1, 2 ^ 30))
   end
 
   function BR:nextFill() return Bots.nextFill(self.fillTo) end
@@ -8182,6 +8189,23 @@ return function(mod)
     BR.ghosts:despawnAll()
     BR.spills:despawnAll()
     if BR.relay and BR.relay:isOpen() and BR:inRound() then broadcastPlace() end
+  end)
+
+  -- The Elite Four exit doors stay open for a match (POK-143).  The
+  -- room's own onEnter seals the block above the exit warp until the
+  -- leader is beaten, and it runs AFTER any mod onEnter, so this listens
+  -- for the block landing instead and puts the open one there (the table
+  -- and the reasoning: lib/lockstep.lua E4_DOORS).  Our own replaceBlock
+  -- emits this event again with the open block, which reopen ignores.
+  -- Outside a session the door is vanilla.
+  mod.events:on("world.block_replaced", function(ev)
+    if not (ev and BR:inSession()) then return end
+    local open = Lockstep.reopen(ev.mapId, ev.bx, ev.by, ev.block)
+    if not open then return end
+    local ow = mod.world:overworld()
+    if not (ow and ow.map and ow.map.id == ev.mapId) then return end
+    ow:replaceBlock(ev.bx, ev.by, open)
+    log:say("lockstep: %s's exit stays open for the match", tostring(ev.mapId))
   end)
 
   -- ------- talking to another trainer
