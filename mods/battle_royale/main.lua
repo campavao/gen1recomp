@@ -1348,11 +1348,12 @@ return function(mod)
       Machines.restore(self.game and self.game.data, self.machineNames)
       self.machineNames = nil
     end
-    -- ...and the MOON STONE its ROM price (POK-178), for the same reason
-    if self.moonStonePrice ~= nil then
-      require("mods.battle_royale.lib.shops").restoreMoonStone(
-        self.game and self.game.data, self.moonStonePrice)
-      self.moonStonePrice = nil
+    -- ...and the MOON STONE and MASTER BALL their ROM prices (POK-178,
+    -- POK-192), for the same reason
+    if self.shopPrices ~= nil then
+      require("mods.battle_royale.lib.shops").restore(
+        self.game and self.game.data, self.shopPrices)
+      self.shopPrices = nil
     end
     -- ...and this player's own TEXT SPEED and BATTLE ANIMATION (POK-186),
     -- here for the same reason as the TMs: every exit comes through
@@ -8420,19 +8421,23 @@ return function(mod)
       end
       -- The stone counter (POK-178): Celadon's 4F clerk sells every
       -- evolution stone for the length of a match, MOON STONE included.
+      -- And the general stores climb with the fog (POK-192): every Mart
+      -- that sells a ball or a potion sells the ring's tier of them --
+      -- POKe -> GREAT -> ULTRA -> MASTER, POTION -> SUPER -> HYPER ->
+      -- MAX, cumulative -- off BR.ring.phase, which every client holds.
       -- The engine opens a mart from this same entry (OverworldController
       -- "marts / nurses / PCs via TX_SCRIPT markers"): greeting, then the
       -- ShopMenu screen over the mart's list.  Same two steps here, over
-      -- the extended list -- and no next(), which is how every other
+      -- the match's list -- and no next(), which is how every other
       -- answer in this hook keeps the vanilla path from running too.
       -- Required in the hook: the outer function is at LuaJIT's
       -- sixty-upvalue cap.
       if entry and entry.mart then
         local Shops = require("mods.battle_royale.lib.shops")
-        local stock = Shops.stock(entry.label, entry.mart)
+        local stock = Shops.stock(entry.label, entry.mart, BR.ring and BR.ring.phase)
         if stock then
-          if BR.moonStonePrice == nil then
-            BR.moonStonePrice = Shops.priceMoonStone(data)
+          if BR.shopPrices == nil then
+            BR.shopPrices = Shops.price(data)
           end
           npc:facePlayer(ow.player)
           local TextBox = require("src.render.TextBox")

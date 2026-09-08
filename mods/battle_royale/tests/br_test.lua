@@ -1489,8 +1489,8 @@ do
   ok(stock ~= nil, "the 4F clerk is the stone counter")
   eq(table.concat(stock, ","), "POKE_DOLL,FIRE_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE,MOON_STONE",
      "the ROM's list in its order, then the stone it lacked")
-  ok(Shops.stock("ViridianMartClerkText", { "POKE_BALL", "POTION" }) == nil,
-     "every other mart is left alone")
+  ok(Shops.stock("CeladonMart5FClerk1Text", { "X_ACCURACY", "DIRE_HIT" }) == nil,
+     "every other counter is left alone (the stores climb on their own rule, POK-192)")
   ok(Shops.stock(nil, rom) == nil, "no label, no counter")
   local twice = Shops.stock("CeladonMart4FClerkText", Shops.stock("CeladonMart4FClerkText", rom))
   eq(#twice, 6, "extending an already extended list adds nothing")
@@ -1511,6 +1511,78 @@ do
   eq(priced.items.MOON_STONE.price, 50, "a build that already prices it keeps its price")
   ok(Shops.priceMoonStone(nil) == nil and Shops.priceMoonStone({}) == nil,
      "no items, nothing to price")
+end
+
+-- ------- the tiered stores (POK-192)
+
+do
+  local Shops = require("mods.battle_royale.lib.shops")
+  local Levels = require("mods.battle_royale.lib.levels")
+  -- the clock is the fog's phase, like the level ladder's
+  eq(Shops.tier(nil), 1, "no ring yet is the drop's tier")
+  eq(Shops.tier(1) .. Shops.tier(2) .. Shops.tier(3) .. Shops.tier(4) .. Shops.tier(5),
+     "11234", "POKe through the first shrink, then a rung a phase")
+  eq(Shops.tier(8), 4, "past the table the top tier holds")
+  eq(Shops.tier(0), 1, "and below it the bottom")
+  eq(#Shops.TIER_AT, 5, "the shelf tops out where the ladder's Lv75 rung is")
+  eq(Levels.at(5), 75, "...which is the rung MASTER BALLs arrive at")
+  eq(#Shops.BALLS, 4, "four balls")
+  eq(#Shops.POTIONS, 4, "four potions")
+
+  -- Viridian's ROM list: balls and potions first, the cures after
+  local viridian = { "POKE_BALL", "POTION", "ANTIDOTE", "PARLYZ_HEAL", "BURN_HEAL" }
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 1), ","),
+     "POKE_BALL,POTION,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at the drop Viridian sells what it always sold")
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 3), ","),
+     "POKE_BALL,GREAT_BALL,POTION,SUPER_POTION,REVIVE,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at phase 3 it adds GREAT BALL, SUPER POTION and a REVIVE, and keeps the cheap rungs")
+  eq(table.concat(Shops.stock("ViridianMartClerkText", viridian, 5), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,MASTER_BALL,POTION,SUPER_POTION,HYPER_POTION,MAX_POTION,"
+     .. "REVIVE,FULL_HEAL,FULL_RESTORE,ANTIDOTE,PARLYZ_HEAL,BURN_HEAL",
+     "at phase 5 the whole ladder is on the shelf, MASTER BALL included")
+  -- ...and the far end of Kanto sells the SAME shelf: the drop no longer decides
+  local indigo = { "ULTRA_BALL", "GREAT_BALL", "FULL_RESTORE", "MAX_POTION", "FULL_HEAL", "REVIVE" }
+  eq(table.concat(Shops.stock("IndigoPlateauLobbyClerkText", indigo, 1), ","),
+     "POKE_BALL,POTION", "at the drop Indigo's shelf is Viridian's")
+  eq(table.concat(Shops.stock("IndigoPlateauLobbyClerkText", indigo, 5), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,MASTER_BALL,POTION,SUPER_POTION,HYPER_POTION,MAX_POTION,"
+     .. "REVIVE,FULL_HEAL,FULL_RESTORE",
+     "and at the top it is the ladder, nothing more")
+  local cinnabar = { "ULTRA_BALL", "GREAT_BALL", "HYPER_POTION", "MAX_REPEL", "ESCAPE_ROPE", "FULL_HEAL" }
+  eq(table.concat(Shops.stock("CinnabarMartClerkText", cinnabar, 4), ","),
+     "POKE_BALL,GREAT_BALL,ULTRA_BALL,POTION,SUPER_POTION,HYPER_POTION,REVIVE,FULL_HEAL,MAX_REPEL,ESCAPE_ROPE",
+     "a store's own extras follow the ladder in the ROM's order")
+  -- the specialty counters are not stores
+  ok(Shops.stock("CeladonMart2FClerk2Text", { "TM_DOUBLE_TEAM", "TM_REFLECT" }, 5) == nil,
+     "the TM counter is left alone")
+  ok(Shops.stock("CeladonMart5FClerk2Text", { "HP_UP", "PROTEIN" }, 5) == nil,
+     "so is the vitamin counter")
+  ok(not Shops.isStore({ "POKE_DOLL", "FIRE_STONE" }), "and the stone counter sells no ball")
+  eq(table.concat(Shops.stock("CeladonMart4FClerkText", { "POKE_DOLL", "FIRE_STONE" }, 5), ","),
+     "POKE_DOLL,FIRE_STONE,MOON_STONE,THUNDER_STONE,WATER_STONE,LEAF_STONE",
+     "...it stays the stone counter at every phase")
+  ok(Shops.stock("Anyone", {}, 3) == nil and Shops.stock("Anyone", nil, 3) == nil,
+     "an empty list is nobody's store")
+  ok(Shops.isStore({ "ANTIDOTE", "SUPER_POTION" }), "a potion alone makes a store")
+
+  -- the MASTER BALL is priced for the match beside the MOON STONE, and both go back
+  local data = { items = { MOON_STONE = { price = 0 }, MASTER_BALL = { price = 0 },
+                           ULTRA_BALL = { price = 1200 } } }
+  local was = Shops.price(data)
+  eq(was.MOON_STONE .. "/" .. was.MASTER_BALL, "0/0", "the ROM prices are remembered")
+  eq(data.items.MASTER_BALL.price, Shops.MASTER_BALL_PRICE, "the MASTER BALL costs its match price")
+  eq(data.items.MOON_STONE.price, Shops.MOON_STONE_PRICE, "the MOON STONE the stones' price")
+  eq(data.items.ULTRA_BALL.price, 1200, "nothing else is touched")
+  ok(Shops.MASTER_BALL_PRICE > 1200, "a MASTER BALL costs more than an ULTRA BALL")
+  Shops.restore(data, was)
+  eq(data.items.MASTER_BALL.price .. "/" .. data.items.MOON_STONE.price, "0/0",
+     "restore puts both ROM prices back")
+  local priced = { items = { MASTER_BALL = { price = 9 } } }
+  Shops.price(priced)
+  eq(priced.items.MASTER_BALL.price, 9, "a build that already prices it keeps its price")
+  ok(Shops.price(nil) == nil and Shops.price({}) == nil, "no items, nothing to price")
+  Shops.restore(nil, was) Shops.restore(data, nil)   -- neither throws
 end
 
 -- ------- a spill is walked through, not walled by (POK-175)

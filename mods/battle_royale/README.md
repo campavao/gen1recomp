@@ -129,6 +129,8 @@ shows the prompt Oak's lab uses —
 
 **A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — with the engine's own evolution scene. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
 
+**The Marts climb with the fog.** Every general store in Kanto -- any Mart that sells a ball or a potion -- sells the same shelf, and the shelf follows the ring rather than the story: POKé BALL and POTION through the first shrink, GREAT BALL and SUPER POTION (and a REVIVE) at ring 3, ULTRA BALL and HYPER POTION (and a FULL HEAL) at ring 4, MASTER BALL and MAX POTION (and a FULL RESTORE) from ring 5 -- the same beats the level ladder climbs on. Cumulative, so a late shelf still carries the cheap rungs and money stays a decision. The MASTER BALL is priced (¥5000) for the match and never sold outside one; Celadon's TM, vitamin, X-item and stone counters are left alone. Where you dropped stops deciding what you can buy.
+
 > This contains a NIDORINO.
 > Do you want it?
 
@@ -812,6 +814,32 @@ VIRIDIAN in one hop and lands on the fly landing. `BR_LEG` runs one.
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
   POKEPORT_IDENTITY=br-legs \
   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_legs_smoke.lua lovec .
+```
+
+### A bot hops a ledge
+
+`bot_ledge_smoke.lua` stands the player three cells below Viridian's ledge
+row facing east and plants a bot on the shelf above, looking down. The
+bot's eye has to pass the ledge (a tile that is not walkable used to read
+as a wall to it), its stride has to take the hop -- one step that moves it
+two cells -- and the fight has to open beside us. The same hop is in every
+path a bot walks (errands, seams, the stalk, the roam); nothing ever climbs
+one. `LEDGE OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-bot-ledge   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_ledge_smoke.lua lovec .
+```
+
+### The Marts climb
+
+`mart_tiers_smoke.lua` opens VIRIDIAN MART's BUY list at ring 1 (POKé BALL,
+POTION, the cures), collapses the round's fog to a second a phase, lets the
+ring run to phase 5, and opens it again: every ball and every potion on the
+shelf, the ROM's own cures still there, the MASTER BALL at its match price
+-- and, after leaving the match, back at the ROM's. `MARTS OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-marts   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/mart_tiers_smoke.lua lovec .
 ```
 
 ### The playtest probes
