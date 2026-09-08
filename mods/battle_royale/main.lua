@@ -7163,6 +7163,22 @@ return function(mod)
     -- seen dropping.  Same clamp a duel's party gets (clampToRecord);
     -- the battle.started pass below is idempotent and stays as the net.
     clampToRecord(battle.enemyParty, idx, rec)
+    -- ...and the BAR the intro draws (the user, 2026-09-08: still a full
+    -- bar that dropped at the first turn).  newTrainer builds the enemy
+    -- battler before this clamp, and the battler carries its own shownHP
+    -- and shownPx -- the drain animation's start -- copied from the mon
+    -- at full.  So the mon opened wounded and the bar opened full, then
+    -- drained to it on the first HUD update.  Resync the battler to the
+    -- mon it wraps.
+    local lead = battle.enemy
+    if lead and lead.mon and lead.mon.hp then
+      lead.shownHP = lead.mon.hp
+      pcall(function()
+        local Timing = require("src.core.Timing")
+        lead.shownPx = Timing.hpBarPixels(lead.mon.hp,
+                                          math.max(1, (lead.mon.stats and lead.mon.stats.hp) or 1))
+      end)
+    end
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end
@@ -9208,33 +9224,27 @@ return function(mod)
       -- trainer's bag (POK-18), so watching someone who never picked one
       -- up left you with no way to see the fog at all.  So the map gets
       -- its own row, always, however the match is going for you (POK-100).
+      -- ...and the row FLIES when it can (POK-196; the user, 2026-09-08:
+      -- one row, not two): alive, outdoors, a party mon that knows FLY,
+      -- and not inside the Safari opening -- the same gates the bag's
+      -- TOWN MAP used, now that the bag no longer carries one.  Otherwise
+      -- it is the plain map with the ring on it.
       mod.ui.insertBefore(out, "QUIT", {
         label = "MAP",
         onSelect = function()
+          local ow = mod.world:overworld()
+          local fly = BR:canFly() and ow
           local okMap = pcall(function()
-            require("src.ui.Screens").push(game, "TownMap")
+            if fly then
+              require("src.ui.Screens").push(game, "TownMap", { fly = true,
+                onFly = function(mapId) ow:flyTo(mapId) end })
+            else
+              require("src.ui.Screens").push(game, "TownMap")
+            end
           end)
           if not okMap then say("The TOWN MAP is\nunreadable here.") end
         end,
       })
-      -- ...and FLY beside it (POK-196), only when it can happen: alive,
-      -- outdoors, a party mon that knows FLY, and not inside the Safari
-      -- opening.  The bag's TOWN MAP used to be the way to the fly picker;
-      -- the bag no longer carries one, so the row is the way.  A row that
-      -- only appears when it works needs no refusal text.
-      if BR:canFly() then
-        mod.ui.insertBefore(out, "QUIT", {
-          label = "FLY",
-          onSelect = function()
-            local ow = mod.world:overworld()
-            local okFly = ow and pcall(function()
-              require("src.ui.Screens").push(game, "TownMap", { fly = true,
-                onFly = function(mapId) ow:flyTo(mapId) end })
-            end)
-            if not okFly then say("You can't FLY\nfrom here.") end
-          end,
-        })
-      end
     end
     -- out and watching (POK-18): POKeMON and ITEM open what the watched
     -- trainer carries, read-only, in place of our own empty screens

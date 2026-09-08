@@ -1,12 +1,11 @@
 -- POK-196 smoke: one map.  The bag starts without a TOWN MAP, and the
--- start menu's own rows do what the item did: MAP opens the ring map, and
--- FLY -- a row that only appears when it can happen -- opens the fly
--- picker.
+-- start menu's own MAP row does what the item did: the ring map, and --
+-- when a party mon knows FLY and the sky is reachable -- the fly picker.
 --
 --   1. at the drop the bag holds no TOWN MAP; the start menu shows MAP
---      and, with a RATTATA, no FLY;
---   2. with a PIDGEOT that knows FLY, outdoors, FLY appears and opens the
---      TOWN MAP in fly mode; indoors it is gone again;
+--      and no FLY row, and with a RATTATA MAP is the plain map;
+--   2. with a PIDGEOT that knows FLY, outdoors, MAP opens the TOWN MAP in
+--      fly mode; indoors it is the plain map again;
 --   3. a TOWN MAP a player finds still flies from the bag (the item.use
 --      branch stays).
 --
@@ -89,23 +88,28 @@ return function(game)
   for _ = 1, 6 do U.tap(game, "b") U.wait(5) end
   menu, labels = rows()
   U.log("FLYROW: with a PIDGEOT outdoors the menu reads " .. labels)
-  if not menu.FLY then return C.fail("no FLY row with a flyer outdoors") end
-  menu.FLY.onSelect()
+  if menu.FLY then return C.fail("a FLY row of its own (" .. labels .. ")") end
+  menu.MAP.onSelect()
   U.wait(10)
   top = game.stack:top()
   if not (type(top) == "table" and top.fly) then
-    return C.fail("FLY did not open the fly picker (top " .. tostring(top) .. ")")
+    return C.fail("MAP did not open the fly picker with a flyer outdoors (top " .. tostring(top) .. ")")
   end
   U.tap(game, "b")
   U.wait(20)
-  U.log("FLYROW: FLY opened the TOWN MAP in fly mode")
+  U.log("FLYROW: MAP opened the TOWN MAP in fly mode")
   -- ...and not indoors
   U.teleport(game, "PEWTER_GYM", 4, 4, "down")
   U.wait(40)
   for _ = 1, 6 do U.tap(game, "b") U.wait(5) end
   menu, labels = rows()
-  if menu.FLY then return C.fail("a FLY row indoors (" .. labels .. ")") end
-  U.log("FLYROW: no FLY row indoors")
+  menu.MAP.onSelect()
+  U.wait(10)
+  top = game.stack:top()
+  if type(top) == "table" and top.fly then return C.fail("MAP flies indoors") end
+  U.tap(game, "b")
+  U.wait(20)
+  U.log("FLYROW: indoors MAP is the plain map")
 
   -- --------------------------------------------- 3. a found TOWN MAP still flies
   U.teleport(game, "PEWTER_CITY", 16, 18, "down")
@@ -123,7 +127,7 @@ return function(game)
   end
   U.tap(game, "b")
   U.wait(20)
-  U.log("FLYROW OK: one map -- no item at the drop, MAP and FLY rows, the bag's map still flies")
+  U.log("FLYROW OK: one map -- no item at the drop, MAP flies when it can, the bag's map still flies")
   love.event.quit(0)
   U.wait(30)
 end

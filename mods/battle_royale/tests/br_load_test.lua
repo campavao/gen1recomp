@@ -112,10 +112,10 @@ do
       T.check(hook:find('label = "MAP"', 1, true) ~= nil,
               "the map gets its own row")
       -- one map (POK-196): the row flies, and the bag carries no TOWN MAP
-      T.check(hook:find('label = "FLY"', 1, true) ~= nil,
-              "FLY gets a row of its own")
+      T.check(hook:find('label = "FLY"', 1, true) == nil,
+              "no FLY row of its own -- the MAP row flies")
       T.check(hook:find("BR:canFly()", 1, true) ~= nil,
-              "...gated on whether it can happen")
+              "...when it can happen")
     end
     local items = src:match("local START_ITEMS = (%b{})")
     T.check(items ~= nil, "found START_ITEMS")

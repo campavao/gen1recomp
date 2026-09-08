@@ -299,10 +299,10 @@ never overwrite your actual playthrough.
   bag, so watching somebody who never picked one up left you with no way to
   see the fog at all. It is a row of its own now, alive, out or watching.
   And it is the only map: the bag no longer starts with a TOWN MAP. What
-  the bag's map used to be for — FLY — is a **FLY** row beside it that
-  appears only when it can happen: alive, outdoors, a party Pokémon that
-  knows FLY, and not during the Safari opening. A TOWN MAP you find still
-  flies from the bag.
+  the bag's map used to be for — FLY — is the same row: when you are
+  alive, outdoors, a party Pokémon knows FLY, and the Safari opening is
+  over, MAP opens as the fly picker; otherwise it is the plain map with
+  the ring on it. A TOWN MAP you find still flies from the bag.
 - **A TM says what it teaches.** Every machine is named after its move for
   the length of a match — TM19 reads `SEISMIC TOSS`, HM01 reads `CUT` — so a
   TM on the ground is loot you can judge without a guide. It is a rename of
@@ -964,12 +964,13 @@ back), and starts a second match (a different draw). `LOOT OK` passes it.
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-safari-loot   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/safari_loot_smoke.lua lovec .
 ```
 
-### One map: MAP and FLY rows
+### One map: the MAP row flies
 
 `map_fly_smoke.lua` reads the bag at the drop (no TOWN MAP) and the start
-menu's rows (MAP, no FLY with a RATTATA), arms a PIDGEOT that knows FLY
-outdoors (FLY appears and opens the fly picker; gone again indoors), and
-checks a found TOWN MAP still flies from the bag. `FLYROW OK` passes it.
+menu's rows (MAP, never a FLY row), opens MAP with a RATTATA (the plain
+map), arms a PIDGEOT that knows FLY outdoors (MAP opens the fly picker;
+the plain map again indoors), and checks a found TOWN MAP still flies
+from the bag. `FLYROW OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-map-fly   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/map_fly_smoke.lua lovec .
