@@ -342,6 +342,36 @@ function Spawn.escapableSets(maps, tilesets, ledges)
   return sets
 end
 
+-- The cell a hop from (x, y) in `dir` lands on, or nil (POK-191).  The
+-- engine's checkLedgeHop rule (data/tilesets/ledge_tiles.asm): standing
+-- tile + ledge tile in front + matching input direction -> two cells on.
+-- Off the map DEFINITION like walkable, so the host can ask it of a map
+-- nobody is standing on.  A landing off the map (Route 4's plaza onto
+-- Route 3) is not modelled -- nil, the same conservative answer
+-- escapableSets gives.  One-way by construction: the rows only face
+-- downhill, so a hop UP a ledge has no row and no landing.
+function Spawn.hopLanding(maps, tilesets, ledges, mapId, x, y, dir)
+  local v = LEDGE_VEC[dir]
+  local def = maps and maps[mapId]
+  local ts = def and tilesets and tilesets[def.tileset]
+  if not (v and def and ts and ledges and x and y) then return nil end
+  local w, h = def.width * 2, def.height * 2
+  local fx, fy = x + v[1], y + v[2]
+  local lx, ly = x + 2 * v[1], y + 2 * v[2]
+  if x < 0 or y < 0 or x >= w or y >= h
+     or lx < 0 or ly < 0 or lx >= w or ly >= h then return nil end
+  local standing = Map.defCellTile(def, ts, x, y)
+  local front = Map.defCellTile(def, ts, fx, fy)
+  for _, ledge in ipairs(ledges) do
+    if ledge.facing == dir and ledge.input == dir
+       and (ledge.tileset or "OVERWORLD") == def.tileset
+       and ledge.standingTile == standing and ledge.ledgeTile == front then
+      return lx, ly
+    end
+  end
+  return nil
+end
+
 -- Every cell a player could be dropped on for one map, in row-major order
 -- -- walkable, unoccupied, and with a way off the map (POK-23).  With the
 -- world's `maps`/`tilesets` in hand an OUTDOOR map's "way off" is answered

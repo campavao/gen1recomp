@@ -579,6 +579,31 @@ do
   local blocked = Bots.wander({ map = "M", x = 5, y = 5, facing = "up" },
                               Bots.rng(4, id), wall, { x = 12, y = 5 })
   ok(blocked ~= "right", "but not through a wall")
+  -- ...and a roam drops off a ledge like a player would (POK-191): the
+  -- only way off this shelf is the hop, and the landing comes back with
+  -- the direction
+  local shelf = function(_, x, y) return (y == 5 or y == 7) and x >= 4 and x <= 6 end
+  local drop = function(_, x, y, dir)
+    if dir == "down" and y == 5 then return x, 7 end
+    return nil
+  end
+  local hops, other = 0, 0
+  local rngL = Bots.rng(5, id)
+  for _ = 1, 60 do
+    local dir, lx, ly = Bots.wander({ map = "M", x = 5, y = 5, facing = "down" },
+                                    rngL, shelf, nil, drop)
+    if dir == "down" then
+      hops = hops + 1
+      eq(tostring(lx) .. "," .. tostring(ly), "5,7", "a wandered hop lands two cells on")
+    elseif dir then
+      other = other + 1
+      eq(ly, 5, "and a plain roam step lands one cell on")
+    end
+  end
+  ok(hops > 0, "a roaming bot takes the ledge (" .. hops .. " hops, " .. other .. " steps)")
+  eq(Bots.wander({ map = "M", x = 5, y = 5, facing = "down" }, Bots.rng(5, id),
+                 function(_, x, y) return y == 5 and x == 5 end, nil, nil), nil,
+     "without a hop the shelf is a cell it never leaves")
 
   -- open field: it does move, and only ever one of the four grid directions
   local always = function() return true end
@@ -674,6 +699,49 @@ do
     ok(Bots.approach({ x = 0, y = 0, map = "M" }, function(_, x, y) return walled(x, y) end,
                      { x = 5, y = 0 }) ~= nil,
        "...whereas the stride only ever tries the greedy step")
+
+    -- --- a ledge (POK-191): one-way, two cells, and only with `hop`
+    -- a 3-wide corridor with a ledge row at y = 2: not walkable, hoppable
+    -- downward from y = 1 onto y = 3, never upward
+    local function ledged(x, y) return open6(x, y) and y ~= 2 end
+    local function hopDown(x, y, dir)
+      if dir == "down" and y == 1 then return x, 3 end
+      return nil
+    end
+    eq(Bots.path(ledged, { x = 1, y = 0 }, { x = 1, y = 5 }), nil,
+       "without a hop the ledge is a wall")
+    local hopped = Bots.path(ledged, { x = 1, y = 0 }, { x = 1, y = 5 }, nil, hopDown)
+    eq(hopped and #hopped, 4, "with a hop the drop is one step of the path")
+    eq(hopped and hopped[2], "down", "...taken downward")
+    eq(Bots.path(ledged, { x = 1, y = 5 }, { x = 1, y = 0 }, nil, hopDown), nil,
+       "and the way back up is still a wall")
+    local nx, ny = Bots.landing(ledged, hopDown, 1, 1, "down")
+    eq(nx .. "," .. ny, "1,3", "landing re-derives the hop's far cell")
+    eq(Bots.landing(ledged, hopDown, 1, 3, "up"), nil, "and refuses the climb")
+    eq(Bots.landing(ledged, nil, 1, 1, "down"), nil, "no hop, no landing")
+    local pa, at = Bots.pathToAny(ledged, { x = 1, y = 0 },
+      function(x, y) return y == 4 end, nil, hopDown)
+    ok(pa and #pa == 3 and at.y == 4, "pathToAny hops too")
+    -- the stride: hops when the prey is beyond the landing, refuses to
+    -- land ON the prey (the engine would refuse it too), so across the
+    -- ledge is where the fight opens
+    local function walkM(_, x, y) return ledged(x, y) end
+    local function hopM(_, x, y, dir) return hopDown(x, y, dir) end
+    local sd, sx, sy = Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 4 }, hopM)
+    eq((sd or "nil") .. " " .. tostring(sx) .. "," .. tostring(sy), "down 1,3",
+       "the stride takes the drop toward prey beyond it")
+    eq(Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 3 }, hopM), nil,
+       "...but never onto the prey's own cell")
+    eq(Bots.approach({ x = 1, y = 1, map = "M" }, walkM, { x = 1, y = 4 }), nil,
+       "and without a hop it is walled off, as before")
+    -- sight: the eye passes a ledge the seer could hop, not one it could not
+    local blockedT = function(x, y) return not ledged(x, y) end
+    local eyeDown = Bots.seeOver(blockedT, hopDown, "down")
+    ok(not eyeDown(1, 2), "looking down, the ledge does not stop the eye")
+    ok(eyeDown(-1, 0), "...the map's edge still does")
+    local eyeUp = Bots.seeOver(blockedT, hopDown, "up")
+    ok(eyeUp(1, 2), "looking up, the ledge is a wall to the eye")
+    eq(Bots.seeOver(blockedT, nil, "down"), blockedT, "no hop: the terrain test as it was")
 
     -- --- goals
     local function fixedRng(seq)
@@ -1727,6 +1795,29 @@ do
       ok(count(hops["ROUTE_9"]) > count(noHops["ROUTE_9"]),
          "ledge hops open ROUTE_9's shelves ("
          .. count(noHops["ROUTE_9"]) .. " -> " .. count(hops["ROUTE_9"]) .. ")")
+      -- and a bot reads the same rows one cell at a time (POK-191):
+      -- Viridian's ledge row -- (24, 8) drops to (24, 10), the ledge tile
+      -- between is no floor, and nothing hops back up
+      local lx, ly = Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 8, "down")
+      eq(tostring(lx) .. "," .. tostring(ly), "24,10", "Viridian's ledge drops two cells")
+      ok(not Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", 24, 9),
+         "the ledge tile itself is not walkable")
+      eq(Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 10, "up"), nil,
+         "and there is no hop back up it")
+      eq(Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", 24, 8, "left"), nil,
+         "nor sideways off the standing cell")
+      eq(Spawn.hopLanding(maps, tilesets, nil, "VIRIDIAN_CITY", 24, 8, "down"), nil,
+         "no rows, no hop")
+      local Bots = require("mods.battle_royale.lib.bots")
+      local function walkV(x, y) return Spawn.walkable(maps, tilesets, "VIRIDIAN_CITY", x, y) end
+      local function hopV(x, y, dir)
+        return Spawn.hopLanding(maps, tilesets, ledges, "VIRIDIAN_CITY", x, y, dir)
+      end
+      local down = Bots.path(walkV, { x = 24, y = 8 }, { x = 24, y = 11 }, nil, hopV)
+      ok(down and #down == 2 and down[1] == "down",
+         "a bot above Viridian's ledge paths straight down it (" .. tostring(down and #down) .. ")")
+      local up = Bots.path(walkV, { x = 24, y = 11 }, { x = 24, y = 8 }, 60, hopV)
+      ok(up == nil or #up > 2, "and never climbs it")
     end
 
     -- the placement search must route around a door rather than stack on

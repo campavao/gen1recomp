@@ -2235,9 +2235,18 @@ return function(mod)
 
     elseif msg.t == "step" then
       if p then
+        -- a step that lands two cells on along its own direction is a
+        -- ledge hop (POK-191): the ghost walks both cells.  Read off the
+        -- coordinates, so an older host's wire needs nothing new.
+        local d = Bots.DELTA[msg.dir]
+        local cells = 1
+        if d and p.x and p.y and (msg.map == nil or msg.map == p.map)
+           and msg.x == p.x + 2 * d[1] and msg.y == p.y + 2 * d[2] then
+          cells = 2
+        end
         if msg.map then p.map = msg.map end
         p.x, p.y, p.facing = msg.x, msg.y, msg.dir
-        self.ghosts:pushStep(actor, msg.dir)
+        self.ghosts:pushStep(actor, msg.dir, cells)
       end
 
     elseif msg.t == "face" then
@@ -2769,10 +2778,16 @@ return function(mod)
         -- tryEngage asks the screen (POK-96): a bot this client has not
         -- drawn cannot call a fight
         local gx, gy = self.ghosts:cellOf(id)
+        -- ...and over a ledge it could hop (POK-191)
+        local gd = self.game and self.game.data
+        local eye = Bots.seeOver(blocked, gd and function(x, y, dir)
+          return Spawn.hopLanding(gd.maps, gd.tilesets,
+                                  gd.field and gd.field.ledges, map.id, x, y, dir)
+        end, p.facing)
         if gx and Engage.target(
              { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
                moving = false, status = "alive", busy = p.busy and true },
-             me, { range = Bots.SIGHT, blocked = blocked }) == self.myId then
+             me, { range = Bots.SIGHT, blocked = eye }) == self.myId then
           self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
           engageFlash(self.ghosts:npcOf(id), function()
             BR:walkUpThen(id, function()
@@ -2804,6 +2819,21 @@ return function(mod)
     -- drop its bag there when it fell.  Roam placement never could: it
     -- deals cells from Spawn.cellsOf, which has excluded warps all along.
     return not Spawn.isWarp(maps, mapId, x, y)
+  end
+
+  -- ...and down a ledge (POK-191): the landing two cells on when the cell
+  -- in front is a ledge the engine would let a player jump from here.
+  -- Same map-first signature as canWalk; `mapBound` pairs the two into
+  -- the (x, y) closures Bots.path and Bots.landing take.
+  local function botHop(mapId, x, y, dir)
+    local data = BR.game and BR.game.data
+    return Spawn.hopLanding(data and data.maps, data and data.tilesets,
+                            data and data.field and data.field.ledges,
+                            mapId, x, y, dir)
+  end
+  local function mapBound(cross, mapId)
+    return function(x, y) return cross(mapId, x, y) end,
+           function(x, y, dir) return botHop(mapId, x, y, dir) end
   end
 
   -- How THIS bot crosses a map (POK-158 M4): on foot, and over water
@@ -2947,9 +2977,10 @@ return function(mod)
       if canWalk(c.dest, c.lx, c.ly) then land[c.y * 4096 + c.x] = c end
     end
     local pick = next(land) and land or byCell
-    local path, at = Bots.pathToAny(function(x, y) return cross(p.map, x, y) end,
-                                    { x = p.x, y = p.y },
-                                    function(x, y) return pick[y * 4096 + x] ~= nil end)
+    local walk, hop = mapBound(cross, p.map)
+    local path, at = Bots.pathToAny(walk, { x = p.x, y = p.y },
+                                    function(x, y) return pick[y * 4096 + x] ~= nil end,
+                                    nil, hop)
     if not path then return nil end
     local c = pick[at.y * 4096 + at.x]
     return { kind = "seam", x = c.x, y = c.y, map = p.map, at = now or 0,
@@ -3231,7 +3262,7 @@ return function(mod)
     if (now - (w.at or 0)) < Bots.WALKUP_SECONDS then return end
     w.at = now
     -- re-aimed every step: you are free to move, and it follows
-    local dir = Bots.approach(p, canWalk, { x = me.x, y = me.y })
+    local dir, nx, ny = Bots.approach(p, canWalk, { x = me.x, y = me.y }, botHop)
     if not dir or w.steps >= Bots.WALKUP_STEPS then
       -- It is here; the fight opens when the screen is ours (POK-162).  A
       -- menu or a dialog up at this moment used to get a battle pushed on
@@ -3241,10 +3272,10 @@ return function(mod)
       return arrived()
     end
     w.steps = w.steps + 1
-    local d = Bots.DELTA[dir]
+    local cells = math.abs(nx - p.x) + math.abs(ny - p.y)
     p.facing = dir
-    p.x, p.y = p.x + d[1], p.y + d[2]
-    self.ghosts:pushStep(w.id, dir)
+    p.x, p.y = nx, ny
+    self.ghosts:pushStep(w.id, dir, cells)
     if self.relay and self.relay:isHost() then
       self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, w.id))
     end
@@ -3659,9 +3690,10 @@ return function(mod)
     -- runs out or a step is refused, because the host pays for this thirty
     -- times a beat.
     local cross = botCross(id)
+    local walk, hop = mapBound(cross, p.map)
     if not (p.path and p.path[1]) then
-      p.path = Bots.path(function(x, y) return cross(p.map, x, y) end,
-                         { x = p.x, y = p.y }, { x = goal.x, y = goal.y })
+      p.path = Bots.path(walk, { x = p.x, y = p.y }, { x = goal.x, y = goal.y },
+                         nil, hop)
       if not p.path then
         -- Unreachable, which is a REAL answer on these maps: walkable is
         -- not reachable (POK-23 -- an island behind Surf, a Cut-fenced
@@ -3677,7 +3709,7 @@ return function(mod)
         p.pathFails = (p.pathFails or 0) + 1
         if p.pathFails >= 2 then
           p.pathFails = 0
-          return Bots.wander(p, p.rng, cross, nil)
+          return Bots.wander(p, p.rng, cross, nil, botHop)
         end
         return nil
       end
@@ -3685,12 +3717,13 @@ return function(mod)
     end
 
     local dir = table.remove(p.path, 1)
-    local d = dir and Bots.DELTA[dir]
-    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
+    local nx, ny
+    if dir then nx, ny = Bots.landing(walk, hop, p.x, p.y, dir) end
+    if not nx then
       p.path = nil          -- somebody moved into us; repath next beat
       return nil
     end
-    return dir
+    return dir, nx, ny
   end
 
   -- The stalk, at cell grain (POK-153).  Same-map prey used to get the
@@ -3714,29 +3747,30 @@ return function(mod)
     if (alive or math.huge) > Bots.ALL_IN and p.rng() < 0.2 then return nil end
     -- with SURF on the team, the path may cross the bay (POK-158 M4)
     local cross = botCross(id)
+    local walk, hop = mapBound(cross, p.map)
     local stale = not (p.huntPath and p.huntPath[1])
       or p.huntMap ~= p.map
       or not p.huntFor
       or (math.abs(p.huntFor.x - prey.x) + math.abs(p.huntFor.y - prey.y)) > 2
     if stale then
       p.huntMap, p.huntFor = p.map, { x = prey.x, y = prey.y }
-      p.huntPath = Bots.path(function(x, y) return cross(p.map, x, y) end,
-                             { x = p.x, y = p.y },
-                             { x = prey.x, y = prey.y })
+      p.huntPath = Bots.path(walk, { x = p.x, y = p.y },
+                             { x = prey.x, y = prey.y }, nil, hop)
       if not p.huntPath then
         -- unreachable -- a Surf pocket the team cannot cross, a ledge-
         -- locked hollow: the greedy step is still better than standing
         -- down
-        return Bots.wander(p, p.rng, cross, prey)
+        return Bots.wander(p, p.rng, cross, prey, botHop)
       end
     end
     local dir = table.remove(p.huntPath, 1)
-    local d = dir and Bots.DELTA[dir]
-    if not (d and cross(p.map, p.x + d[1], p.y + d[2])) then
+    local nx, ny
+    if dir then nx, ny = Bots.landing(walk, hop, p.x, p.y, dir) end
+    if not nx then
       p.huntPath = nil        -- somebody moved into us; repath next beat
       return nil
     end
-    return dir
+    return dir, nx, ny
   end
 
   function BR:tickBots()
@@ -3880,7 +3914,7 @@ return function(mod)
           -- and a stroll when both are blocked -- so a ledge or a fence
           -- turned the march back into pacing, which is exactly what a
           -- watched bot must never do.
-          local dir
+          local dir, nx, ny
           if prey then
             -- a trainer in sight and a wound in the team: the bag first
             -- (BR-30's row), one sip a beat while it closes -- and the
@@ -3893,19 +3927,25 @@ return function(mod)
                 if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
               end
             end
-            dir = self:stepBotHunt(id, p, prey, alive)
+            dir, nx, ny = self:stepBotHunt(id, p, prey, alive)
           elseif self.phase ~= "match" then
-            dir = Bots.wander(p, p.rng, canWalk, nil)
+            dir, nx, ny = Bots.wander(p, p.rng, canWalk, nil, botHop)
           else
-            dir = self:stepBotErrand(id, p, now)
+            dir, nx, ny = self:stepBotErrand(id, p, now)
           end
           if dir then
-            local d = Bots.DELTA[dir]
+            -- every walk says where it lands, two cells on for a ledge
+            -- hop (POK-191); an errand's turn-on-the-spot says only the way
+            if not nx then
+              local d = Bots.DELTA[dir]
+              nx, ny = p.x + d[1], p.y + d[2]
+            end
+            local cells = math.abs(nx - p.x) + math.abs(ny - p.y)
             p.facing = dir
-            p.x, p.y = p.x + d[1], p.y + d[2]
+            p.x, p.y = nx, ny
             p.stepsTaken = (p.stepsTaken or 0) + 1
             self.relay:broadcast(Wire.step(dir, p.x, p.y, p.map, id))
-            self.ghosts:pushStep(id, dir) -- our own copy walks it too
+            self.ghosts:pushStep(id, dir, cells) -- our own copy walks it too
           end
         end
       end
@@ -6363,10 +6403,13 @@ return function(mod)
                status = "alive", busy = e.p.busy == "battle" }
     end
     local sa, sb = shape(a), shape(b)
-    if Engage.target(sa, { sb }, { range = Bots.SIGHT, blocked = blocked }) == b.id then
+    local function hop(x, y, dir) return botHop(mapId, x, y, dir) end
+    if Engage.target(sa, { sb }, { range = Bots.SIGHT,
+                                   blocked = Bots.seeOver(blocked, hop, sa.facing) }) == b.id then
       return a, b
     end
-    if Engage.target(sb, { sa }, { range = Bots.SIGHT, blocked = blocked }) == a.id then
+    if Engage.target(sb, { sa }, { range = Bots.SIGHT,
+                                   blocked = Bots.seeOver(blocked, hop, sb.facing) }) == a.id then
       return b, a
     end
     if Bots.near(a.p, b.p) and Bots.clearBetween(a.p, b.p, blocked) then
@@ -6431,24 +6474,26 @@ return function(mod)
         if ap.steps >= Bots.APPROACH_STEPS then
           callOff()
         else
-          local cross = botCross(seerId)
+          local walk, hop = mapBound(botCross(seerId), a.map)
           if not (ap.path and ap.path[1]) then
-            ap.path = Bots.pathToAny(function(x, y) return cross(a.map, x, y) end,
-              { x = a.x, y = a.y },
-              function(x, y) return (math.abs(x - b.x) + math.abs(y - b.y)) == 1 end)
+            ap.path = Bots.pathToAny(walk, { x = a.x, y = a.y },
+              function(x, y) return (math.abs(x - b.x) + math.abs(y - b.y)) == 1 end,
+              nil, hop)
           end
           if not ap.path then
             callOff()   -- walled off after all: not a fight
           else
             local dir = table.remove(ap.path, 1)
-            local d = dir and Bots.DELTA[dir]
-            if d and cross(a.map, a.x + d[1], a.y + d[2]) then
+            local nx, ny
+            if dir then nx, ny = Bots.landing(walk, hop, a.x, a.y, dir) end
+            if nx then
+              local cells = math.abs(nx - a.x) + math.abs(ny - a.y)
               ap.steps = ap.steps + 1
               a.facing = dir
-              a.x, a.y = a.x + d[1], a.y + d[2]
+              a.x, a.y = nx, ny
               a.stepsTaken = (a.stepsTaken or 0) + 1
               self.relay:broadcast(Wire.step(dir, a.x, a.y, a.map, seerId))
-              self.ghosts:pushStep(seerId, dir)
+              self.ghosts:pushStep(seerId, dir, cells)
             else
               ap.path = nil   -- somebody moved into us; repath next beat
             end

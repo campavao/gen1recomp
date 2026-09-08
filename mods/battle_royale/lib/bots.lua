@@ -494,13 +494,23 @@ end
 -- bot-versus-bot fights would be a feature that exists and never happens.
 -- With it they close on each other, which is both what makes the roster
 -- thin itself and the same predatory behaviour the players are under.
-function Bots.wander(bot, rng, canWalk, toward)
+-- `hop(map, x, y, dir)` is optional (POK-191): with it a roaming bot
+-- drops off a ledge the way a player strolling Kanto does, so a shelf is
+-- somewhere it walks off rather than paces along.  Returns the direction
+-- and the cell it lands on, two cells on for a hop.
+function Bots.wander(bot, rng, canWalk, toward, hop)
   if rng() < 0.2 then return nil end -- a pause, so they are not machines
 
+  local function walk(x, y) return canWalk(bot.map, x, y) end
+  local function jump(x, y, d) return hop(bot.map, x, y, d) end
+  local lands = {}
   local function ok(dir)
-    local d = DELTA[dir]
-    return d and canWalk(bot.map, bot.x + d[1], bot.y + d[2])
+    if not DELTA[dir] then return false end
+    local nx, ny = Bots.landing(walk, hop and jump, bot.x, bot.y, dir)
+    if nx then lands[dir] = { nx, ny } end
+    return nx ~= nil
   end
+  local function take(dir) return dir, lands[dir][1], lands[dir][2] end
 
   if toward then
     -- close the bigger gap first; fall through to a stroll if boxed in
@@ -514,18 +524,18 @@ function Bots.wander(bot, rng, canWalk, toward)
       wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
     end
     for _, dir in ipairs(wants) do
-      if ok(dir) then return dir end
+      if ok(dir) then return take(dir) end
     end
   end
 
-  if bot.facing and ok(bot.facing) and rng() < 0.7 then return bot.facing end
+  if bot.facing and ok(bot.facing) and rng() < 0.7 then return take(bot.facing) end
 
   -- try the others in a rotated order so no direction is systematically
   -- preferred across the roster
   local start = rng(1, #DIRS)
   for i = 0, #DIRS - 1 do
     local dir = DIRS[(start + i - 1) % #DIRS + 1]
-    if ok(dir) then return dir end
+    if ok(dir) then return take(dir) end
   end
   return nil
 end
@@ -655,7 +665,47 @@ end
 -- (Also: no `unpack`.  It is a global in LuaJIT and `table.unpack` in 5.2+,
 -- and the mod sandbox is not the harness -- the POK-90 lesson.  Nothing
 -- here needs it.)
-function Bots.path(canWalk, from, to, limit)
+-- Sight down a ledge (POK-191).  Wraps a terrain `blocked(x, y)` for a
+-- seer looking `facing`: a ledge tile that the cell behind it could hop
+-- in that direction does not stop the eye.  It is a knee-high drop the
+-- walk-up can take -- and the tile is not walkable, so the plain terrain
+-- test read it as a wall and a bot at the top never saw the player two
+-- cells below.  Looking UP a ledge stays blocked: no row hops that way,
+-- and a fight it cannot walk to is not one it should call.
+function Bots.seeOver(blocked, hop, facing)
+  local d = DELTA[facing]
+  if not (hop and d and blocked) then return blocked end
+  return function(x, y)
+    if not blocked(x, y) then return false end
+    return hop(x - d[1], y - d[2], facing) == nil
+  end
+end
+
+-- Where one step in `dir` from (x, y) puts a bot (POK-191): the next
+-- cell when it can be walked, else the far side of a ledge when
+-- `hop(x, y, dir)` says the engine would let a player jump from here and
+-- the landing can be walked.  nil when neither.  Both closures are bound
+-- to the map, as the BFS takes them; `hop` is optional and is
+-- Spawn.hopLanding in the game.
+--
+-- A ledge tile is not walkable, so without this a path stops at the top
+-- of the drop and a player two cells below is unreachable -- which is
+-- what a bot stood above a ledge and did, in a live match, with the
+-- player right under it.  Upward stays impossible: hop only answers in a
+-- ledge row's own direction, the one the engine hops.
+function Bots.landing(canWalk, hop, x, y, dir)
+  local d = DELTA[dir]
+  if not d then return nil end
+  local nx, ny = x + d[1], y + d[2]
+  if canWalk(nx, ny) then return nx, ny end
+  if hop then
+    local lx, ly = hop(x, y, dir)
+    if lx and canWalk(lx, ly) then return lx, ly end
+  end
+  return nil
+end
+
+function Bots.path(canWalk, from, to, limit, hop)
   if not (from and to) then return nil end
   if from.x == to.x and from.y == to.y then return {} end
   local function key(x, y) return y * 4096 + x end
@@ -669,10 +719,11 @@ function Bots.path(canWalk, from, to, limit)
     nodes = nodes + 1
     if nodes > cap then return nil end
     for _, dir in ipairs(DIRS) do
-      local d = DELTA[dir]
-      local nx, ny = cur.x + d[1], cur.y + d[2]
-      local k = key(nx, ny)
-      if came[k] == nil and canWalk(nx, ny) then
+      -- a step, or a hop down a ledge: the path is still a list of
+      -- directions, and Bots.landing re-derives the cell when it is walked
+      local nx, ny = Bots.landing(canWalk, hop, cur.x, cur.y, dir)
+      local k = nx and key(nx, ny)
+      if k and came[k] == nil then
         came[k] = { from = cur, dir = dir }
         if nx == to.x and ny == to.y then
           local dirs, node = {}, came[k]
@@ -696,7 +747,7 @@ end
 -- The same search to ANY cell `isGoal(x, y)` accepts -- the nearest edge
 -- cell of a seam (BR-32), the cell beside another trainer (BR-34).
 -- Returns the directions and the cell reached, or nil.
-function Bots.pathToAny(canWalk, from, isGoal, limit)
+function Bots.pathToAny(canWalk, from, isGoal, limit, hop)
   if not (from and isGoal) then return nil end
   if isGoal(from.x, from.y) then return {}, { x = from.x, y = from.y } end
   local function key(x, y) return y * 4096 + x end
@@ -710,10 +761,9 @@ function Bots.pathToAny(canWalk, from, isGoal, limit)
     nodes = nodes + 1
     if nodes > cap then return nil end
     for _, dir in ipairs(DIRS) do
-      local d = DELTA[dir]
-      local nx, ny = cur.x + d[1], cur.y + d[2]
-      local k = key(nx, ny)
-      if came[k] == nil and canWalk(nx, ny) then
+      local nx, ny = Bots.landing(canWalk, hop, cur.x, cur.y, dir)
+      local k = nx and key(nx, ny)
+      if k and came[k] == nil then
         came[k] = { from = cur, dir = dir }
         if isGoal(nx, ny) then
           local dirs, node = {}, came[k]
@@ -829,8 +879,10 @@ end
 -- keeps its heading, it strolls off when boxed in -- which is right for a
 -- bot with nowhere to be and wrong for one that has just spotted you and
 -- is walking over.  nil means it cannot get closer: already adjacent, or
--- walled off.
-function Bots.approach(bot, canWalk, toward)
+-- walled off.  Returns the direction and the cell it lands on -- two
+-- cells on when the step is a hop down a ledge (`hop(map, x, y, dir)`,
+-- optional; POK-191).
+function Bots.approach(bot, canWalk, toward, hop)
   if not (bot and toward and bot.x and bot.y and toward.x and toward.y) then
     return nil
   end
@@ -845,9 +897,13 @@ function Bots.approach(bot, canWalk, toward)
     wants[1] = dy > 0 and "down" or (dy < 0 and "up" or nil)
     wants[2] = dx > 0 and "right" or (dx < 0 and "left" or nil)
   end
+  local function walk(x, y) return canWalk(bot.map, x, y) end
+  local function jump(x, y, d) return hop(bot.map, x, y, d) end
   for _, dir in ipairs(wants) do
-    local d = DELTA[dir]
-    if d and canWalk(bot.map, bot.x + d[1], bot.y + d[2]) then return dir end
+    local nx, ny = Bots.landing(walk, hop and jump, bot.x, bot.y, dir)
+    -- a hop that would land ON them is no stride: the engine refuses an
+    -- occupied landing, and across the ledge is as close as it gets
+    if nx and not (nx == toward.x and ny == toward.y) then return dir, nx, ny end
   end
   return nil
 end
