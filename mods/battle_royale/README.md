@@ -105,6 +105,8 @@ where the team is your health. The Safari is closed for the rest of the
 match. `SAFARI SECONDS: 0` skips the opening for the old random drop with a
 RATTATA.
 
+**The zone's item balls are dealt too.** Every ball lying in the four Safari areas, and the zone's one hidden item, holds something drawn from the match seed — the same on every client, different every match, so a regular cannot walk straight to the CARBOS. Weighted toward things worth the detour while the buzzer runs: a strong TM most often, then a potion above the drop's tier, a GREAT or ULTRA BALL, a POKé DOLL, a NUGGET, a RARE CANDY — and one match in eight hides a MASTER BALL in one of them, never more. The ROM's own balls are back the moment the match ends.
+
 **The zone has a shape.** Each match draws its own twelve species from the match seed, and the draw is three slices: a theme (one type the seed picks, so a match is a WATER match or a BUG match and reads that way in two minutes), a rare slice (the Safari's own residents and Kanto's one-offs, guaranteed a few places every match), and the open rest. The log names the theme. Bots draft their first Pokémon from the same zone, so what a fallen bot drops carries the match's character — and a bot's lines evolve with the rung exactly as yours do (a stone at a seeded rung, a trade when it loots somebody else's ball), so the last ring is MUK and GENGAR, not GRIMER and HAUNTER. The starters, the fossils and the Dojo's two are in the zone too, since OAK's LAB is locked for the match. Every gift a match hands out — the Celadon EEVEE, a revived fossil — lands at the rung, not at the story's level.
 
 You start with **all eight badges and all five HMs**, because a match is
@@ -944,6 +946,17 @@ four-page speech back). `TALK OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-gym-talk   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/gym_talk_smoke.lua lovec .
+```
+
+### The Safari's balls are dealt
+
+`safari_loot_smoke.lua` reads every zone ball before a match (the ROM's),
+starts one (a draw from the seed, at most one MASTER BALL), picks up
+EAST's first ball and finds the drawn item in the bag, leaves (the ROM's
+back), and starts a second match (a different draw). `LOOT OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-safari-loot   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/safari_loot_smoke.lua lovec .
 ```
 
 ### The playtest probes

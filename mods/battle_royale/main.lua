@@ -1384,6 +1384,11 @@ return function(mod)
         self.game and self.game.data, self.shopPrices)
       self.shopPrices = nil
     end
+    -- ...and the Safari's item balls their ROM contents (POK-195)
+    if self.safariLoot then
+      Safari.restore(self.safariLoot.slots, self.safariLoot.orig)
+      self.safariLoot = nil
+    end
     -- ...and this player's own TEXT SPEED and BATTLE ANIMATION (POK-186),
     -- here for the same reason as the TMs: every exit comes through
     self:restorePace()
@@ -1778,6 +1783,9 @@ return function(mod)
     -- rather than sent, so the draft is the same for everyone (POK-118)
     self.safariPool, self.safariTheme = Safari.pool(msg.seed, self.game and self.game.data)
     log:say("the zone today: %s", Safari.describe(self.safariPool, self.safariTheme))
+    -- ...and its item balls (POK-195), written over the shared map data
+    -- now so any entry finds them; resetMatch puts the ROM's back
+    self:dealSafariLoot(msg.seed)
     log:match(self.relay and self.relay.code, msg.seed)
     self.players = {}
     for _, s in ipairs(msg.spawns) do
@@ -7448,6 +7456,32 @@ return function(mod)
     end
     BR.npcFight = { map = here.mapId, obj = obj, x = npc.cellX, y = npc.cellY }
   end)
+
+  -- The Safari's item balls, drawn from the match seed (POK-195): the
+  -- same on every client, different every match, and valuable.  The
+  -- engine reads a ball's contents off the map object at pickup, so the
+  -- draw is written over the shared map data here and the ROM's put back
+  -- in resetMatch, the same restore-on-every-exit rule as the machines
+  -- and the shop prices.  A second call in one match restores first.
+  function BR:dealSafariLoot(seed)
+    local data = self.game and self.game.data
+    if not (data and data.maps) then return end
+    if self.safariLoot then
+      Safari.restore(self.safariLoot.slots, self.safariLoot.orig)
+      self.safariLoot = nil
+    end
+    local slots = Safari.slots(data.maps, data.field)
+    if #slots == 0 then return end
+    local loot = Safari.loot(seed, data, #slots)
+    local orig = Safari.apply(slots, loot)
+    self.safariLoot = { slots = slots, orig = orig, loot = loot }
+    local names = {}
+    for i, s in ipairs(slots) do
+      names[#names + 1] = ("%s:%s=%s"):format(
+        (s.map:gsub("^SAFARI_ZONE_", "")), s.index or (s.x .. "," .. s.y), tostring(loot[i]))
+    end
+    log:say("the zone's balls: %s", table.concat(names, " "))
+  end
 
   -- The reward chain a boss win runs (POK-193), cut on THIS overworld
   -- instance for the session: checkVictoryRewards pushes the badge pages

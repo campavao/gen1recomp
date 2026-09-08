@@ -4525,6 +4525,87 @@ do
   local sorted = true
   for i = 2, #a1 do sorted = sorted and (a1[i - 1] <= a1[i]) end
   ok(sorted, "a zone comes back in a stable order")
+
+  -- ------- the zone's item balls, from the seed (POK-195)
+  ok(Safari.isZoneMap("SAFARI_ZONE_EAST"), "EAST is the zone")
+  ok(not Safari.isZoneMap("SAFARI_ZONE_GATE"), "the gate is not")
+  ok(not Safari.isZoneMap("SAFARI_ZONE_WEST_REST_HOUSE"), "nor a rest house")
+  -- a stand-in Kanto: two zone maps with balls, one hidden item, a gate
+  local function fakeWorld()
+    return {
+      maps = {
+        SAFARI_ZONE_WEST = { objects = {
+          { index = 3, item = "MAX_POTION" }, { index = 1, item = "GOLD_TEETH" },
+          { index = 2, text = "TEXT_X" }, { index = 4, item = "0" } } },
+        SAFARI_ZONE_CENTER = { objects = { { index = 1, item = "NUGGET" } } },
+        SAFARI_ZONE_GATE = { objects = { { index = 1, item = "NUGGET" } } },
+      },
+      field = { hiddenItems = {
+        SAFARI_ZONE_WEST = { { x = 6, y = 5, item = "REVIVE" } },
+        SAFARI_ZONE_GATE = { { x = 10, y = 1, item = "NUGGET" } },
+      } },
+    }
+  end
+  local w = fakeWorld()
+  local slots = Safari.slots(w.maps, w.field)
+  eq(#slots, 4, "three balls and one hidden item in the zone; the gate's are not slots")
+  eq(slots[1].map .. ":" .. slots[1].index, "SAFARI_ZONE_CENTER:1", "maps in id order")
+  eq(slots[2].index, 1, "balls in object order, not table order")
+  eq(slots[3].index, 3, "...")
+  eq(slots[4].x, 6, "the hidden item last")
+  ok(slots[4].obj == w.field.hiddenItems.SAFARI_ZONE_WEST[1], "a slot points at the live table")
+
+  local l1 = Safari.loot(4242, nil, 13)
+  local l2 = Safari.loot(4242, nil, 13)
+  eq(#l1, 13, "one item a slot")
+  eq(table.concat(l1, ","), table.concat(l2, ","), "the same seed deals the same balls")
+  local l3 = Safari.loot(4243, nil, 13)
+  ok(table.concat(l1, ",") ~= table.concat(l3, ","), "another seed deals other balls")
+  local allowed = { [Safari.MASTER_BALL] = true }
+  for _, t in ipairs(Safari.LOOT) do for _, id in ipairs(t.ids) do allowed[id] = true end end
+  local masters, seen = 0, {}
+  for seed = 1, 400 do
+    local m = 0
+    for _, id in ipairs(Safari.loot(seed, nil, 13)) do
+      ok(allowed[id], "seed " .. seed .. " deals a listed item (" .. tostring(id) .. ")")
+      seen[id] = true
+      if id == Safari.MASTER_BALL then m = m + 1 end
+    end
+    ok(m <= 1, "seed " .. seed .. " deals at most one MASTER BALL")
+    masters = masters + m
+  end
+  ok(masters > 0, "some match deals a MASTER BALL")
+  ok(masters < 200, "...but not most (" .. masters .. " in 400)")
+  ok(seen.POKE_DOLL and seen.RARE_CANDY and seen.NUGGET, "every tier comes up")
+  eq(#Safari.loot(1, nil, 0), 0, "no slots, no draw")
+  -- only ids this build knows: a data table without TMs deals none
+  local noTm = { items = { POKE_DOLL = {}, NUGGET = {}, RARE_CANDY = {}, GREAT_BALL = {},
+                           ULTRA_BALL = {}, MAX_POTION = {} } }
+  for _, id in ipairs(Safari.loot(7, noTm, 40)) do
+    ok(noTm.items[id], "an unknown item is never dealt (" .. tostring(id) .. ")")
+  end
+  eq(#Safari.loot(7, { items = {} }, 5), 0, "a build that knows nothing deals nothing")
+
+  -- apply writes the live tables and restore puts the ROM's back
+  local orig = Safari.apply(slots, { "A", "B", "C", "D" })
+  eq(w.maps.SAFARI_ZONE_CENTER.objects[1].item, "A", "a ball reads the draw")
+  eq(w.field.hiddenItems.SAFARI_ZONE_WEST[1].item, "D", "so does the hidden item")
+  eq(w.maps.SAFARI_ZONE_GATE.objects[1].item, "NUGGET", "the gate's is untouched")
+  eq(orig[1], "NUGGET", "the originals are returned")
+  Safari.restore(slots, orig)
+  eq(w.maps.SAFARI_ZONE_CENTER.objects[1].item, "NUGGET", "restore puts the ROM's back")
+  eq(w.maps.SAFARI_ZONE_WEST.objects[1].item, "MAX_POTION", "...every one")
+  eq(w.field.hiddenItems.SAFARI_ZONE_WEST[1].item, "REVIVE", "...hidden included")
+  local okD, Data = pcall(require, "src.core.Data")
+  if okD and Data and Data.load then pcall(function() Data:load() end) end
+  if okD and Data and Data.items and Data.maps then
+    for _, t in ipairs(Safari.LOOT) do
+      for _, id in ipairs(t.ids) do ok(Data.items[id], "the build sells " .. id) end
+    end
+    ok(Data.items[Safari.MASTER_BALL], "and the MASTER BALL")
+    local real = Safari.slots(Data.maps, Data.field)
+    ok(#real >= 12, "the real zone has a dozen balls to deal (" .. #real .. ")")
+  end
 end
 
 -- ------------------------------------------------------------------
