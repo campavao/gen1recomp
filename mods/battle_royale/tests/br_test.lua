@@ -2049,9 +2049,15 @@ do
   eq(refused, 0, "the engine's refusal never ran")
   local tb2 = fakeTrainer()
   Flee.wrapTrainer(tb2, { save = bsave })
-  tb2:tryRun()
-  eq(refused, 1, "without a doll RUN is the engine's own refusal")
+  ok(not tb2:tryRun(), "without a doll RUN does not escape")
+  eq(refused, 0, "...and the engine's 'no running' line never prints")
+  eq(tb2.said[1], Flee.NO_DOLL_TEXT, "the line says the doll is what is missing")
+  eq(tb2.afterQueue, "menu", "and the menu comes back")
   eq(tb2.result, nil, "and nothing ends")
+  local mute = { tryRun = function() refused = refused + 1 end }
+  Flee.wrapTrainer(mute, { save = bsave })
+  mute:tryRun()
+  eq(refused, 1, "a battle that cannot say falls through to the engine's own line")
   ok(not Flee.spendDoll(nil), "no save, nothing to spend")
   ok(not Flee.spendDoll({ inventory = {} }), "an empty bag has no doll")
 

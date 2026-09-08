@@ -27,6 +27,9 @@ Flee.BASE = 64             -- x out of 256 at equal speed: one in four
 Flee.CAP = 160             -- the ceiling, however fast you are: five in eight
 Flee.RETRY = 20            -- each earlier attempt in this battle adds this
 Flee.CEILING = 240         -- retries never make an escape certain
+-- the third line rides a \v scroll: three \n in a two-line box drop it
+-- (the engine's own _NoRunningText lesson, BattleState:tryRun)
+Flee.NO_DOLL_TEXT = "No POKe DOLL left!\nThere's no other\vway to run!"
 Flee.GRACE_SECONDS = 4     -- neither of the pair engages the other
 Flee.LOCKOUT_SECONDS = 30  -- the runner does not initiate on who they fled from
 
@@ -118,7 +121,16 @@ function Flee.wrapTrainer(battle, ctx)
   if type(base) ~= "function" then return false end
   ctx = ctx or {}
   battle.tryRun = function(s)
-    if not Flee.spendDoll(ctx.save) then return base(s) end
+    if not Flee.spendDoll(ctx.save) then
+      -- the engine's line is "No! There's no running from a trainer
+      -- battle!", which is true and useless here: the player has a way
+      -- out and is short of it (the user, 2026-09-08)
+      if not s.say then return base(s) end
+      s.phase = "messages"
+      s.afterQueue = "menu"
+      s:say(ctx.noDoll or Flee.NO_DOLL_TEXT)
+      return false
+    end
     if s.say then s:say(ctx.text or "Got away safely!") end
     Flee.escape(s)
     if ctx.onFlee then ctx.onFlee("doll") end
