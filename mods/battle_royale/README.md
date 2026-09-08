@@ -273,7 +273,9 @@ never overwrite your actual playthrough.
   -- press RUN, or use it from the bag, and the fight ends as a run,
   nobody beaten. After a flee neither of you engages the other for four
   seconds (the head start), and the runner cannot start that fight again
-  for thirty.
+  for thirty. Whoever ran from you wears a **boot** in a bubble over their
+  head for those four seconds, the way `!` marks a fight and `?` a menu.
+  Without a doll, RUN against a bot says so: "No POKé DOLL left!"
 - **Moves are free.** From the party menu, MOVES swaps any of a Pokémon's
   four moves for any move it could ever learn — level-up moves at any
   level, every compatible TM and HM — no tutor, no item, no ceremony.
@@ -991,6 +993,17 @@ own, the fight stays open, and the menu returns with the clock rearmed.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-bot-clock   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_clock_smoke.lua lovec .
+```
+
+### The runner wears a boot
+
+`shoe_shot_smoke.lua` places a bot beside the player, marks it as having
+run from us, checks the mark sits in the engine's bubble slot over the
+sprite, and captures the frame (`BR_SHOTS=<dir>`, an absolute path): a
+boot in a bubble one tile above the bot. `SHOE OK` passes it.
+
+```sh
+BR_SHOTS=<abs dir> POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-shoe   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/shoe_shot_smoke.lua lovec .
 ```
 
 ### The playtest probes

@@ -386,6 +386,7 @@ return function(mod)
     lastOpponent = nil,
     fledFrom = {},        -- opponent id -> how often we ran from them (POK-24)
     fleeGrace = {},       -- opponent id -> clock until neither of us engages
+    fledMark = {},        -- trainer id -> clock: they RAN from us, the shoe rides the grace
     fleeLockout = {},     -- opponent id -> clock until we may initiate on them
     fleeing = nil,        -- who we are running from, while the battle unwinds
     peeked = nil,         -- what the trainer we watch carries, as last answered (POK-18)
@@ -1396,6 +1397,7 @@ return function(mod)
     self:restorePace()
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
+    self.fledMark = {}
     self.peeked, self.lastPeekAt = nil, nil
     self:stopRecording("reset")
     self:closeMirror("reset")
@@ -7913,6 +7915,10 @@ return function(mod)
         BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
       elseif ev.result == "draw" then
         BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
+        -- a draw we did not run from is a run THEY made (a lockstep ends
+        -- as a draw the moment either side submits one): the runner wears
+        -- the shoe for the length of the grace (the user, 2026-09-08)
+        BR.fledMark[opponent] = now + Flee.GRACE_SECONDS
       end
     end
     BR.fleeing = nil
@@ -9196,23 +9202,42 @@ return function(mod)
       end)
       if okZ and z and z > 0 then markZ = z end
       local h = here()
+      local now = clock() or 0
       for id, p in pairs(BR.players) do
         -- On OUR map and actually drawn.  Both halves matter: a bot that
         -- roams away changes p.map on the wire a tick before sync gets
         -- round to despawning its ghost, and npcOf still resolved the old
         -- handle in that window -- which put a bubble over bare ground
         -- where somebody used to be standing.
-        if p.busy and p.status ~= "out" and h and p.map == h.mapId
+        -- The shoe (the user, 2026-09-08): a trainer who RAN from us wears
+        -- it for the flee grace, over any busy mark.  Our own art, drawn
+        -- in the bubble's style, since the cart's sheet has only !, ? and
+        -- a smile.
+        local fled = BR.fledMark[id] and BR.fledMark[id] > now
+        if (p.busy or fled) and p.status ~= "out" and h and p.map == h.mapId
            and BR.ghosts:isSpawned(id) then
           local npc = BR.ghosts:npcOf(id)
           -- the ghost's px/py is where this screen has DRAWN them, which is
           -- the cell tryEngage reads too (POK-96); marking the wire
           -- position would float the bubble off the sprite mid-step
           if npc and npc.px and npc.py then
-            local quad = emoteQuad(bubbles, sheet,
-                                   (p.busy == "battle" or p.busy == "spot")
-                                   and "EXCLAMATION_BUBBLE"
-                                   or "QUESTION_BUBBLE")
+            local img, quad = sheet, nil
+            if fled then
+              if BR.shoeImg == nil then
+                local okS, shoe = pcall(love.graphics.newImage,
+                                        "mods/battle_royale/assets/shoe.png")
+                BR.shoeImg = (okS and shoe) or false
+              end
+              img = BR.shoeImg or nil
+              if img then
+                quad = love.graphics.newQuad(0, 0, 16, 16, img:getDimensions())
+              end
+            else
+              quad = emoteQuad(bubbles, sheet,
+                               (p.busy == "battle" or p.busy == "spot")
+                               and "EXCLAMATION_BUBBLE"
+                               or "QUESTION_BUBBLE")
+            end
             -- The engine's own bubble slot (fxEmote: px + 4, py - 14),
             -- mapped from the WORLD pass onto this canvas (POK-166): the
             -- world is drawn at worldViewSize() and the zoom's scale, both
@@ -9223,9 +9248,9 @@ return function(mod)
             mx, my = math.floor(mx), math.floor(my)
             -- only when it would land on the screen: a bubble for somebody
             -- across a big map is a smear at the edge, not information
-            if quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
+            if img and quad and mx >= -16 and mx <= 160 and my >= -16 and my <= 144 then
               g.setColor(1, 1, 1, 1)
-              g.draw(sheet, quad, mx, my, 0, markZ, markZ)
+              g.draw(img, quad, mx, my, 0, markZ, markZ)
             end
           end
         end
@@ -9779,6 +9804,12 @@ return function(mod)
   -- challenge to LAND while the other screen is busy, and the eyeline
   -- will not fire one at a trainer marked busy any more -- so the driver
   -- sends it by hand, the same way tryEngage would have.
+  -- the shoe over a trainer who ran from us, for a driver's screenshot
+  mod.exports.debugFledMark = function(id, secs)
+    if not BR.players[id] then return false end
+    BR.fledMark[id] = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
+    return true
+  end
   mod.exports.debugChallenge = function(id)
     if not (BR.relay and BR.relay:isOpen() and BR.players[id]) then return false end
     if BR.phase ~= "match" or BR.status ~= "alive" or BR.battle or BR.pending then
