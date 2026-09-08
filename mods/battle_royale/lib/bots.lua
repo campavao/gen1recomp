@@ -397,6 +397,25 @@ Bots.LEAD_LOW = 0.35
 -- this long before they are called stale.
 Bots.LONG_GOAL_SECONDS = 90
 
+-- How long a trainer the stalk could not reach stays written off
+-- (POK-187).  Two bots either side of a cliff each picked the other as
+-- the nearest trainer on the map, found no path, and took the greedy
+-- step at the rock instead -- "the greedy step is still better than
+-- standing down" -- for as long as they both stood there, which was the
+-- rest of the match.  Now an unreachable prey is remembered, the bot
+-- goes about its errands, and the memo lapses so a prey that walks
+-- round the cliff is prey again.
+Bots.GIVE_UP_SECONDS = 30
+
+-- Is `prey` the trainer this bot wrote off, and is the memo still warm?
+-- Within two cells of where it stood: the prey may have shuffled.
+function Bots.gaveUp(bot, prey, now)
+  local g = bot and bot.gaveUp
+  if not (g and prey) then return false end
+  if now and g.until_ and now >= g.until_ then return false end
+  return (math.abs(g.x - prey.x) + math.abs(g.y - prey.y)) <= 2
+end
+
 -- The walk-up between two bots (BR-34) is a walk across the road, not a
 -- chase: past this many steps it is called off and both go about their
 -- business, under the fight cooldown.
@@ -1245,6 +1264,56 @@ function Bots.bagMerge(bag, loot)
   end
   bag.money = (bag.money or 0) + (loot.money or 0)
   return bag
+end
+
+-- Take one of `id` out of the bag (POK-190): true and the stack is a
+-- unit lighter (gone at zero), false when there is none to take.
+function Bots.takeItem(bag, id)
+  for i, it in ipairs((bag and bag.items) or {}) do
+    if it.id == id and (it.n or 0) >= 1 then
+      it.n = it.n - 1
+      if it.n <= 0 then table.remove(bag.items, i) end
+      return true
+    end
+  end
+  return false
+end
+
+-- The brain a bot fights with (POK-190).  The engine's class AI
+-- (TrainerAI.classAction) conjures its item -- a COOLTRAINER's X ATTACK,
+-- twice a fight, every fight -- with no inventory behind it, which is
+-- why a player who watched a bot pop X ATTACKs never found one in its
+-- bag.  This brain runs the same class action and then asks the bag:
+-- an item the bag holds is taken (so what is left rides to the spill)
+-- and used; one it lacks is not used, and the turn is a move like any
+-- other.  Switches pass through untouched.  `ai` is the TrainerAI
+-- module; `onTake(item)` fires after a take so the host can relay the
+-- record.  Sits on trainer.brain, the engine's own seam that supersedes
+-- classAction and move scoring (BattleState:enemyAction).
+function Bots.brain(record, ai, onTake)
+  return function(battle)
+    local act = ai.classAction(battle)
+    if act and act.special == "aiItem" then
+      if Bots.takeItem(record and record.bag, act.item) then
+        if onTake then onTake(act.item) end
+        return act
+      end
+      act = nil
+    end
+    if act then return act end
+    return ai.chooseMove(battle.enemy, battle.rng, battle)
+  end
+end
+
+-- What an ai-tier bot packs for its class's item AI (POK-190): the
+-- class's item, as many as it has uses -- the X ATTACKs the COOLTRAINER
+-- brain will reach for, now bought and carried rather than conjured.
+-- `classes` is the ai_classes registry.  nil for a bot with no such
+-- brain, or a class with no item.
+function Bots.aiKit(classes, aiClass)
+  local class = classes and aiClass and classes[aiClass]
+  if not (class and class.item) then return nil end
+  return { id = class.item, n = math.max(1, tonumber(class.uses) or 1) }
 end
 
 -- The move inside a TM item id, or nil for anything else.

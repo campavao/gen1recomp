@@ -603,7 +603,25 @@ catches for coverage, letting go a member whose types it already has. And
 its team's HMs are its own: a FLY learner flies — to the nearest Centre
 when wrecked with nothing in the bag, out of the fog, or toward the eye
 when it is far — landing where FLY lands you; a CUT learner walks through
-the trees CUT fells; SURF and FLY are on its movesets in a fight.
+the trees CUT fells; SURF and FLY are on its movesets in a fight. It hops
+down a ledge the way you do -- in a fight's walk-up and on any errand --
+and never climbs one. A trainer it cannot reach (across a cliff, on the
+far side of a bay it cannot surf) is written off for half a minute rather
+than paced at, so two bots either side of a rock go about their errands
+instead of standing there for the rest of the match.
+
+**A bot's X ATTACKs are in its bag.** The trainer AI used to conjure a
+COOLTRAINER's two X ATTACKs every fight with no inventory behind them,
+which is why a bot that popped them all match dropped none. An ai-tier bot
+now packs its class's kit at the drop (two X ATTACKs, or a HYPER POTION)
+and its brain reaches into the bag: an item it holds is used and gone, one
+it lacks is not used. What is left rides to its spill.
+
+**A spectator is told what the watched bot caught.** A bot's wild
+encounter is a roll, not a fight, so there is no battle for the mirror to
+replay; the watcher used to see the `!`, six seconds of nothing, and the
+walk on. Now the catch is said on the watcher's screen -- "KAI caught
+PIDGEY!" -- the moment the roll lands. A miss stays silent.
 
 **How many bots?** Up to **30**, verified live end-to-end. Kanto has 34
 outdoor maps, so thirty bots each get a route or town of their own and the
@@ -828,6 +846,32 @@ one. `LEDGE OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-bot-ledge   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_ledge_smoke.lua lovec .
+```
+
+### A bot never stands at a wall
+
+`bot_stuck_smoke.lua` runs two legs on one solo match: two bots either
+side of the Mt Moon plaza's rock on ROUTE_4, four cells apart with no route
+between them, must each write the other off and one must walk away; and a
+lone bot on ROUTE_1 with a single mon at 55% and an empty bag must pick an
+errand and walk within the window. `STUCK OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-bot-stuck \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_stuck_smoke.lua lovec .
+```
+
+### The spectator hears the catch
+
+`bot_catch_told_smoke.lua` goes out at the drop, turns the camera on a bot
+with one mon, parks it on ROUTE_1's grass, and waits for its first catch:
+the line the spectator was shown must name the bot. `TOLD OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3 \
+  POKEPORT_IDENTITY=br-catch-told \
+  POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_catch_told_smoke.lua lovec .
 ```
 
 ### The Marts climb

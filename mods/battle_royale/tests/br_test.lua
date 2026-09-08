@@ -2847,6 +2847,56 @@ do
   eq(Bots.quaff(drained, { items = { { id = "POKE_BALL", n = 9 } } }), nil,
      "no medicine, no gulp")
 
+  -- ------- the items a bot fights with come out of its bag (POK-190)
+
+  local kitBag = { items = { { id = "X_ATTACK", n = 2 }, { id = "POKE_BALL", n = 1 } } }
+  ok(Bots.takeItem(kitBag, "X_ATTACK"), "an X ATTACK the bag holds is taken")
+  eq(kitBag.items[1].n, 1, "...and the stack is one lighter")
+  ok(Bots.takeItem(kitBag, "X_ATTACK"), "the second goes too")
+  eq(#kitBag.items, 1, "and the empty stack leaves the bag")
+  ok(not Bots.takeItem(kitBag, "X_ATTACK"), "a third is not there to take")
+  ok(not Bots.takeItem(nil, "X_ATTACK") and not Bots.takeItem({}, "X_ATTACK"),
+     "no bag, nothing to take")
+  -- the brain: the class action over the bag, then the move
+  local fakeAI = {}
+  fakeAI.want = { special = "aiItem", item = "X_ATTACK" }
+  fakeAI.classAction = function(_) return fakeAI.want end
+  fakeAI.chooseMove = function() return { id = "TACKLE" } end
+  local rec = { bag = { items = { { id = "X_ATTACK", n = 1 } } } }
+  local took = {}
+  local brain = Bots.brain(rec, fakeAI, function(item) took[#took + 1] = item end)
+  local turn = brain({ enemy = {}, rng = function() return 0 end })
+  eq(turn and turn.special, "aiItem", "with one in the bag the X ATTACK is used")
+  eq(took[1], "X_ATTACK", "...and the take is reported")
+  eq(#rec.bag.items, 0, "...and the bag is lighter for it")
+  turn = brain({ enemy = {}, rng = function() return 0 end })
+  eq(turn and turn.id, "TACKLE", "with none left the turn is a move, not a conjured item")
+  eq(#took, 1, "nothing was taken the second time")
+  fakeAI.want = { special = "aiSwitch", index = 2 }
+  eq(brain({}).special, "aiSwitch", "a switch passes through untouched")
+  fakeAI.want = nil
+  eq(brain({}).id, "TACKLE", "no class action, the move")
+  -- the kit an ai-tier bot packs
+  local classes = { OPP_COOLTRAINER_M = { uses = 2, chance = 64, item = "X_ATTACK" },
+                    OPP_COOLTRAINER_F = { uses = 1, item = "HYPER_POTION", hpBelow = 10 },
+                    OPP_GENERIC = { uses = 0 } }
+  local kit = Bots.aiKit(classes, "OPP_COOLTRAINER_M")
+  eq(kit.id .. "x" .. kit.n, "X_ATTACKx2", "a COOLTRAINER packs its two X ATTACKs")
+  eq(Bots.aiKit(classes, "OPP_COOLTRAINER_F").id, "HYPER_POTION", "...or her HYPER POTION")
+  eq(Bots.aiKit(classes, "OPP_GENERIC"), nil, "a class with no item packs nothing")
+  eq(Bots.aiKit(classes, nil), nil, "no brain, no kit")
+  eq(Bots.aiKit(nil, "OPP_COOLTRAINER_M"), nil, "no registry, no kit")
+
+  -- ------- a prey the stalk cannot reach is written off (POK-187)
+
+  local stalker = { x = 5, y = 5, gaveUp = { x = 9, y = 5, until_ = 100 } }
+  ok(Bots.gaveUp(stalker, { x = 9, y = 5 }, 50), "the trainer across the rock is written off")
+  ok(Bots.gaveUp(stalker, { x = 10, y = 6 }, 50), "...even after a shuffle of a cell or two")
+  ok(not Bots.gaveUp(stalker, { x = 9, y = 9 }, 50), "but not once it has really moved")
+  ok(not Bots.gaveUp(stalker, { x = 9, y = 5 }, 100), "and the memo lapses on the clock")
+  ok(not Bots.gaveUp({ x = 5, y = 5 }, { x = 9, y = 5 }, 50), "no memo, no write-off")
+  ok(Bots.GIVE_UP_SECONDS >= 20, "long enough that the pair does not re-stalk every beat")
+
   Bots.bagMerge(bag, { items = { { id = "POKE_BALL", n = 3 },
                                  { id = "TM_ICE_BEAM", n = 1 } },
                        money = 250 })

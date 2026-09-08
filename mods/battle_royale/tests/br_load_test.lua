@@ -1331,8 +1331,8 @@ do
     T.check(try and try:find("if self:inBreather() then return end", 1, true) ~= nil
             and bot and bot:find("if self:inBreather() then return end", 1, true) ~= nil,
             "neither eyeline fires inside it")
-    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle" then', 1, true) ~= nil,
-            "a fighting trainer is not prey, so bots walk at each other")
+    T.check(src:find('and otherId ~= self.botFight and o.busy ~= "battle"\n                 and not Bots.gaveUp(p, o, now) then', 1, true) ~= nil,
+            "a fighting trainer is not prey, so bots walk at each other (nor a written-off one, POK-187)")
     T.check(src:find("and not self:inBreather(now))", 1, true) ~= nil,
             "...and neither is a player in the breather")
     local chal = src:match("function BR:challengeTrainer%(.-\n  end\n")

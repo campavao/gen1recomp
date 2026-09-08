@@ -1395,6 +1395,7 @@ return function(mod)
     self.botFightIdx = nil
     self.botParty = nil
     self.botRecords = {}
+    self.lastCatchTold = nil
     self.npcFight = nil
     self.ring = nil
     self.ringCenter = nil
@@ -2376,7 +2377,9 @@ return function(mod)
       -- a bot's team changed: a catch (the host) or a fight's scars (the
       -- client who fought it).  Applied verbatim -- the record is owned
       -- by whoever last touched it, like the bots' movement is
+      local before = self.botRecords[msg.id]
       self.botRecords[msg.id] = msg.record
+      self:tellCatchFrom(msg.id, before, msg.record)   -- POK-188
 
     elseif msg.t == "peek" then
       if msg.id then
@@ -3341,6 +3344,15 @@ return function(mod)
       if tm and data and data.items and data.items[tm] then
         items[#items + 1] = { id = tm, n = 1 }
       end
+      -- ...and an ai-tier bot's fighting kit (POK-190): the X ATTACKs
+      -- its brain used to conjure are in the bag now, and only those
+      local classes = (data and data.ai_classes)
+        or select(2, pcall(require, "data.scripts.ai_classes"))
+      local kit = Bots.aiKit(type(classes) == "table" and classes or nil,
+                             Bots.fightAI(self.matchSeed, id))
+      if kit and data and data.items and data.items[kit.id] then
+        items[#items + 1] = kit
+      end
       rec.bag = { items = items, money = BOT_LOOT.money }
     end
     return rec
@@ -3368,7 +3380,57 @@ return function(mod)
         log:say("CAUGHT: %s got %s (%d mons)", tostring(p.name),
                 tostring(caught), #rec)
       end
+      -- the host's own screen hears no botrec of its own (POK-188)
+      self:tellCatch(id, caught, letGo and letGo.species)
       if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
+    end
+  end
+
+  -- What a spectator is told of the watched bot's grass (POK-188).  A
+  -- bot's wild encounter is a roll, not a fight -- there is no battle
+  -- for the mirror to replay -- so the watcher saw the ! over its head,
+  -- six seconds of nothing, and the walk on.  The catch line is the
+  -- something: the same words the log keeps, on the screen of whoever
+  -- is following it.  A miss stays silent, as a wild fight that got
+  -- away would.  On a client this is read off the botrec that the
+  -- catch broadcasts (tellCatchFrom); the host calls it directly.
+  function BR:tellCatch(id, caught, letGo)
+    if not (self.watching and self.watching == id and caught) then return end
+    local p = self.players[id]
+    local name = (p and p.name) or "The trainer"
+    local data = self.game and self.game.data
+    local function nameOf(species)
+      local def = data and data.pokemon and data.pokemon[species]
+      return (def and def.name) or tostring(species)
+    end
+    local text
+    if letGo then
+      text = ("%s let %s go\nfor %s!"):format(name, nameOf(letGo), nameOf(caught))
+    else
+      text = ("%s caught\n%s!"):format(name, nameOf(caught))
+    end
+    self.lastCatchTold = text   -- for a driver to read (mod.exports.catchTold)
+    sayLater(text, 0)
+  end
+
+  -- The client's half: a botrec that grew a row, or swapped one, is a
+  -- catch.  Rows are compared by species in order; a scar (hpFrac) is
+  -- not a catch and says nothing.
+  function BR:tellCatchFrom(id, before, after)
+    if not (self.watching and self.watching == id and after) then return end
+    before = before or {}
+    if #after > #before then
+      self:tellCatch(id, after[#after] and after[#after].species, nil)
+      return
+    end
+    if #after == #before then
+      for i = 1, #after do
+        local a, b = after[i], before[i]
+        if a and b and a.species ~= b.species then
+          self:tellCatch(id, a.species, b.species)
+          return
+        end
+      end
     end
   end
 
@@ -3610,6 +3672,10 @@ return function(mod)
     -- of a walk THROUGH it (BR-35)
     if g.kind == "heal" then g.warp = door.warp end
     g.map, g.at = p.map, now or 0
+    -- the decision list's line (POK-189): DEBUG on, and a spectator's
+    -- "it just stood there" has a goal beside it in the log
+    log:deep("GOAL: %s %s at %d,%d on %s", tostring(p.name), tostring(g.kind),
+             g.x or -1, g.y or -1, tostring(p.map))
     return g
   end
 
@@ -3733,7 +3799,7 @@ return function(mod)
   -- turns back into shuffling -- which a spectator at three-left watched
   -- a bot do indefinitely.  A stalk deserves what errands already have:
   -- a real BFS path, walked cell by cell, rebuilt when the prey moves.
-  function BR:stepBotHunt(id, p, prey, alive)
+  function BR:stepBotHunt(id, p, prey, alive, now)
     -- a stalk interrupts an errand: the FIGHT/menu mark from a dwell must
     -- not stay over its head while it walks somebody down
     if p.busy then self:markBot(id, p, nil) end
@@ -3758,10 +3824,18 @@ return function(mod)
       p.huntPath = Bots.path(walk, { x = p.x, y = p.y },
                              { x = prey.x, y = prey.y }, nil, hop)
       if not p.huntPath then
-        -- unreachable -- a Surf pocket the team cannot cross, a ledge-
-        -- locked hollow: the greedy step is still better than standing
-        -- down
-        return Bots.wander(p, p.rng, cross, prey, botHop)
+        -- Unreachable -- a Surf pocket the team cannot cross, a cliff
+        -- between two routes' worth of rock.  The greedy step at the
+        -- wall used to stand in for a route, and two bots either side
+        -- of a cliff each took it at the other for the rest of the
+        -- match (POK-187).  Written off instead: the errand list has
+        -- the next beat, and the memo lapses in GIVE_UP_SECONDS.
+        p.huntPath, p.huntFor = nil, nil
+        p.gaveUp = { x = prey.x, y = prey.y,
+                     until_ = (now or 0) + Bots.GIVE_UP_SECONDS }
+        log:deep("GAVE UP: %s cannot reach %d,%d on %s", tostring(p.name),
+                 prey.x, prey.y, tostring(p.map))
+        return self:stepBotErrand(id, p, now)
       end
     end
     local dir = table.remove(p.huntPath, 1)
@@ -3893,9 +3967,12 @@ return function(mod)
             if meHere and meHere.mapId == p.map then
               prey = { x = meHere.x, y = meHere.y }
             end
+            -- ...and a written-off trainer is not prey (POK-187)
+            if prey and Bots.gaveUp(p, prey, now) then prey = nil end
             for otherId, o in pairs(self.phase == "match" and self.players or {}) do
               if otherId ~= id and o.status == "alive" and o.map == p.map
-                 and otherId ~= self.botFight and o.busy ~= "battle" then
+                 and otherId ~= self.botFight and o.busy ~= "battle"
+                 and not Bots.gaveUp(p, o, now) then
                 if not prey or (math.abs(o.x - p.x) + math.abs(o.y - p.y))
                    < (math.abs(prey.x - p.x) + math.abs(prey.y - p.y)) then
                   prey = o
@@ -3928,7 +4005,7 @@ return function(mod)
                 if self.relay then self.relay:broadcast(Wire.botrec(id, rec)) end
               end
             end
-            dir, nx, ny = self:stepBotHunt(id, p, prey, alive)
+            dir, nx, ny = self:stepBotHunt(id, p, prey, alive, now)
           elseif self.phase ~= "match" then
             dir, nx, ny = Bots.wander(p, p.rng, canWalk, nil, botHop)
           else
@@ -6925,8 +7002,16 @@ return function(mod)
         aiMods[#aiMods + 1] = m
       end
       aiMods[#aiMods + 1] = aiClass and "BR_BOT_MOVES" or "BR_ROOKIE_MOVES"
+      -- ...and its items come out of its BAG (POK-190): Bots.brain runs
+      -- the class action over the record's bag, so a conjured X ATTACK
+      -- is now a carried one, and a bag with none fights without
+      local rec = self:botRecord(botId)
+      local brain = Bots.brain(rec, require("src.battle.TrainerAI"), function(item)
+        log:say("ITEM: %s used its %s", tostring(bp.name), tostring(item))
+        if self.relay then self.relay:broadcast(Wire.botrec(botId, rec)) end
+      end)
       battle.trainer = setmetatable(
-        { name = bp.name, aiClass = aiClass, aiMods = aiMods },
+        { name = bp.name, aiClass = aiClass, aiMods = aiMods, brain = brain },
         { __index = battle.trainer })
       if bp.name and was and was ~= bp.name
          and type(battle.introText) == "string" then
@@ -9598,6 +9683,7 @@ return function(mod)
           goal = p.goal and p.goal.kind or nil,
           goalAt = p.goal and { x = p.goal.x, y = p.goal.y, dest = p.goal.dest } or nil,
           hunting = (p.huntFor and true) or false,
+          gaveUp = p.gaveUp and { x = p.gaveUp.x, y = p.gaveUp.y } or nil,
           pathLeft = p.huntPath and #p.huntPath or nil,
           beats = p.dueBeats or 0, steps = p.stepsTaken or 0,
           -- seams walked rather than skipped (BR-32), and the town a bot
@@ -9622,6 +9708,17 @@ return function(mod)
     for _, m in ipairs(rec) do
       m.hpFrac = math.max(0, math.min(1, tonumber(frac) or 0))
     end
+    if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
+    return true
+  end
+  -- the last catch line a spectator was shown (POK-188), for a driver
+  mod.exports.catchTold = function() return BR.lastCatchTold end
+  -- a test hook (POK-189): cut a bot's team down to its first `n` rows,
+  -- so a driver can stage "one hurt mon and nothing else"
+  mod.exports.debugBotTrim = function(id, n)
+    if not (BR.matchSeed and BR.players[id]) then return false end
+    local rec = BR:botRecord(id)
+    for i = #rec, (tonumber(n) or 1) + 1, -1 do rec[i] = nil end
     if BR.relay then BR.relay:broadcast(Wire.botrec(id, rec)) end
     return true
   end
