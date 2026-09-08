@@ -124,15 +124,17 @@ local BOT_LOOT = { items = { { id = "POKE_BALL", n = 2 }, { id = "POTION", n = 1
 -- The starting loadout, all in one place (docs/DESIGN.md D7).
 local START_SPECIES = "RATTATA"
 local START_LEVEL = 5
--- TOWN_MAP: the fog ring draws on the TownMap screen, so the map is match
--- equipment, not a collectible (POK-39)
+-- No TOWN_MAP (POK-196): the fog ring draws on the TownMap screen, which
+-- made the map match equipment (POK-39) -- but the start menu's own MAP
+-- row (POK-100) is that screen without the item, and its FLY row is what
+-- the bag's map used to be for.  One map, not two.
 -- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
 -- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
 -- twenty-minute match when the gym is a POK-26 objective.
 -- POKE_DOLL (POK-194): the one way out of a fight in a pinch.  RUN or the
 -- bag spends it -- in a PvP battle a guaranteed escape, in a bot fight the
 -- only escape there is -- and everyone starts with exactly one.
-local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1,
+local START_ITEMS = { POKE_BALL = 6, POTION = 1, SECRET_KEY = 1,
                       POKE_DOLL = 1, [Rods.FIRST] = 1 }
 local START_MONEY = 3000
 
@@ -4144,6 +4146,25 @@ return function(mod)
   -- phase that earned it.
   function BR:catching()
     return self.phase == "safari" or self.phase == "drop"
+  end
+
+  -- Whether the start menu's FLY row can do anything (POK-196): the
+  -- party menu's own two gates -- FLY known, the sky reachable (an
+  -- outside map) -- plus alive, in a session, and not the Safari
+  -- opening, which is played on one map by design.
+  function BR:canFly()
+    if not (self:inSession() and self.status == "alive") or self:catching() then
+      return false
+    end
+    local ow = mod.world:overworld()
+    local okM, Map = pcall(require, "src.world.Map")
+    local okF, FieldDefaults = pcall(require, "src.world.FieldDefaults")
+    if not (ow and ow.map and ow.map.def and okM and okF and self.game) then
+      return false
+    end
+    return ow:partyKnows("FLY")
+       and Map.isOutside(ow.map.def,
+                         FieldDefaults.field(self.game.data, "outsideTilesets")) == true
   end
 
   -- inRound() is the RULES window -- levels, bag, encounters.  This is the
@@ -9196,6 +9217,24 @@ return function(mod)
           if not okMap then say("The TOWN MAP is\nunreadable here.") end
         end,
       })
+      -- ...and FLY beside it (POK-196), only when it can happen: alive,
+      -- outdoors, a party mon that knows FLY, and not inside the Safari
+      -- opening.  The bag's TOWN MAP used to be the way to the fly picker;
+      -- the bag no longer carries one, so the row is the way.  A row that
+      -- only appears when it works needs no refusal text.
+      if BR:canFly() then
+        mod.ui.insertBefore(out, "QUIT", {
+          label = "FLY",
+          onSelect = function()
+            local ow = mod.world:overworld()
+            local okFly = ow and pcall(function()
+              require("src.ui.Screens").push(game, "TownMap", { fly = true,
+                onFly = function(mapId) ow:flyTo(mapId) end })
+            end)
+            if not okFly then say("You can't FLY\nfrom here.") end
+          end,
+        })
+      end
     end
     -- out and watching (POK-18): POKeMON and ITEM open what the watched
     -- trainer carries, read-only, in place of our own empty screens
