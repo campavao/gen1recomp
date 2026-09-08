@@ -2021,6 +2021,39 @@ do
   eq(save.inventory.POKE_DOLL, nil, "the last one leaves the bag entirely")
   eq(doll.submitted, 2, "and still bails")
 
+  -- the bot-fight wrap (POK-194): no roll, a doll or the engine's refusal
+  local refused = 0
+  local function fakeTrainer()
+    local b = { said = {} }
+    b.tryRun = function(s) refused = refused + 1; s.afterQueue = "menu" end
+    b.say = function(s, t) s.said[#s.said + 1] = t end
+    return b
+  end
+  ok(not Flee.wrapTrainer({}, {}), "nothing to wrap is reported")
+  local bsave = { inventory = { POKE_DOLL = 1 }, bagOrder = { "POKE_DOLL" } }
+  local hows = {}
+  local tb = fakeTrainer()
+  ok(Flee.wrapTrainer(tb, { save = bsave, text = "Got away safely!",
+                            onFlee = function(how) hows[#hows + 1] = how end }),
+     "a trainer battle with a tryRun is wrapped")
+  ok(tb:tryRun(), "with a doll RUN escapes")
+  eq(tb.result, "run", "the fight ends as a run")
+  ok(tb.pokeDollEscape, "flagged as a doll escape")
+  eq(tb.afterQueue, "finish", "and finishes")
+  eq(tb.phase, "messages", "through the message queue")
+  eq(tb.said[1], "Got away safely!", "saying so")
+  eq(bsave.inventory.POKE_DOLL, nil, "the doll is spent")
+  eq(bsave.bagOrder, nil, "and the bag order rebuilds")
+  eq(hows[1], "doll", "recorded as a doll")
+  eq(refused, 0, "the engine's refusal never ran")
+  local tb2 = fakeTrainer()
+  Flee.wrapTrainer(tb2, { save = bsave })
+  tb2:tryRun()
+  eq(refused, 1, "without a doll RUN is the engine's own refusal")
+  eq(tb2.result, nil, "and nothing ends")
+  ok(not Flee.spendDoll(nil), "no save, nothing to spend")
+  ok(not Flee.spendDoll({ inventory = {} }), "an empty bag has no doll")
+
   -- the grace and the lockout: an avoided trainer is not a target, and
   -- does not shield anyone behind them
   local me = { id = 1, map = "R", x = 5, y = 5, facing = "up", moving = false,

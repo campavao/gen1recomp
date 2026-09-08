@@ -129,8 +129,11 @@ local START_LEVEL = 5
 -- SECRET_KEY rides along (POK-69): BLAINE's door is `blocked = not
 -- inventory.SECRET_KEY`, and the mansion crawl for it has no place in a
 -- twenty-minute match when the gym is a POK-26 objective.
+-- POKE_DOLL (POK-194): the one way out of a fight in a pinch.  RUN or the
+-- bag spends it -- in a PvP battle a guaranteed escape, in a bot fight the
+-- only escape there is -- and everyone starts with exactly one.
 local START_ITEMS = { POKE_BALL = 6, POTION = 1, TOWN_MAP = 1, SECRET_KEY = 1,
-                      [Rods.FIRST] = 1 }
+                      POKE_DOLL = 1, [Rods.FIRST] = 1 }
 local START_MONEY = 3000
 
 -- Every badge and every HM, from the drop.
@@ -7507,6 +7510,21 @@ return function(mod)
         onFlee = function() BR.fleeing = opponent end,
       })
     end
+    -- ...and a bot fight gets the doll's bail too (POK-194): RUN or the
+    -- bag spends one and the fight ends as a run; without one RUN is the
+    -- engine's own "no running from a trainer battle"
+    if BR.botFight and ev and ev.battle and ev.battle.kind == "trainer"
+       and not ev.battle.mirror and not ev.battle.botSim and BR.game then
+      local b = ev.battle
+      Flee.wrapTrainer(b, {
+        save = BR.game.save,
+        text = b.romText and b:romText("_GotAwayText", "Got away safely!")
+          or "Got away safely!",
+        onFlee = function()
+          pcall(function() require("src.core.Sound").play(BR.game.data, "Run") end)
+        end,
+      })
+    end
     -- ...and whoever is watching us follows us in (lib/mirror.lua).  After
     -- the bot clamp above: the parties go out as they stand at turn one.
     if ev and ev.battle and ev.battle.kind ~= "link" then BR:startRecording(ev.battle) end
@@ -7641,6 +7659,19 @@ return function(mod)
           and BR.players[botId].name), tostring(drank))
       end
       if BR.relay then BR.relay:broadcast(Wire.botrec(botId, rec)) end
+    end
+    if ev.result == "run" then
+      -- a POKe DOLL bail (POK-194): the same head start a PvP flee buys.
+      -- The grace keeps the bot from calling the fight again on the spot
+      -- (tryBotEngage honours fleeAvoid), the lockout keeps us from
+      -- restarting it, and the count halves nothing here -- a bot fight
+      -- has no roll to halve -- but keeps the record honest.
+      local now = clock() or 0
+      BR.fledFrom[botId] = (BR.fledFrom[botId] or 0) + 1
+      BR.fleeLockout[botId] = now + Flee.LOCKOUT_SECONDS
+      BR.fleeGrace[botId] = now + Flee.GRACE_SECONDS
+      log:say("FLEE: a POKe DOLL got you away from %s",
+              tostring((BR.players[botId] or {}).name or botId))
     end
     if ev.result == "win" then
       local bot = BR.players[botId]
@@ -8480,6 +8511,20 @@ return function(mod)
   -- through to the vanilla read-only map, as does every other item.
   mod.hooks:wrap("item.use", function(next, game, battle, id, target, list,
                                       moveIndex, picker)
+    -- A POKe DOLL from the bag in a bot fight (POK-194).  The engine's
+    -- ItemEffects says "not the time" for a doll in any non-wild battle;
+    -- here it is the way out.  The bag closes and RUN is pressed for you:
+    -- Flee.wrapTrainer on this battle spends the doll and ends the fight,
+    -- so the bag and the RUN row are one path.  A link battle never opens
+    -- the bag at all (LinkBattle.openItems), and its RUN spends the doll
+    -- through Flee.wrap already.
+    if id == "POKE_DOLL" and battle and BR.botFight and BR:inSession()
+       and battle.kind == "trainer" and not battle.mirror and not battle.botSim
+       and type(battle.tryRun) == "function" then
+      if list and list.close then list:close() end
+      battle:tryRun()
+      return
+    end
     if id == "TOWN_MAP" and not battle
        and BR:inSession() and BR.status == "alive" then
       local ow = mod.world:overworld()

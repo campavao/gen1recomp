@@ -253,9 +253,12 @@ never overwrite your actual playthrough.
   better than five in eight, a little better each retry — and a failed
   attempt means you fight this turn. Every earlier escape from the *same*
   pursuer halves your odds: a determined pursuer wears down prey. A POKé
-  DOLL is a guaranteed bail, and it is spent. After a flee neither of you
-  engages the other for four seconds (the head start), and the runner
-  cannot start that fight again for thirty.
+  DOLL is a guaranteed bail, and it is spent: everyone starts with one,
+  and it works against bots too, where RUN is otherwise refused outright
+  -- press RUN, or use it from the bag, and the fight ends as a run,
+  nobody beaten. After a flee neither of you engages the other for four
+  seconds (the head start), and the runner cannot start that fight again
+  for thirty.
 - **Moves are free.** From the party menu, MOVES swaps any of a Pokémon's
   four moves for any move it could ever learn — level-up moves at any
   level, every compatible TM and HM — no tutor, no item, no ceremony.
@@ -911,6 +914,18 @@ starts a match of two. `EMPTY OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-empty-room   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/empty_room_smoke.lua lovec .
+```
+
+### The POKé DOLL is the way out
+
+`doll_smoke.lua` reads the starting doll at the drop, then opens three bot
+fights on Pewter's street: the doll from the bag ends the first as a run
+(doll spent, bot alive, no re-engage inside the grace), RUN spends a second
+one, and with none RUN is the engine's own refusal and the third fight
+stays open. `DOLL OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-doll   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/doll_smoke.lua lovec .
 ```
 
 ### The playtest probes
