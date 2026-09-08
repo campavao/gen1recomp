@@ -491,6 +491,7 @@ do
   ok(type(why) == "string" and why:find("2 trainers", 1, true),
      "the refusal says how many it needs")
   eq(Bots.MIN_TRAINERS, 2, "two is the floor")
+  eq(Bots.TURN_SECONDS, 30, "a bot fight's FIGHT menu runs a thirty-second clock")
 
   ok(Bots.isBot(Bots.ID_BASE), "ID_BASE is a bot id")
   ok(not Bots.isBot(1), "a room id is not a bot")

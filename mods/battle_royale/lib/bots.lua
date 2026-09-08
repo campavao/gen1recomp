@@ -370,6 +370,13 @@ end
 
 -- After a fight, both sides get a breather before another one, so a crowded
 -- map does not resolve its whole roster in a couple of ticks.
+-- A shot clock on the FIGHT menu of a bot fight (the user, 2026-09-08):
+-- the bot always picks; the player who does not pick in time is not
+-- penalised beyond the turn -- their mon does nothing while the bot's
+-- moves, and the menu comes back with a fresh clock.  The PvP clock
+-- (PVP_TURN_SECONDS) forfeits; this one only spends the turn.
+Bots.TURN_SECONDS = 30
+
 Bots.FIGHT_COOLDOWN = 12
 
 -- ...and so does the PLAYER (POK-174).  Bots stalking a trainer who is

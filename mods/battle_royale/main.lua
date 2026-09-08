@@ -7093,6 +7093,53 @@ return function(mod)
     end
   end
 
+  -- The bot fight's shot clock (Bots.TURN_SECONDS).  Wrapped on the
+  -- instance the way LinkBattle wraps its own tournament clock: while
+  -- the FIGHT menu is the player's, a count runs top-right; at zero the
+  -- turn is spent the way a used item spends it (BattleState:itemUsed) --
+  -- the player's mon does nothing, the bot's move runs, residuals tick,
+  -- the turn ends -- and the menu returns with a fresh clock.  Never a
+  -- forfeit: a bot never idles, so the clock is only ever the player's.
+  local function armBotClock(battle)
+    local baseUpdate, baseDraw = battle.update, battle.draw
+    if type(baseUpdate) ~= "function" or type(baseDraw) ~= "function" then return end
+    battle.update = function(s, dt)
+      if s.phase == "menu" and not s.result then
+        if not s.turnClockActive then
+          s.turnClockActive = true
+          s.turnClock = Bots.TURN_SECONDS
+        end
+        s.turnClock = s.turnClock - (tonumber(dt) or 0)
+        if s.turnClock <= 0 then
+          s.turnClockActive = false
+          s.phase = "messages"
+          s.afterQueue = "menu"
+          s:say(("Time's up!\n%s did\nnothing!"):format(
+            (s.player and s.player.name) or "Your POKeMON"))
+          s:act(function()
+            s:executeAction(s.enemy, s.player, s:enemyAction())
+          end)
+          s:queueResidual(s.player, s.enemy)
+          s:act(function() s:endOfTurn() end)
+          return
+        end
+      else
+        s.turnClockActive = false
+      end
+      return baseUpdate(s, dt)
+    end
+    battle.draw = function(s, ...)
+      baseDraw(s, ...)
+      if s.phase == "menu" and s.turnClockActive and s.turnClock then
+        pcall(function()
+          love.graphics.setColor(1, 1, 1, 1)
+          require("src.render.Font").draw(
+            tostring(math.max(0, math.ceil(s.turnClock))), 144, 4)
+        end)
+      end
+    end
+  end
+
   function BR:startBotBattle(botId)
     -- POK-145: asked HERE, at the moment the fight opens, and not at the
     -- moment the walk-up that leads to it was armed.
@@ -7179,6 +7226,7 @@ return function(mod)
                                           math.max(1, (lead.mon.stats and lead.mon.stats.hp) or 1))
       end)
     end
+    armBotClock(battle)
     battle.onFinish = function(result) ow:afterBattle(result, battle) end
     ow:pushBattle(battle)
   end

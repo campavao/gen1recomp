@@ -257,6 +257,12 @@ never overwrite your actual playthrough.
   swap, and party-as-health is meant to bite.
 - **No nickname prompt** on a catch. The team is disposable and you may
   catch a dozen under fog pressure.
+- **The FIGHT menu has a clock, against bots too.** A PvP battle counts
+  down thirty seconds while the menu is yours and forfeits you at zero. A
+  bot fight counts the same thirty, and at zero your Pokémon simply does
+  nothing while the bot's moves; the menu comes back with a fresh clock.
+  A bot never idles, so the clock is only ever yours, and sitting in a
+  menu is not a roof either way.
 - **Running from another trainer is hard.** RUN in a PvP battle is a
   roll — one in four at equal speed, half at twice their speed, never
   better than five in eight, a little better each retry — and a failed
@@ -974,6 +980,17 @@ from the bag. `FLYROW OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-map-fly   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/map_fly_smoke.lua lovec .
+```
+
+### A bot fight's shot clock
+
+`bot_clock_smoke.lua` opens a bot fight, reads the clock the FIGHT menu
+arms, winds it to a second and presses nothing: the bot's move runs on its
+own, the fight stays open, and the menu returns with the clock rearmed.
+`CLOCK OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-bot-clock   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_clock_smoke.lua lovec .
 ```
 
 ### The playtest probes
