@@ -2278,6 +2278,23 @@ do
   eq(count, 8, "eight gyms, eight leaders, eight prizes")
   ok(Gyms.leader(nil) == nil, "no class, no leader")
   ok(Gyms.leader("OPP_YOUNGSTER") == nil, "a youngster runs no gym")
+
+  -- bosses talk for one page in a match (POK-193)
+  ok(Gyms.boss("OPP_BROCK") == Gyms.LEADERS.OPP_BROCK, "a leader is a boss")
+  eq((Gyms.boss("OPP_LORELEI") or {}).name, "LORELEI", "so is an Elite Four member")
+  ok(Gyms.boss("OPP_YOUNGSTER") == nil, "a youngster is not")
+  ok(Gyms.boss(nil) == nil, "nor is nobody")
+  local elite = 0
+  for _ in pairs(Gyms.ELITE) do elite = elite + 1 end
+  eq(elite, 4, "four of them")
+  eq(Gyms.firstPage("I'm BROCK!\nI'm PEWTER's GYM\vLEADER!\fI believe in rock\nhard defense!"),
+     "I'm BROCK!\nI'm PEWTER's GYM\vLEADER!", "the first page of a speech")
+  eq(Gyms.firstPage("One page only"), "One page only", "a one-page speech is itself")
+  ok(Gyms.firstPage("") == nil, "an empty speech has no page")
+  ok(Gyms.firstPage("\fLate start") == nil, "an empty first page is no page")
+  ok(Gyms.firstPage(nil) == nil, "no speech, no page")
+  ok(Gyms.beatenLine("BROCK"):find("^BROCK: "), "a beaten boss is named")
+  ok(not Gyms.beatenLine("BROCK"):find("\f"), "and says one page")
   if okD and Data and Data.load then
     pcall(function() Data:load() end)
     if Data.items then

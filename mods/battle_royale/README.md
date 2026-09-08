@@ -151,6 +151,13 @@ handler on every trainer (the fork's gate) and a `noSight` entry beside it
 (upstream 0.2.56's). Both are filled at the drop and emptied on the way
 out, so a real playthrough keeps its ambushes.
 
+**Bosses talk for one page.** A gym leader in a match says the first page
+of their speech and the fight opens; a win prints the purse line — the
+prize TM and the money — and nothing else: no badge pages, no TM
+explanation, no vanilla TM (the match's own prize is the TM). The Elite
+Four get the same cut now that their rooms stand open. Outside a session
+every speech is untouched.
+
 **Beaten means gone.** When anything falls — a player, a bot, or one of
 Kanto's own route trainers — its sprite disappears for every client and
 only the Poké Balls stay. Walking into an area and finding balls with no
@@ -926,6 +933,17 @@ stays open. `DOLL OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-doll   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/doll_smoke.lua lovec .
+```
+
+### A gym leader talks for one page
+
+`gym_talk_smoke.lua` counts text pages before BROCK's battle screen and
+text boxes after his defeat, mid-match (one page, no end text, the purse
+box only, the prize TM and no TM34) and then outside a session (the
+four-page speech back). `TALK OK` passes it.
+
+```sh
+POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-gym-talk   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/gym_talk_smoke.lua lovec .
 ```
 
 ### The playtest probes

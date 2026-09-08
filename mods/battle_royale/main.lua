@@ -7449,6 +7449,47 @@ return function(mod)
     BR.npcFight = { map = here.mapId, obj = obj, x = npc.cellX, y = npc.cellY }
   end)
 
+  -- The reward chain a boss win runs (POK-193), cut on THIS overworld
+  -- instance for the session: checkVictoryRewards pushes the badge pages
+  -- when the battle did not show them and the TM hand-over pages either
+  -- way, and neither describes anything a match player gets.  The flags
+  -- still land -- the leader's beaten event, the deactivated underlings,
+  -- the hidden objects, the badge -- because the base scripts key on
+  -- them; the vanilla TM is skipped (the match's own prize TM and purse
+  -- come from the battle.ended handler).  Outside a session, or for any
+  -- trainer who is not a boss, the engine's own runs.  Idempotent: the
+  -- instance is wrapped once and asks BR:inSession() at call time.
+  function BR:cutVictoryRewards(ow)
+    if not ow or ow.brVictoryCut then return end
+    local base = ow.checkVictoryRewards
+    if type(base) ~= "function" then return end
+    ow.brVictoryCut = true
+    ow.checkVictoryRewards = function(self_, trainerClass, partyIndex, shown)
+      if not (BR:inSession() and Gyms.boss(trainerClass)) then
+        return base(self_, trainerClass, partyIndex, shown)
+      end
+      local game = BR.game
+      local okV, victories = pcall(require, "data.scripts.victories")
+      local reward = okV and victories[trainerClass .. "#" .. tostring(partyIndex or 1)]
+      if reward and game and game.save then
+        local save = game.save
+        if reward.flag then save.flags[reward.flag] = true end
+        for _, flag in ipairs(reward.deactivate or {}) do save.flags[flag] = true end
+        if reward.hide then
+          pcall(function()
+            local Commands = require("src.script.Commands")
+            local ctx = { game = game, save = save, overworld = self_ }
+            for _, entry in ipairs(reward.hide) do
+              Commands.hide_object(ctx, entry[1], entry[2])
+            end
+          end)
+        end
+        if reward.badge then save.inventory[reward.badge] = 1 end
+      end
+      if self_.runVictoryHook then return self_:runVictoryHook() end
+    end
+  end
+
   function BR:npcDefeated(npc, party)
     local data = self.game and self.game.data
     if not data then return end
@@ -8632,6 +8673,46 @@ return function(mod)
           return
         end
       end
+    end
+    -- A boss talks for one page in a match (POK-193).  The gym scripts'
+    -- leaderTalk prints the leader's whole pre-battle speech and hands
+    -- the battle every badge page as its end text; then the engine's
+    -- checkVictoryRewards runs the TM hand-over chain on top, and the
+    -- next talk is the advice speech.  Talk is single-winner with mods
+    -- ahead of base, so this replaces leaderTalk (and story4's
+    -- e4LeaderTalk) outright for the length of a session: the speech's
+    -- first page, then engageTrainer with no end text and the pre-battle
+    -- box skipped.  The reward chain is cut on the overworld instance
+    -- (matchVictoryRewards): the flags still land, the badge too, but no
+    -- vanilla TM and no pages -- the match's own prize and purse are
+    -- said by the battle.ended handler.  Outside a session the base
+    -- scripts run untouched.
+    local boss = BR:inSession() and def and Gyms.boss(def.trainerClass)
+    if boss and ow and ow.map and ow.map.def and data then
+      if ow:trainerDefeated(npc) then
+        say(Gyms.beatenLine(boss.name))
+        return
+      end
+      local label = ow.map.def.label
+      local header = data.trainerHeader and data:trainerHeader(label, def.index)
+      local pre = header and header.battle and data.text and data.text[header.battle]
+      if not pre and data.resolveText then
+        pre = select(1, data:resolveText(label, def.text))
+      end
+      BR:cutVictoryRewards(ow)
+      local function bossFight()
+        ow:engageTrainer(npc, nil, nil, true, nil, false)
+      end
+      local page = Gyms.firstPage(pre)
+      if page then
+        local okT, TextBox = pcall(require, "src.render.TextBox")
+        if okT then
+          BR.game.stack:push(TextBox.new(BR.game, page, bossFight))
+          return
+        end
+      end
+      bossFight()
+      return
     end
     -- the gate worker sells no admission during a round (POK-40): the
     -- talk path could otherwise charge a second 500 and re-open the zone
