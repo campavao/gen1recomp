@@ -57,6 +57,55 @@ return function(game)
   -- a party that survives a turn of doing nothing
   L.armParty(C, "MEWTWO", 100, "PSYCHIC_M")
 
+  -- ------------------------------------------------- 0. a wild battle too
+  -- every local battle in a session runs the clock (the user, 2026-09-08)
+  U.teleport(game, ARENA, AX, AY, "down")
+  U.wait(30)
+  local okW, whyW = E.debugWild("PIDGEY", 5)
+  if not okW then return C.fail("no wild battle: " .. tostring(whyW)) end
+  local wild
+  for _ = 1, 1000 do
+    local top = game.stack:top()
+    if type(top) == "table" and top.kind == "wild" and top.enemy then wild = top break end
+    U.wait(1)
+  end
+  if not wild then return C.fail("the wild battle never reached the stack") end
+  for _ = 1, 600 do
+    if wild.phase == "menu" then break end
+    U.tap(game, "a")
+    U.wait(5)
+  end
+  if wild.phase ~= "menu" then return C.fail("the wild battle never reached the menu") end
+  U.wait(3)
+  if not wild.turnClockActive then return C.fail("a wild battle's menu opened with no clock") end
+  local wildMoves = 0
+  local baseWild = wild.enemyAction
+  wild.enemyAction = function(s) wildMoves = wildMoves + 1 return baseWild(s) end
+  wild.turnClock = 1
+  local wildFired = false
+  for _ = 1, 600 do
+    if wild.phase ~= "menu" then wildFired = true break end
+    U.wait(2)
+  end
+  if not wildFired then return C.fail("the wild clock never ran out") end
+  for _ = 1, 1500 do
+    if wild.phase == "menu" then break end
+    if game.stack:top() == C.ow() then return C.fail("the wild battle ended on the timeout") end
+    U.tap(game, "a")
+    U.wait(4)
+  end
+  if wild.phase ~= "menu" then return C.fail("the wild menu never came back") end
+  if wildMoves < 1 then return C.fail("the wild mon did not move on the timeout") end
+  U.log(("CLOCK: a wild battle ran the clock; the wild mon moved %d time(s) unanswered"):format(wildMoves))
+  wild:chooseMenu("run")
+  for _ = 1, 600 do
+    if game.stack:top() == C.ow() then break end
+    U.tap(game, "a")
+    U.wait(4)
+  end
+  if game.stack:top() ~= C.ow() then return C.fail("could not run from the wild battle") end
+  U.wait(30)
+
   local bot = (E.bots() or {})[1]
   if not bot then return C.fail("no bot") end
 

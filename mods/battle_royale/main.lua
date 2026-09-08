@@ -1397,7 +1397,7 @@ return function(mod)
     self:restorePace()
     self.lastOpponent = nil
     self.fledFrom, self.fleeGrace, self.fleeLockout, self.fleeing = {}, {}, {}, nil
-    self.fledMark = {}
+    self.fledMark, self.myFledUntil = {}, nil
     self.peeked, self.lastPeekAt = nil, nil
     self:stopRecording("reset")
     self:closeMirror("reset")
@@ -7103,8 +7103,10 @@ return function(mod)
   -- the turn ends -- and the menu returns with a fresh clock.  Never a
   -- forfeit: a bot never idles, so the clock is only ever the player's.
   local function armBotClock(battle)
+    if not battle or battle.brClock then return end
     local baseUpdate, baseDraw = battle.update, battle.draw
     if type(baseUpdate) ~= "function" or type(baseDraw) ~= "function" then return end
+    battle.brClock = true
     battle.update = function(s, dt)
       if s.phase == "menu" and not s.result then
         if not s.turnClockActive then
@@ -7570,6 +7572,17 @@ return function(mod)
     log:say("the zone's balls: %s", table.concat(names, " "))
   end
 
+  -- The boot in a bubble (the runner's mark), the mod's own art, loaded
+  -- once; a failure caches as false so nothing retries every frame.
+  function BR:shoeImage()
+    if self.shoeImg == nil then
+      local okS, shoe = pcall(love.graphics.newImage,
+                              "mods/battle_royale/assets/shoe.png")
+      self.shoeImg = (okS and shoe) or false
+    end
+    return self.shoeImg or nil
+  end
+
   -- The reward chain a boss win runs (POK-193), cut on THIS overworld
   -- instance for the session: checkVictoryRewards pushes the badge pages
   -- when the battle did not show them and the TM hand-over pages either
@@ -7686,6 +7699,15 @@ return function(mod)
           pcall(function() require("src.core.Sound").play(BR.game.data, "Run") end)
         end,
       })
+    end
+    -- The shot clock on EVERY local battle in a session (the user,
+    -- 2026-09-08): a route trainer's, a gym leader's, a wild one's -- the
+    -- FIGHT menu is not a roof anywhere.  Not the Safari's (its menu has
+    -- no move to skip), not a link battle (its own clock, POK-59), never
+    -- a mirror.  Idempotent: the bot fight armed at build keeps its wrap.
+    if ev and ev.battle and BR:inSession() and ev.battle.kind ~= "link"
+       and not ev.battle.mirror and not ev.battle.botSim and not ev.battle.safari then
+      armBotClock(ev.battle)
     end
     -- ...and whoever is watching us follows us in (lib/mirror.lua).  After
     -- the bot clamp above: the parties go out as they stand at turn one.
@@ -7832,6 +7854,7 @@ return function(mod)
       BR.fledFrom[botId] = (BR.fledFrom[botId] or 0) + 1
       BR.fleeLockout[botId] = now + Flee.LOCKOUT_SECONDS
       BR.fleeGrace[botId] = now + Flee.GRACE_SECONDS
+      BR.myFledUntil = now + Flee.GRACE_SECONDS   -- we wear the boot
       log:say("FLEE: a POKe DOLL got you away from %s",
               tostring((BR.players[botId] or {}).name or botId))
     end
@@ -7910,6 +7933,7 @@ return function(mod)
     if opponent then
       local now = clock() or 0
       if BR.fleeing == opponent then
+        BR.myFledUntil = now + Flee.GRACE_SECONDS   -- we wear the boot
         BR.fledFrom[opponent] = (BR.fledFrom[opponent] or 0) + 1
         BR.fleeLockout[opponent] = now + Flee.LOCKOUT_SECONDS
         BR.fleeGrace[opponent] = now + Flee.GRACE_SECONDS
@@ -9223,12 +9247,7 @@ return function(mod)
           if npc and npc.px and npc.py then
             local img, quad = sheet, nil
             if fled then
-              if BR.shoeImg == nil then
-                local okS, shoe = pcall(love.graphics.newImage,
-                                        "mods/battle_royale/assets/shoe.png")
-                BR.shoeImg = (okS and shoe) or false
-              end
-              img = BR.shoeImg or nil
+              img = BR:shoeImage()
               if img then
                 quad = love.graphics.newQuad(0, 0, 16, 16, img:getDimensions())
               end
@@ -9253,6 +9272,20 @@ return function(mod)
               g.draw(img, quad, mx, my, 0, markZ, markZ)
             end
           end
+        end
+      end
+      -- ...and our own boot (the user, 2026-09-08: ran from a bot in a
+      -- solo match and saw nothing -- the runner was us, and the loop
+      -- above only marks ghosts).  Same slot, over the player's sprite.
+      if BR.myFledUntil and BR.myFledUntil > now then
+        local shoe = BR:shoeImage()
+        local ow = mod.world:overworld()
+        local me = ow and ow.player
+        if shoe and me and me.px and me.py then
+          local mx, my = Ghosts.markAt(me.px, me.py, cam, markVw, markVh, markZ)
+          g.setColor(1, 1, 1, 1)
+          g.draw(shoe, love.graphics.newQuad(0, 0, 16, 16, shoe:getDimensions()),
+                 math.floor(mx), math.floor(my), 0, markZ, markZ)
         end
       end
     end
@@ -9809,6 +9842,15 @@ return function(mod)
     if not BR.players[id] then return false end
     BR.fledMark[id] = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
     return true
+  end
+  -- ...and our own
+  mod.exports.debugFled = function(secs)
+    BR.myFledUntil = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
+    return true
+  end
+  -- a wild battle on demand, for the clock driver
+  mod.exports.debugWild = function(species, level)
+    return mod.world:startWildBattle(species, level)
   end
   mod.exports.debugChallenge = function(id)
     if not (BR.relay and BR.relay:isOpen() and BR.players[id]) then return false end

@@ -257,12 +257,13 @@ never overwrite your actual playthrough.
   swap, and party-as-health is meant to bite.
 - **No nickname prompt** on a catch. The team is disposable and you may
   catch a dozen under fog pressure.
-- **The FIGHT menu has a clock, against bots too.** A PvP battle counts
-  down thirty seconds while the menu is yours and forfeits you at zero. A
-  bot fight counts the same thirty, and at zero your Pokémon simply does
-  nothing while the bot's moves; the menu comes back with a fresh clock.
-  A bot never idles, so the clock is only ever yours, and sitting in a
-  menu is not a roof either way.
+- **The FIGHT menu has a clock, in every battle.** A PvP battle counts
+  down thirty seconds while the menu is yours and forfeits you at zero.
+  Every other battle in a match — a bot, a route trainer, a gym leader, a
+  wild encounter — counts the same thirty, and at zero your Pokémon simply
+  does nothing while the other side moves; the menu comes back with a
+  fresh clock. The Safari's BALL/BAIT/ROCK menu is the one exception.
+  Sitting in a menu is not a roof anywhere.
 - **Running from another trainer is hard.** RUN in a PvP battle is a
   roll — one in four at equal speed, half at twice their speed, never
   better than five in eight, a little better each retry — and a failed
@@ -273,8 +274,9 @@ never overwrite your actual playthrough.
   -- press RUN, or use it from the bag, and the fight ends as a run,
   nobody beaten. After a flee neither of you engages the other for four
   seconds (the head start), and the runner cannot start that fight again
-  for thirty. Whoever ran from you wears a **boot** in a bubble over their
-  head for those four seconds, the way `!` marks a fight and `?` a menu.
+  for thirty. Whoever ran wears a **boot** in a bubble over their head for
+  those four seconds — over the trainer who ran from you, and over you
+  when you ran — the way `!` marks a fight and `?` a menu.
   Without a doll, RUN against a bot says so: "No POKé DOLL left!"
 - **Moves are free.** From the party menu, MOVES swaps any of a Pokémon's
   four moves for any move it could ever learn — level-up moves at any
@@ -986,10 +988,10 @@ POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENT
 
 ### A bot fight's shot clock
 
-`bot_clock_smoke.lua` opens a bot fight, reads the clock the FIGHT menu
-arms, winds it to a second and presses nothing: the bot's move runs on its
-own, the fight stays open, and the menu returns with the clock rearmed.
-`CLOCK OK` passes it.
+`bot_clock_smoke.lua` starts a wild battle and then a bot fight, reads
+the clock the FIGHT menu arms in each, winds it to a second and presses
+nothing: the other side's move runs on its own, the fight stays open, and
+the menu returns with the clock rearmed. `CLOCK OK` passes it.
 
 ```sh
 POKEPORT_GAME=red POKEPORT_IMPORT_ROM=<rom.gb> POKEPORT_SPEED=3   POKEPORT_IDENTITY=br-bot-clock   POKEPORT_DRIVER=mods/battle_royale/tests/drivers/bot_clock_smoke.lua lovec .

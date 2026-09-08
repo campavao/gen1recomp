@@ -77,7 +77,20 @@ return function(game)
   -- the grace lapses, and with it the mark
   local t0 = love.timer.getTime()
   while love.timer.getTime() - t0 < 3 do U.wait(5) end
-  U.log("SHOE OK: the boot sits in the bubble slot for the grace")
+  -- ...and our own boot, when WE ran (the solo case: the runner is the
+  -- only one looking)
+  E.debugPlaceBot(bot, "PEWTER_CITY", 6, 13)   -- out of frame
+  E.debugFled(2)
+  U.wait(2)
+  if SHOTS then
+    E.debugFled(2)
+    U.wait(2)
+    if not U.shot(game, SHOTS .. "/shoe_me.png") then
+      return C.fail("the second screenshot did not land")
+    end
+    U.log("SHOE: captured " .. SHOTS .. "/shoe_me.png")
+  end
+  U.log("SHOE OK: the boot sits in the bubble slot for the grace, theirs and ours")
   love.event.quit(0)
   U.wait(10)
 end
