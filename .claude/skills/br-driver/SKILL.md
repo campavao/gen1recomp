@@ -14,33 +14,44 @@ until the window closes.
 
 ## Launch
 
-**Never let a driver's window steal the user's focus.** They are working while you run,
-and a window that jumps in front costs them their place. `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1`
-is not optional — keep it on every driver launch:
+    tools/drive.sh <driver> [identity]
 
-    SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 \
-    POKEPORT_GAME=red \
-    POKEPORT_IMPORT_ROM="C:/Users/cam95/Documents/roms/pokemon-red-us.gb" \
-    POKEPORT_IDENTITY=br-<name> POKEPORT_SPEED=3 \
-    POKEPORT_DRIVER=mods/battle_royale/tests/drivers/<driver>.lua \
-    "/c/Program Files/LOVE/lovec.exe" . > <scratchpad>/run.log 2>&1
+`<driver>` is a path or a bare name (`bot_smoke`), resolved against the BR
+driver dir then the engine one. The script sets the ROM, the game, the speed
+and a per-driver identity, writes `$LOGDIR/<name>.log`, and prints the
+`[driver]` lines when the run ends. Knobs: `SHOTS`, `SPEED`, `ROM`, `LOVEC`,
+`GAME`, `RELAY_PORT`, `LOGDIR`.
 
-From the repo root. A fresh identity imports the ROM on first run (~1 min); budget
-2–3 min per scenario after that.
+**Do not hand-roll the `lovec` line.** Two SDL variables have to be on every
+driver launch and are easy to forget, and both cost the user rather than the
+run:
 
-The window still opens and still renders, so screenshots and `U.shot` work normally —
-it just does not take focus. The hint is SDL's own (`SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN`,
-verified present in both the installed LOVE 11.5 SDL 2.28.5 and the packed build's), so it
-costs nothing where it is unsupported. Do **not** reach for `love.window.minimize()` instead:
-a minimized window may stop rendering, which silently breaks every screenshot assertion.
+  * **No window at all.** `conf.lua` sets `t.window.visible = false` for a
+    `POKEPORT_DRIVER` run, so nothing can land on top of their work. The GL
+    context and the backbuffer are still there, so `captureScreenshot` still
+    captures -- verified byte-identical to a visible run. That is NOT true of
+    `love.window.minimize()`, whose rendering the OS may stop, silently
+    breaking every screenshot assertion. `SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1`
+    stays on as the belt to that brace, for `WATCH=1` and for anywhere a
+    window is shown after all.
+  * `SDL_AUDIODRIVER=dummy` -- no output device is opened at all, so nothing
+    arrives at whatever volume the speakers were left at. `love.audio` calls
+    all still succeed, so a driver that hooks the audio layer
+    (`tests/drivers/trainer_fanfare_bug764_test.lua`) still sees them.
 
-The one launch that SHOULD take focus is handing the game to the user to play — they are
-asking for it then. Leave the hint off for that, and only that.
+`tools/drive.sh` sets all of it, and `WATCH=1 tools/drive.sh <driver>` shows the
+window when the point is to see the run happen. A fresh identity imports the ROM on first run
+(~1 min); budget 2-3 min per scenario after that.
 
-To hand the game to the user instead, drop the driver and identity — the default
-`pokemon-love2d` identity already has `red/` imported and holds their career and
-skins. Tell them the log arrives when they close the window, and that `lovec`'s own
-console shows it live.
+To hand the game to the user instead:
+
+    tools/drive.sh --play
+
+Focus and sound come back on for that one -- they asked for the window, so it
+should arrive in front and make noise -- and it drops the driver and the
+identity, so the default `pokemon-love2d` identity brings their career and
+skins. Tell them the log arrives when they close the window, and that
+`lovec`'s own console shows it live.
 
 ## Driver contract
 
@@ -98,13 +109,14 @@ covered frame fails loudly.
 
 ## Two-client PvP
 
-    SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 \
+    SDL_WINDOW_NO_ACTIVATION_WHEN_SHOWN=1 SDL_AUDIODRIVER=dummy \
     python mods/battle_royale/tests/drivers/pvp/run_pvp.py [duel|stall|freeze] [workdir]
 
-This one opens TWO windows, so the hint matters more here, not less. `run_pvp.py` builds
-each child's environment with `env = dict(os.environ)` and never overrides `SDL_*`, so
-setting it on the parent shell reaches both clients — there is nothing to change in the
-harness itself.
+This one opens TWO windows and would play TWO soundtracks, so both variables matter
+here more, not less — and `tools/drive.sh` is not in the path, because the harness
+launches the clients itself. `run_pvp.py` builds each child's environment with
+`env = dict(os.environ)` and never overrides `SDL_*`, so setting them on the parent
+shell reaches both clients — there is nothing to change in the harness itself.
 
 Boots `relay/server.js` on `127.0.0.1:7790`, launches two LOVE instances that
 coordinate through handshake files in `BR_PVP_DIR`, and watches both logs: any

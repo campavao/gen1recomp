@@ -58,6 +58,23 @@ the next sync. Replay it onto `battle-royale` here instead.
 `main.lua` is rewritten — a Windows file-lock artefact, not a defect. Re-run.
 Three clean runs is the check.
 
+**Launch drivers with `tools/drive.sh <driver> [identity]`, never a hand-rolled
+`lovec` line.** A driver run shows **no window at all** (`conf.lua` sets `t.window.visible = false`
+when `POKEPORT_DRIVER` is set) and opens **no audio device** (`SDL_AUDIODRIVER=dummy`),
+so it cannot land on the user's screen or their speakers. Both are transparent to
+the run: `captureScreenshot` still captures from the backbuffer (verified
+byte-identical to a visible run, unlike a *minimized* window, whose rendering the
+OS may stop) and `love.audio` calls all still succeed. `WATCH=1` shows the window.
+`tools/drive.sh --play` is the one launch that keeps focus and sound: handing the
+game to the user, who asked for it.
+
+**`mods/br_sandbox/` is dev-only scaffolding, never shipped.** It registers
+`BR_ARENA`, a flat 24x20-cell room on the OVERWORLD tileset for staging tests
+without fighting real Kanto for a clear spot. `outdoor = false` on the record is
+load-bearing: `Map.isOutdoor` reads that flag before the tileset, which keeps the
+arena out of `Spawn.outdoorMaps` and off the fly list. The release sync copies only
+`mods/battle_royale/`, so nothing here can reach a player.
+
 **A stock checkout is already red.** `scripts/test.sh` fails T0/T1/T2/T3 tiers and
 `tests/run_tests.lua` has 23 FAILs before you touch anything. Diff the `^FAIL` set
 against a stash before calling anything a regression. Never pipe a suite through

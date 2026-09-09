@@ -1,0 +1,12 @@
+{
+  "id": "br_sandbox",
+  "name": "BR Sandbox Arena",
+  "version": "0.1.0",
+  "entry": "main.lua",
+  "category": "GAMEPLAY",
+  "priority": 200,
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "description": "A dev-only flat arena map (BR_ARENA) for isolated Kanto BR testing. Never shipped."
+}

@@ -60,8 +60,40 @@ function U.shot(game, path)
   return false
 end
 
--- skip the intro movie + title into a fresh overworld game
+-- Start a fresh game and land in the overworld, skipping the boot screens.
+--
+-- Game:startNewGame{ intro = false } is the engine's own no-intro path: the
+-- same save skeleton (so save.created still fires for mods), the same spawn
+-- cell, the same boot-config names -- just without the splash movie, the
+-- title menu, Oak's speech and the two naming screens.
+--
+-- It replaced a loop that mashed A through all of that, which cost 1483
+-- frames (8.3s at POKEPORT_SPEED=3) and arrived wrong twice over: the 400
+-- taps ran out with OakSpeech still on top, and the taps that landed on the
+-- naming screen typed the letter A, so every driver ran as a player called
+-- AAAAAAA.  This is 5 frames, and names them from field.boot.
+--
+-- A driver that wants those screens -- because they are what it is testing --
+-- asks for them by name: U.introNewGame.
 function U.newGame(game)
+  game:startNewGame({ intro = false })
+  -- The push is synchronous, but Game.overworld is stamped by the state's
+  -- own enter (OverworldController.lua:233) and a mod may put a say box up
+  -- off save.created, so a blind wait is a race.  Spin for the overworld
+  -- actually being on top, then settle.
+  for _ = 1, 60 do
+    if game.overworld and game.stack:top() == game.overworld then break end
+    U.wait(5)
+  end
+  U.wait(10)
+end
+
+-- The boot screens, walked the way a player walks them: splash, title,
+-- NEW GAME, Oak's speech, both naming screens.  Slow (~1500 frames) and it
+-- leaves the player named AAAAAAA, because A is both the confirm button and
+-- a letter on the naming grid.  Only for a driver testing those screens;
+-- everything else wants U.newGame.
+function U.introNewGame(game)
   U.wait(5)
   U.tap(game, "start") -- skip intro movie
   U.wait(10)

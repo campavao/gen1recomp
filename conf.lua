@@ -4,6 +4,15 @@ function love.conf(t)
   -- to love.filesystem.getDirectoryItems without this.
   love.filesystem.setSymlinksEnabled(true)
 
+  -- A scripted run (POKEPORT_DRIVER) belongs to the machine, not to
+  -- whoever is sitting at it: no window is shown at all, so it cannot
+  -- land on top of their work.  The GL context and the backbuffer are
+  -- still there, so love.graphics.captureScreenshot still captures --
+  -- which is NOT true of a minimized window, whose rendering the OS may
+  -- stop.  Set POKEPORT_DRIVER_WINDOW=1 to watch a run happen.
+  local hiddenDriver = os.getenv("POKEPORT_DRIVER")
+    and os.getenv("POKEPORT_DRIVER_WINDOW") ~= "1"
+
   local editor = os.getenv("POKEPORT_EDITOR") == "1"
   local developer = os.getenv("POKEPORT_DEV") == "1"
   local companion = nil
@@ -52,6 +61,7 @@ function love.conf(t)
     -- starting size, not the game's resolution.
     t.window.width = 1024
     t.window.height = 768
+    if hiddenDriver then t.window.visible = false end
     -- Floor for the resizable desktop window.  The launcher's single-column
     -- layout is laid out against ~420 logical px of content, and the game
     -- canvas letterboxes fine below that, so this only stops a drag that would
