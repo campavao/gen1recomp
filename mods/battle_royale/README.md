@@ -136,6 +136,13 @@ or the Pokémon, no question asked. It joins your party at 1 HP, exactly as it
 fell; a full party opens the party screen so you choose who makes room, and
 whoever you release lands at your feet as a ball for somebody else.
 
+**The corner.** Top-right, `8 LEFT` is who is still in. Under it, once
+anyone is out or has joined to watch, a number and an eye: the real players
+waiting for the next match. Top-left, the Safari clock, then `FOG!` while
+you stand in it. A few lines that matter at the moment they land, such as
+the Safari's opening and your own spill, sit in a box at the bottom of the
+screen for a few seconds; nothing waits on that box either.
+
 **The ticker.** Most of what the match has to tell you — the fog moved, which
 of your Pokémon evolved and into what, a leader fell across town, what came
 out of a bag — is news, not a decision, so it scrolls through a small box in

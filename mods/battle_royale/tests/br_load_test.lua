@@ -1073,10 +1073,32 @@ do
     T.check(src:find('hudBox(("%d:%02d"):format(math.floor(left / 60), left % 60), 0, 0)', 1, true) ~= nil
             and src:find('"SAFARI %d:%02d"', 1, true) == nil,
             "the Safari clock is the bare time")
-    T.check(src:find("self.safariNoticeUntil = (clock() or 0) + 12", 1, true) ~= nil
-            and src:find('Font.draw("Catch all you can!", 8, 112)', 1, true) ~= nil
+    T.check(src:find('return { "Catch all you can!",', 1, true) ~= nil
+            and src:find("      end, 12)\n", 1, true) ~= nil
             and src:find('self:news("Catch what you can!")', 1, true) == nil,
             "the Safari's opening line is a bottom box from the HUD, not a ticker item")
+    T.check(src:find('self:notice({ "Your POKeMON", "scattered!" }, 6)', 1, true) ~= nil
+            and src:find('self:notice({ "Your BAG hit", "the ground!" }, 6)', 1, true) ~= nil,
+            "...and so is your own spill")
+    T.check(src:find('self:notice({ { "The fog closes on", (place or "KANTO") .. "." },', 1, true) ~= nil
+            and src:find('self:news("Check your\\nTOWN MAP.")', 1, true) == nil,
+            "...and the drop's fog line, two pages")
+    T.check(src:find("local noticeRows = BR:noticeRows()", 1, true) ~= nil
+            and src:find("Font.drawBox(0, 12, 20, 6)", 1, true) ~= nil,
+            "...drawn where a text box would be")
+    T.check(src:find("local ww = #digits + 1 + 1 + 2", 1, true) ~= nil,
+            "a space sits between the watching count and the eye")
+    T.check(src:find("    local leftRow = 0\n", 1, true) ~= nil
+            and src:find("local row = slotBusy and 3 or 0", 1, true) ~= nil,
+            "the count sits on row 0 in the Safari too, the ticker under the clock")
+    local watch = src:match("function BR:watchingCount%(.-\n  end\n")
+    T.check(watch ~= nil, "found BR:watchingCount")
+    T.check(watch and watch:find('local n = (self.status == "out") and 1 or 0', 1, true) ~= nil
+            and watch:find('not Bots.isBot(id) and (p.status == "out" or self:isWatcherId(id))', 1, true) ~= nil,
+            "the watching count is the real players out or seated as cameras, us included")
+    T.check(src:find("local watching = BR:watchingCount()\n    if watching > 0 then", 1, true) ~= nil
+            and src:find("for r, bits in ipairs(BR.EYE) do", 1, true) ~= nil,
+            "...drawn under the count with the eye, and only when somebody is")
     -- and a bot's (Bots.lines), from the overlay every bot fight wears
     T.check(src:find("pcall(BR.dressBotBattle, BR, battle, Bots.lines(self.matchSeed, botId),\n            botId == self.botFight)", 1, true) ~= nil,
             "a bot fight is dressed in the bot's own lines, and a failure there cannot stop it")

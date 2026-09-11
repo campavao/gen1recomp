@@ -458,6 +458,24 @@ return function(mod)
     log:say("NEWS: %s", (text:gsub("\n", " ")))
     return true
   end
+  -- The bottom box (2026-09-11): a line where a text box would be, drawn
+  -- by the HUD so nothing waits on it -- the Safari's opening, your own
+  -- spill.  `rows` is a table of rows, or a function returning one for a
+  -- line that keeps a clock.  One at a time; a new one replaces the old.
+  -- ...or a list of such pages, each shown for `seconds` in turn.
+  function BR:notice(rows, seconds)
+    local pages = rows
+    if type(rows) == "function" or type(rows[1]) == "string" then pages = { rows } end
+    self.bottomNotice = { pages = pages, per = seconds or 6, at = clock() or 0 }
+  end
+  function BR:noticeRows()
+    local n = self.bottomNotice
+    if not n then return nil end
+    local page = n.pages[math.floor(((clock() or 0) - n.at) / n.per) + 1]
+    if not page then self.bottomNotice = nil return nil end
+    if type(page) == "function" then page = page() end
+    return page
+  end
   -- the standing line: what the player is looking at, until they look away
   function BR:newsHold(text, icon)
     require("mods.battle_royale.lib.ticker").hold(self:newsQueue(), text, icon)
@@ -1515,7 +1533,7 @@ return function(mod)
     self.safariTheme = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
-    self.safariNoticeUntil = nil
+    self.bottomNotice = nil
     self.lastSafariBeat = nil
     self.safariGhost = nil
     self.buzzed = nil
@@ -2010,10 +2028,15 @@ return function(mod)
       -- match, so the rules are actually readable (POK-50)
       -- ...as a box at the BOTTOM of the screen that locks nothing
       -- (the user, 2026-09-11: three boxes at the top was busy), drawn by
-      -- the HUD hook for twelve seconds with the clock live in it.  The
-      -- number sits here rather than in a file-level constant: the chunk
-      -- is at LuaJIT's sixty-upvalue cap, and one more local broke the load.
-      self.safariNoticeUntil = (clock() or 0) + 12
+      -- the HUD hook for twelve seconds with the clock live in it (the
+      -- rows are a function, re-read every frame).  The number sits here
+      -- rather than in a file-level constant: the chunk is at LuaJIT's
+      -- sixty-upvalue cap, and one more local broke the load.
+      self:notice(function()
+        local left = BR:safariLeft()
+        return { "Catch all you can!",
+                 ("Time's up in %d:%02d."):format(math.floor(left / 60), left % 60) }
+      end, 12)
     end
   end
 
@@ -4824,8 +4847,9 @@ return function(mod)
       -- the eye is public from the landing (POK-39): the ring itself stays
       -- quiet until it first shrinks, but where it will shrink TO is not a
       -- secret -- and the TOWN MAP in the bag can show it
-      self:news(("The fog closes on\n%s."):format(place or "KANTO"))
-      self:news("Check your\nTOWN MAP.")
+      -- at the bottom, two pages, locking nothing (the user, 2026-09-11)
+      self:notice({ { "The fog closes on", (place or "KANTO") .. "." },
+                    { "Check your", "TOWN MAP." } }, 5)
     elseif was ~= phase and phase > 1 then
       -- ONE box per shrink, not three.  The ring, the level rung and the
       -- rod all move on the same beat by design -- lib/levels.lua and
@@ -6221,10 +6245,12 @@ return function(mod)
     if not spill then return end
     relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
     self.spills:add(spill)
+    -- at the bottom of the screen (the user, 2026-09-11), where the eye
+    -- is when you have just lost, and locking nothing
     if #spill.mons > 0 then
-      self:news("Your POKeMON\nscattered!")
+      self:notice({ "Your POKeMON", "scattered!" }, 6)
     elseif spill.bag then
-      self:news("Your BAG hit\nthe ground!")
+      self:notice({ "Your BAG hit", "the ground!" }, 6)
     end
   end
 
@@ -8097,6 +8123,32 @@ return function(mod)
     return n
   end
 
+  -- Who is WATCHING (2026-09-11): the real players waiting for the next
+  -- match -- eliminated, or seated as a camera because they joined while
+  -- this one ran.  Never a bot: a beaten bot is gone, not waiting.
+  -- Ourselves included, once we are out.
+  function BR:watchingCount()
+    local n = (self.status == "out") and 1 or 0
+    for id, p in pairs(self.players) do
+      if not Bots.isBot(id) and (p.status == "out" or self:isWatcherId(id)) then
+        n = n + 1
+      end
+    end
+    return n
+  end
+
+  -- an eye, eight by eight, for the watching count (no glyph for one)
+  BR.EYE = {
+    "........",
+    "..####..",
+    ".#....#.",
+    "#..##..#",
+    "#..##..#",
+    ".#....#.",
+    "..####..",
+    "........",
+  }
+
   function BR:checkWinner()
     if not (self.relay and self.relay:isHost() and self:inRound()) then return end
     -- survivors among everyone still in the room
@@ -9301,15 +9353,42 @@ return function(mod)
     local Ticker = require("mods.battle_royale.lib.ticker")
     local item = Ticker.tick(BR:newsQueue(), clock() or 0)
     local slotBusy = BR.status == "out" or BR.phase == "safari" or BR.wasInFog
-    local row = slotBusy and (BR.phase == "safari" and 6 or 3) or 0
+    local row = slotBusy and 3 or 0
     local bw, bh
     if item then bw, bh = Ticker.boxOf(item) end
 
+    -- The count on row 0 always, now that the Safari clock is the bare
+    -- time (six tiles against the count's nine, POK-152's overlap gone --
+    -- the user, 2026-09-11).  Only a wide ticker item moves it.
     local left = ("%d LEFT"):format(BR:aliveCount())
     local leftW = #left + 2
-    local leftRow = BR.phase == "safari" and 3 or 0
+    local leftRow = 0
     if item and row == 0 and bw + leftW > 20 then leftRow = bh end
     hudBox(left, 20 - leftW, leftRow)
+
+    -- ...and under it, who is watching (2026-09-11): the real players
+    -- waiting for the next match -- eliminated, or joined while this one
+    -- ran.  A number and an eye, drawn as pixels: the cart's font has no
+    -- eye.  Nothing when nobody is.
+    local watching = BR:watchingCount()
+    if watching > 0 then
+      local digits = tostring(watching)
+      -- a space between the number and the eye: "1" hard against it read
+      -- as "10" (the user, 2026-09-11)
+      local ww = #digits + 1 + 1 + 2
+      local wx = 20 - ww
+      local wy = leftRow + 3
+      Font.drawBox(wx, wy, ww, 3)
+      Font.draw(digits, (wx + 1) * 8, (wy + 1) * 8)
+      g.setColor(0, 0, 0, 1)
+      local ex, ey = (wx + 2 + #digits) * 8, (wy + 1) * 8
+      for r, bits in ipairs(BR.EYE) do
+        for c = 1, 8 do
+          if bits:sub(c, c) == "#" then g.rectangle("fill", ex + c - 1, ey + r - 1, 1, 1) end
+        end
+      end
+      g.setColor(1, 1, 1, 1)
+    end
 
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
@@ -9360,18 +9439,18 @@ return function(mod)
       end
     end
 
-    -- ------- the Safari's opening line (2026-09-11)
+    -- ------- the bottom box (BR:notice, 2026-09-11)
     --
     -- Where a text box would be, so it reads as the game talking, but
     -- drawn by the HUD: nothing waits on it and the player walks under
-    -- it.  The clock inside it is live, so it never reads stale.
-    if BR.phase == "safari" and BR.safariNoticeUntil
-       and (clock() or 0) < BR.safariNoticeUntil then
-      local left = BR:safariLeft()
+    -- it.  The Safari's opening (with its clock live), your own spill.
+    local noticeRows = BR:noticeRows()
+    if noticeRows then
       g.setColor(1, 1, 1, 1)
       Font.drawBox(0, 12, 20, 6)
-      Font.draw("Catch all you can!", 8, 112)
-      Font.draw(("Time's up in %d:%02d."):format(math.floor(left / 60), left % 60), 8, 128)
+      for i, r in ipairs(noticeRows) do
+        if i <= 2 then Font.draw(r, 8, 112 + (i - 1) * 16) end
+      end
     end
 
     -- ------- what everyone else is doing, over their heads (POK-113)
@@ -10070,6 +10149,7 @@ return function(mod)
              pending = Ticker.pending(t), log = BR.newsLog }
   end
   mod.exports.yankScreen = function() return BR:yankScreen() end
+  mod.exports.watchingCount = function() return BR:watchingCount() end
   -- the mark's arithmetic, for a driver reading a screenshot (POK-166)
   mod.exports.markProbe = function(id)
     local ow = mod.world:overworld()
