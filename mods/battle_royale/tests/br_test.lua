@@ -4127,8 +4127,16 @@ do
     BR.lines = { intro = "Bring it!" }
     rows = {}
     for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
-    ok(table.concat(rows, "|"):find("INTRO: SET|ON A WIN: ---", 1, true) ~= nil,
-       "...and says which lines are set")
+    ok(table.concat(rows, "|"):find("INTRO: Bring it!|ON A WIN: ---", 1, true) ~= nil,
+       "...and shows the line that is set")
+    BR.lines = { win = "A very long first row" }
+    rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    ok(table.concat(rows, "|"):find("ON A WIN: A very ", 1, true) ~= nil,
+       "...cut to what fits beside the label")
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do
+      ok(#it.label <= BRMenu.MAX_LABEL, "...never wider than the box: " .. it.label)
+    end
     BR.lines = nil
     for _, it in ipairs(items) do
       ok(#it.label <= 17,
@@ -6281,6 +6289,72 @@ do
   eq(Lines.outro("no pages", true, { win = "x" }, nil), "no pages", "a one-page text is left alone")
   eq(Lines.intro({ intro = "Bring it!" }), "Bring it!", "the intro is theirs")
   eq(Lines.intro(nil), nil, "...or nothing")
+
+  -- the corpus (2026-09-11): Kanto's own lines on four shelves, every one
+  -- a line the clip leaves alone, deduplicated, sorted -- against the
+  -- generated data when it is there
+  local okT, romText = pcall(dofile, "data/generated/text.lua")
+  local okP, romPtrs = pcall(dofile, "data/generated/text_pointers.lua")
+  local okH, romHeads = pcall(dofile, "data/generated/trainer_headers.lua")
+  if okT and okP and okH then
+    local data = { text = romText, text_pointers = romPtrs, trainer_headers = romHeads }
+    local shelves = Lines.corpus(data)
+    eq(#shelves, 4, "four shelves")
+    eq(shelves[1].label, "TRAINER INTROS", "trainer intros first")
+    ok(#shelves[1].lines > 100 and #shelves[2].lines > 100 and #shelves[4].lines > 100,
+       ("...each well stocked (%d/%d/%d/%d)"):format(#shelves[1].lines, #shelves[2].lines,
+                                                    #shelves[3].lines, #shelves[4].lines))
+    local dup, bad, unsorted = 0, 0, 0
+    local all = {}
+    for _, shelf in ipairs(shelves) do
+      for i, line in ipairs(shelf.lines) do
+        if all[line] then dup = dup + 1 end
+        all[line] = true
+        if Lines.clean(line) ~= line or line:find("{", 1, true) then bad = bad + 1 end
+        if i > 1 and shelf.lines[i - 1] > line then unsorted = unsorted + 1 end
+      end
+    end
+    eq(dup, 0, "no line sits on two shelves")
+    eq(bad, 0, "every line fits the box as it stands")
+    eq(unsorted, 0, "each shelf is sorted")
+    ok(Lines.corpus(data) == shelves, "built once per data table")
+    local si, li = Lines.locate(shelves, shelves[2].lines[3])
+    eq(si .. ":" .. li, "2:3", "a line is found where it sits")
+    eq(select(1, Lines.locate(shelves, "not a line")), 1, "an unknown line starts at the top")
+    ok(all["I lost!"] or all["Ouch!"] or #shelves[2].lines > 0, "the beaten trainers speak")
+
+    -- the picker's logic, with a fake game: LEFT/RIGHT step and wrap,
+    -- UP/DOWN change shelf, SELECT deals, A takes and pops, B pops
+    local pressed, state, popped, picked = {}, {}, 0, nil
+    local fakeGame = {
+      data = data,
+      input = { wasPressed = function(_, b) return pressed[b] == true end, state = state },
+      stack = { pop = function() popped = popped + 1 end },
+    }
+    local pk = Lines.Picker.new(fakeGame, { title = "INTRO", current = shelves[2].lines[2],
+                                            onPick = function(l) picked = l end })
+    eq(pk.si .. ":" .. pk.li, "2:2", "the picker opens on the current line")
+    local function press(b) pressed = { [b] = true } pk:update(0) pressed = {} end
+    press("right") eq(pk.li, 3, "RIGHT steps on")
+    press("left") press("left") eq(pk.li, 1, "LEFT steps back")
+    press("left") eq(pk.li, #shelves[2].lines, "...and wraps")
+    press("down") eq(pk.si .. ":" .. pk.li, "3:1", "DOWN is the next shelf, from its top")
+    press("up") press("up") eq(pk.si, 1, "UP is the shelf before")
+    press("select") ok(pk.li >= 1 and pk.li <= #shelves[1].lines, "SELECT deals a line on the shelf")
+    -- a held direction runs after a beat
+    pk.li = 1
+    state.right = true
+    press("right")
+    for _ = 1, Lines.Picker.REPEAT_AFTER + Lines.Picker.REPEAT_EVERY * 2 do pk:update(0) end
+    ok(pk.li >= 4, "a held RIGHT runs (" .. pk.li .. ")")
+    state.right = nil
+    press("a")
+    eq(picked, pk:line(), "A takes the line on show")
+    eq(popped, 1, "...and pops the picker")
+    press("b") eq(popped, 2, "B pops it too")
+  else
+    io.write("  (skipping the corpus pins: data/generated not found)\n")
+  end
 
   -- a bot's own lines (Bots.lines): dealt on its stream, from the pools,
   -- every one a line the clip would leave alone

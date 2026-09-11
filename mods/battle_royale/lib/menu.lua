@@ -456,9 +456,10 @@ end
 -- letters), the sprite they see (wins unlock the wardrobe, POK-79), and
 -- the trainer's own battle text (lib/lines.lua, 2026-09-10): the intro
 -- the other trainer reads when you walk up, the line they read when you
--- beat them, the line they read when they beat you.  Each line is two
--- rows of eighteen on the naming grid, one screen a row; an empty first
--- row clears the line.  Pure over BR, so the suite can read the rows.
+-- beat them, the line they read when they beat you.  Each is picked from
+-- Kanto's own dialogue (Lines.Picker, 2026-09-11) -- typing on the Gen 1
+-- grid was too slow to bother with.  Pure over BR, so the suite can read
+-- the rows.
 function Menu.trainerItems(mod, BR, game)
   local mine = BR:myLines() or {}
   local items = {}
@@ -482,8 +483,13 @@ function Menu.trainerItems(mod, BR, game)
       onPick = function(id) BR:setSkin(id) end,
     }))
   end)
+  -- the row shows the line's first row, as much as fits beside the label
+  local Lines = require("mods.battle_royale.lib.lines")
   local function line(kind, label)
-    setting(label .. ": " .. (mine[kind] and "SET" or "---"),
+    local first = Lines.rows(mine[kind])[1]
+    local room = Menu.MAX_LABEL - #label - 2
+    local shown = first and (#first > room and first:sub(1, room) or first) or "---"
+    setting(label .. ": " .. shown,
             function() Menu.enterLine(mod, BR, game, kind, label) end)
   end
   line("intro", "INTRO")
@@ -496,26 +502,15 @@ function Menu.trainerItems(mod, BR, game)
   return items
 end
 
+-- A line is picked, not typed (2026-09-11): Lines.Picker over the ROM's
+-- own dialogue, the current choice on show first.
 function Menu.enterLine(mod, BR, game, kind, label)
   local Lines = require("mods.battle_royale.lib.lines")
-  local rows = Lines.rows((BR:myLines() or {})[kind])
-  local acc = {}
-  local function ask(i)
-    game.stack:push(mod.ui.NamingScreen.new(game, {
-      title = label .. " " .. i .. "/" .. Lines.ROWS,
-      maxLen = Lines.WIDTH,
-      default = rows[i],
-      onDone = function(text)
-        acc[i] = text or ""
-        if i < Lines.ROWS and acc[i] ~= "" then
-          ask(i + 1)
-        else
-          BR:setLine(kind, table.concat(acc, "\n"))
-        end
-      end,
-    }))
-  end
-  ask(1)
+  game.stack:push(Lines.Picker.new(game, {
+    title = label,
+    current = (BR:myLines() or {})[kind],
+    onPick = function(line) BR:setLine(kind, line) end,
+  }))
 end
 
 function Menu.openTrainer(mod, BR, game)

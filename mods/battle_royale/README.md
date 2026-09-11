@@ -77,8 +77,9 @@ port-forwarding.
    what *everyone* in the match plays at, so nobody is a page behind in a
    duel. It is remembered between games and launches; **REVERT TO
    DEFAULT** puts the game's own settings back (MEDIUM, ON). Solo and
-   hosted rooms only: the daily game and quick play always run at those
-   defaults. **DEBUG** (the log's deep tier, below) is in this box too.
+   hosted rooms only: the daily game and quick play, which nobody hosts,
+   always run at FAST with animations OFF. **DEBUG** (the log's deep tier,
+   below) is in this box too.
 7. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
    without a code. Rooms are private until you say otherwise.
 8. The host sees the seats fill in and picks **START MATCH**. Everyone
@@ -144,7 +145,10 @@ something.
 
 **Your own battle text.** `ROYALE` → `TRAINER` holds your name, your skin
 and three lines of your own: an INTRO, a line ON A WIN and a line ON A LOSS,
-each up to two rows of eighteen typed on the naming grid. Walk up to another
+each picked from Kanto's own dialogue (four shelves: what route trainers say
+before a fight, what they say when beaten, what they say after, and the
+townsfolk; LEFT/RIGHT browse, UP/DOWN change shelf, SELECT deals one at
+random). Walk up to another
 trainer and *your* intro replaces "X wants to fight!" on *their* screen; when
 the fight ends, "X is out of POKéMON!" is followed by the winner's win line
 and then the loser's lose line, one page each. A line you never set falls

@@ -1067,6 +1067,16 @@ do
             "...and the outro is rewritten as it is queued, nothing else touched")
     T.check(src:find("    self.dailyLobby = nil\n    self.linesOf = {}\n", 1, true) ~= nil,
             "teardown forgets the room's lines")
+    -- the user's notes after the first play (2026-09-11)
+    T.check(src:find("if self.quick or self.dailyLobby then return Pace.clean(Pace.QUICK) end", 1, true) ~= nil,
+            "QUICK PLAY and the DAILY GAME run at Pace.QUICK")
+    T.check(src:find('hudBox(("%d:%02d"):format(math.floor(left / 60), left % 60), 0, 0)', 1, true) ~= nil
+            and src:find('"SAFARI %d:%02d"', 1, true) == nil,
+            "the Safari clock is the bare time")
+    T.check(src:find("self.safariNoticeUntil = (clock() or 0) + 12", 1, true) ~= nil
+            and src:find('Font.draw("Catch all you can!", 8, 112)', 1, true) ~= nil
+            and src:find('self:news("Catch what you can!")', 1, true) == nil,
+            "the Safari's opening line is a bottom box from the HUD, not a ticker item")
     -- and a bot's (Bots.lines), from the overlay every bot fight wears
     T.check(src:find("pcall(BR.dressBotBattle, BR, battle, Bots.lines(self.matchSeed, botId),\n            botId == self.botFight)", 1, true) ~= nil,
             "a bot fight is dressed in the bot's own lines, and a failure there cannot stop it")

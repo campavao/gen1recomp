@@ -1515,6 +1515,7 @@ return function(mod)
     self.safariTheme = nil
     self.dropSeq = nil
     self.safariEndsAt = nil  -- the Safari opening's clock (POK-21)
+    self.safariNoticeUntil = nil
     self.lastSafariBeat = nil
     self.safariGhost = nil
     self.buzzed = nil
@@ -2007,9 +2008,12 @@ return function(mod)
     if safari > 0 and not msg.late then
       -- a beat and a half after landing: past the held A that started the
       -- match, so the rules are actually readable (POK-50)
-      self:news("Catch what you can!")
-      self:news(("The PA calls time\nin %d:%02d."):format(
-        math.floor(safari / 60), safari % 60))
+      -- ...as a box at the BOTTOM of the screen that locks nothing
+      -- (the user, 2026-09-11: three boxes at the top was busy), drawn by
+      -- the HUD hook for twelve seconds with the clock live in it.  The
+      -- number sits here rather than in a file-level constant: the chunk
+      -- is at LuaJIT's sixty-upvalue cap, and one more local broke the load.
+      self.safariNoticeUntil = (clock() or 0) + 12
     end
   end
 
@@ -9319,7 +9323,8 @@ return function(mod)
       local left = BR:safariLeft()
       local t = clock() or 0
       if left > 10 or math.floor(t * 2) % 2 == 0 then
-        hudBox(("SAFARI %d:%02d"):format(math.floor(left / 60), left % 60), 0, 0)
+        -- the bare time (the user, 2026-09-11): what it counts is clear
+        hudBox(("%d:%02d"):format(math.floor(left / 60), left % 60), 0, 0)
       end
     elseif BR.wasInFog then
       -- blink on the fog's own beat, so the box pulses with the bite
@@ -9353,6 +9358,20 @@ return function(mod)
       for i, r in ipairs(item.rows) do
         Font.draw(r, tx, ty + (i - 1) * 8)
       end
+    end
+
+    -- ------- the Safari's opening line (2026-09-11)
+    --
+    -- Where a text box would be, so it reads as the game talking, but
+    -- drawn by the HUD: nothing waits on it and the player walks under
+    -- it.  The clock inside it is live, so it never reads stale.
+    if BR.phase == "safari" and BR.safariNoticeUntil
+       and (clock() or 0) < BR.safariNoticeUntil then
+      local left = BR:safariLeft()
+      g.setColor(1, 1, 1, 1)
+      Font.drawBox(0, 12, 20, 6)
+      Font.draw("Catch all you can!", 8, 112)
+      Font.draw(("Time's up in %d:%02d."):format(math.floor(left / 60), left % 60), 8, 128)
     end
 
     -- ------- what everyone else is doing, over their heads (POK-113)
@@ -9743,7 +9762,8 @@ return function(mod)
   -- where it is used: main's closure is at LuaJIT's upvalue cap.)
   function BR:matchPace()
     local Pace = require("mods.battle_royale.lib.pace")
-    if self.quick or self.dailyLobby then return Pace.clean(Pace.DEFAULT) end
+    -- a room nobody hosts runs FAST with no animations (Pace.QUICK)
+    if self.quick or self.dailyLobby then return Pace.clean(Pace.QUICK) end
     return Pace.clean(self.pace)
   end
 
