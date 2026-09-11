@@ -1067,6 +1067,15 @@ do
             "...and the outro is rewritten as it is queued, nothing else touched")
     T.check(src:find("    self.dailyLobby = nil\n    self.linesOf = {}\n", 1, true) ~= nil,
             "teardown forgets the room's lines")
+    -- and a bot's (Bots.lines), from the overlay every bot fight wears
+    T.check(src:find("pcall(BR.dressBotBattle, BR, battle, Bots.lines(self.matchSeed, botId),\n            botId == self.botFight)", 1, true) ~= nil,
+            "a bot fight is dressed in the bot's own lines, and a failure there cannot stop it")
+    local bdress = src:match("function BR:dressBotBattle%(.-\n  end\n")
+    T.check(bdress ~= nil, "found BR:dressBotBattle")
+    T.check(bdress and bdress:find('text:find("defeated\\n", 1, true)', 1, true) ~= nil
+            and bdress:find('text:find("useable POK", 1, true)', 1, true) ~= nil
+            and bdress:find('text:find("blacked", 1, true)', 1, true) ~= nil,
+            "...the lose line after \"defeated\", the win line around the blackout")
   end
 end
 

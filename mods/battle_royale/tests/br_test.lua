@@ -6281,6 +6281,35 @@ do
   eq(Lines.outro("no pages", true, { win = "x" }, nil), "no pages", "a one-page text is left alone")
   eq(Lines.intro({ intro = "Bring it!" }), "Bring it!", "the intro is theirs")
   eq(Lines.intro(nil), nil, "...or nothing")
+
+  -- a bot's own lines (Bots.lines): dealt on its stream, from the pools,
+  -- every one a line the clip would leave alone
+  local Bots = require("mods.battle_royale.lib.bots")
+  for _, kind in ipairs({ "intro", "win", "lose" }) do
+    for i, line in ipairs(Bots.LINES[kind]) do
+      eq(Lines.clean(line), line, ("bot %s line %d fits the box as written"):format(kind, i))
+    end
+  end
+  local a = Bots.lines(4242, Bots.idFor(1))
+  local b = Bots.lines(4242, Bots.idFor(1))
+  eq(a.intro, b.intro, "a bot's intro is the same on every client")
+  eq(a.win, b.win, "...and its win line")
+  eq(a.lose, b.lose, "...and its lose line")
+  local function inPool(kind, line)
+    for _, l in ipairs(Bots.LINES[kind]) do if l == line then return true end end
+    return false
+  end
+  ok(inPool("intro", a.intro) and inPool("win", a.win) and inPool("lose", a.lose),
+     "...all three from the pools")
+  local seen = {}
+  for i = 1, 12 do seen[Bots.lines(4242, Bots.idFor(i)).intro] = true end
+  local distinct = 0
+  for _ in pairs(seen) do distinct = distinct + 1 end
+  ok(distinct >= 4, "a dozen bots do not all say the same thing (" .. distinct .. " intros)")
+  ok(Bots.lines(4242, Bots.idFor(1)).intro ~= Bots.lines(4243, Bots.idFor(1)).intro
+     or Bots.lines(4242, Bots.idFor(1)).win ~= Bots.lines(4243, Bots.idFor(1)).win
+     or Bots.lines(4242, Bots.idFor(1)).lose ~= Bots.lines(4243, Bots.idFor(1)).lose,
+     "...and a bot's voice changes with the match")
 end
 
 -- ------- the ticker (2026-09-10): news that does not stop the game

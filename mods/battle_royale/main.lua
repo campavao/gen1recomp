@@ -7160,6 +7160,49 @@ return function(mod)
       -- (newTrainer sets aiUses at construction, enemyAIMods at line ~812)
       battle.aiUses = battle:aiUsesFor()
       battle.enemyAIMods = battle.trainer.aiMods
+      -- ...and its own voice (Bots.lines), the way a trainer has one.  The
+      -- record for drivers is the PLAYER's fight only: the same overlay
+      -- dresses a bot-versus-bot sim, whose ending must not overwrite it.
+      pcall(BR.dressBotBattle, BR, battle, Bots.lines(self.matchSeed, botId),
+            botId == self.botFight)
+    end
+  end
+
+  -- A bot fight in the bot's own words (2026-09-10): the intro in place of
+  -- "SAM wants to fight!", and around the engine's own ending -- after
+  -- "<you> defeated SAM!" the bot's lose line; between "<you> is out of
+  -- useable POKeMON!" and "<you> blacked out!" the bot's win line.  The
+  -- engine's endBattleText would have printed the lose line too, but
+  -- with the trainer tag in front ("SAM: ..."), which costs five of the
+  -- eighteen columns; wrapping sayNext keeps the page whole.  The fight
+  -- is local, so nothing rides the wire; a watcher's replica opens the
+  -- same overlay and says the same lines.  BR.lastBattleText for drivers.
+  function BR:dressBotBattle(battle, lines, record)
+    if not (battle and lines) then return end
+    local said = record and { intro = lines.intro, outro = nil } or {}
+    if record then self.lastBattleText = said end
+    if lines.intro then battle.introText = lines.intro end
+    local BattleState = require("src.battle.BattleState")
+    local baseSayNext = BattleState.sayNext
+    local winSaid = false
+    battle.sayNext = function(s, text)
+      if type(text) == "string" then
+        if lines.lose and text:find("defeated\n", 1, true) then
+          baseSayNext(s, text)
+          said.outro = text .. "\f" .. lines.lose
+          return baseSayNext(s, lines.lose)
+        elseif lines.win and not winSaid and text:find("useable POK", 1, true) then
+          winSaid = true
+          baseSayNext(s, text)
+          said.outro = text .. "\f" .. lines.win
+          return baseSayNext(s, lines.win)
+        elseif lines.win and not winSaid and text:find("blacked", 1, true) then
+          winSaid = true
+          said.outro = lines.win .. "\f" .. text
+          baseSayNext(s, lines.win)
+        end
+      end
+      return baseSayNext(s, text)
     end
   end
 

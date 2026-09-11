@@ -150,6 +150,8 @@ the fight ends, "X is out of POKéMON!" is followed by the winner's win line
 and then the loser's lose line, one page each. A line you never set falls
 back to the vanilla page. The lines travel with the challenge, so they work
 against anyone on the same build and are simply ignored by an older one.
+The bots have voices too: each is dealt an intro, a win line and a lose
+line for the match, so a bot fight opens and closes in its own words.
 
 **A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — on the spot, with the ticker saying who became what. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
 
