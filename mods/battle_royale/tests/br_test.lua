@@ -3588,6 +3588,9 @@ do
         skinId = function() return "RED" end,
         skinWalk = function() return "SPRITE_HIKER" end,
         winCount = function() return 4 end,
+        myLines = function(self)
+          return require("mods.battle_royale.lib.lines").cleanSet(self.lines)
+        end,
         setSkin = function() end,
         relayAddress = function() return "127.0.0.1:7790" end,
         fogSeconds = function() return 120 end,
@@ -3824,7 +3827,7 @@ do
     local BR = fakeBR()
     local items, view = BRMenu.items({ version = "9.9.9" }, BR, {})
     eq(view, "menu", "no room is the first face")
-    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+    eq(labels(items), "QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
        "the first face, in order -- no SERVER row, no version row (POK-161)")
     local allOpen = true
     for _, it in ipairs(items) do if not it.keepOpen then allOpen = false end end
@@ -4102,7 +4105,7 @@ do
     items, view = BRMenu.items({ version = "0.36.10" }, BR, {})
     eq(view, "menu", "no room left is the first face")
     eq(labels(items),
-       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|NAME: RED|SKIN: RED",
+       "MATCH OVER|QUICK PLAY|DAILY GAME|SOLO VS BOTS|HOST GAME|JOIN BY CODE|TRAINER: RED",
        "the result leads the first face on its own row")
     ok(#items <= BRMenu.maxRows(2),
        ("the first face still fits with a result on it (%d/%d)")
@@ -4111,7 +4114,22 @@ do
     items = BRMenu.items({ version = "0.36.10" }, BR, {})
     ok(labels(items):find("YOU WIN!", 1, true),
        "a win reads as a win")
-    eq(#items, BRMenu.maxRows(2), "...still eight rows, not nine")
+    -- seven since 2026-09-10: NAME and SKIN folded into TRAINER with the
+    -- battle text, which kept the face inside maxRows(2) with a row spare
+    ok(#items <= BRMenu.maxRows(2), "...still within the eight rows")
+    eq(#items, 7, "...seven of them")
+
+    -- the TRAINER screen: name, skin, the three lines, clear, back
+    local rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    eq(table.concat(rows, "|"), "NAME: RED|SKIN: RED|INTRO: ---|ON A WIN: ---|ON A LOSS: ---|CLEAR TEXT|BACK",
+       "the TRAINER screen lists the name, the skin and the three lines")
+    BR.lines = { intro = "Bring it!" }
+    rows = {}
+    for _, it in ipairs(BRMenu.trainerItems({}, BR, {})) do rows[#rows + 1] = it.label end
+    ok(table.concat(rows, "|"):find("INTRO: SET|ON A WIN: ---", 1, true) ~= nil,
+       "...and says which lines are set")
+    BR.lines = nil
     for _, it in ipairs(items) do
       ok(#it.label <= 17,
          ("first-face row fits the box (%d): %s"):format(#it.label, it.label))
@@ -6194,6 +6212,75 @@ do
   eq(tagged.as, 1007, "a frame tagged as a bot's keeps the tag")
   eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" })).as, nil, "an untagged frame is the sender's own")
   eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, "x")).as, nil, "a tag that is not an id is dropped")
+end
+
+-- ------- a trainer's own battle text (2026-09-10): lib/lines.lua
+
+do
+  local Lines = require("mods.battle_royale.lib.lines")
+  local Career = require("mods.battle_royale.lib.career")
+  -- the clip
+  eq(Lines.clean("Prepare to lose!"), "Prepare to lose!", "one row stays")
+  eq(Lines.clean("Prepare to lose!\nSeriously."), "Prepare to lose!\nSeriously.", "two rows stay")
+  eq(Lines.clean("one\ntwo\nthree"), "one\ntwo", "a third row is cut")
+  eq(Lines.clean("ABCDEFGHIJKLMNOPQRSTUVWXYZ"), "ABCDEFGHIJKLMNOPQR", "a row is clipped to eighteen")
+  eq(Lines.clean("POKéMON POKéMON!!!!!"), "POKéMON POKéMON!!!", "...by characters, not bytes")
+  eq(Lines.clean("  padded  \n\n"), "padded", "padding and blank rows go")
+  eq(Lines.clean("ctrl\7chars\1"), "ctrlchars", "control characters go")
+  eq(Lines.clean(""), nil, "empty is unset")
+  eq(Lines.clean(42), nil, "...and so is a non-string")
+  -- the set
+  local set = Lines.cleanSet({ intro = "Hi!", win = "", lose = "Ow.", extra = "x" })
+  eq(set.intro, "Hi!", "a set keeps its intro")
+  eq(set.win, nil, "...drops an empty line")
+  eq(set.lose, "Ow.", "...keeps its lose line")
+  eq(set.extra, nil, "...and knows only its three kinds")
+  eq(Lines.cleanSet({}), nil, "an empty set is nil")
+  eq(Lines.cleanSet(nil), nil, "...and so is none")
+  -- the wire
+  local packed = Lines.pack({ intro = "Hi!\nthere", lose = "Ow." })
+  eq(packed.i, "Hi!\nthere", "the intro packs short")
+  eq(packed.w, nil, "an unset line is absent")
+  eq(packed.l, "Ow.", "the lose line packs short")
+  eq(Lines.pack({}), nil, "nothing set packs to nothing")
+  local un = Lines.unpack({ i = "  Hi!  ", l = "a\nb\nc" })
+  eq(un.intro, "Hi!", "unpack cleans")
+  eq(un.lose, "a\nb", "...and clips")
+  eq(Lines.unpack("junk"), nil, "junk off the wire is nothing")
+  local m = Wire.decode(Wire.challenge(7, { intro = "Bring it!" }))
+  eq(m.nonce, 7, "a challenge with lines keeps its nonce")
+  eq(m.lines.intro, "Bring it!", "...and carries the intro")
+  eq(Wire.decode(Wire.challenge(8)).lines, nil, "a challenge without lines carries none")
+  eq(Wire.decode(Wire.challenge(8)).L, nil, "...and puts no key on the wire")
+  eq(Wire.decode(Wire.accept(9, { win = "GG" })).lines.win, "GG", "an accept carries them too")
+  eq(Wire.decode({ t = "challenge", n = 3 }).lines, nil, "an old client's challenge reads as plain")
+  -- the file
+  eq(Lines.toFile("Hi!\nthere"), "Hi!|there", "the break is a bar in the file")
+  eq(Lines.fromFile("Hi!|there"), "Hi!\nthere", "...and a bar is a break")
+  eq(Lines.toFile(nil), nil, "unset writes no row")
+  local c = Career.decode(Career.encode({ name = "ASH", intro = "Hi!\nthere", lose = "Ow." }))
+  eq(c.intro, "Hi!\nthere", "the career keeps the intro")
+  eq(c.win, nil, "...no win line")
+  eq(c.lose, "Ow.", "...and the lose line")
+  eq(Career.decode(Career.encode({ name = "ASH" })).intro, nil, "a career without lines has none")
+  eq(#Lines.rows("a\nb"), 2, "rows for the entry screen")
+  eq(#Lines.rows(nil), 0, "...none when unset")
+  -- the pages
+  local vanilla = "GARY is out of\nPOKéMON!\fASH wins!"
+  ok(Lines.isOutro(vanilla), "the vanilla outro is recognised")
+  ok(not Lines.isOutro("ASH used TACKLE!"), "...and a move line is not")
+  eq(Lines.outro(vanilla, true, { win = "Too easy." }, { lose = "Rats." }),
+     "GARY is out of\nPOKéMON!\fToo easy.\fRats.", "my win: my win line, then their lose line")
+  eq(Lines.outro(vanilla, false, { lose = "Ugh." }, { win = "Ha!" }),
+     "GARY is out of\nPOKéMON!\fHa!\fUgh.", "their win: their win line, then my lose line")
+  eq(Lines.outro(vanilla, true, nil, nil), vanilla, "no lines: the vanilla pages")
+  eq(Lines.outro(vanilla, true, nil, { lose = "Rats." }),
+     "GARY is out of\nPOKéMON!\fASH wins!\fRats.", "no win line: the vanilla wins! page, then theirs")
+  eq(Lines.outro(vanilla, true, { win = "Too easy." }, nil),
+     "GARY is out of\nPOKéMON!\fToo easy.", "no lose line: nothing after")
+  eq(Lines.outro("no pages", true, { win = "x" }, nil), "no pages", "a one-page text is left alone")
+  eq(Lines.intro({ intro = "Bring it!" }), "Bring it!", "the intro is theirs")
+  eq(Lines.intro(nil), nil, "...or nothing")
 end
 
 -- ------- the ticker (2026-09-10): news that does not stop the game

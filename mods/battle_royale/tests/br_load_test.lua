@@ -1035,6 +1035,41 @@ do
   end
 end
 
+-- ------- a trainer's own battle text (lib/lines.lua, 2026-09-10), read
+-- off the source: every challenge and accept carries the lines, the
+-- handlers note the other side's, and the link wrapper dresses the fight.
+
+do
+  local f = io.open("mods/battle_royale/main.lua", "r")
+  if not f then
+    io.write("  (skipping the battle-text scan: main.lua not found)\n")
+  else
+    local src = f:read("*a")
+    f:close()
+    local _, sends = src:gsub("Wire%.challenge%(%w+%.nonceSeq, %w+:myLines%(%)%)", "")
+    T.check(sends == 3, "every challenge carries our lines (" .. sends .. " of 3)")
+    local _, accepts = src:gsub("Wire%.accept%(nonce, %w+:myLines%(%)%)", "")
+    T.check(accepts == 2, "...and every accept (" .. accepts .. " of 2)")
+    T.check(src:find("Wire.challenge(", 1, true) and not src:find("Wire.challenge(self.nonceSeq)", 1, true)
+            and not src:find("Wire.accept(nonce)", 1, true),
+            "...with no bare send left")
+    T.check(src:find('elseif msg.t == "challenge" then\n      self:noteLines(fromId, msg.lines)', 1, true) ~= nil
+            and src:find('elseif msg.t == "accept" then\n      self:noteLines(fromId, msg.lines)', 1, true) ~= nil,
+            "the handlers note the other side's lines before answering")
+    T.check(src:find("if battle and BR:inRound() then pcall(BR.dressBattle, BR, battle, opts) end", 1, true) ~= nil,
+            "the link wrapper dresses the fight, and a failure there cannot stop it")
+    local dress = src:match("function BR:dressBattle%(.-\n  end\n")
+    T.check(dress ~= nil, "found BR:dressBattle")
+    T.check(dress and dress:find("battle.introText = intro", 1, true) ~= nil,
+            "the other trainer's intro replaces the baked page")
+    T.check(dress and dress:find("if Lines.isOutro(text) then", 1, true) ~= nil
+            and dress:find("Lines.outro(text, iWon, mine, theirs)", 1, true) ~= nil,
+            "...and the outro is rewritten as it is queued, nothing else touched")
+    T.check(src:find("    self.dailyLobby = nil\n    self.linesOf = {}\n", 1, true) ~= nil,
+            "teardown forgets the room's lines")
+  end
+end
+
 -- ------- the route trainers' sight lines stay down (POK-163)
 --
 -- POK-150's lever is a talk table per map, filled at onStart.  A playtest

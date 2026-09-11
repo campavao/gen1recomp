@@ -142,6 +142,15 @@ the top-left corner, one line at a time for a couple of seconds each, and
 nothing waits on it. Text boxes are kept for the things that actually ask you
 something.
 
+**Your own battle text.** `ROYALE` → `TRAINER` holds your name, your skin
+and three lines of your own: an INTRO, a line ON A WIN and a line ON A LOSS,
+each up to two rows of eighteen typed on the naming grid. Walk up to another
+trainer and *your* intro replaces "X wants to fight!" on *their* screen; when
+the fight ends, "X is out of POKéMON!" is followed by the winner's win line
+and then the loser's lose line, one page each. A line you never set falls
+back to the vanilla page. The lines travel with the challenge, so they work
+against anyone on the same build and are simply ignored by an older one.
+
 **A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — on the spot, with the ticker saying who became what. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
 
 **The Marts climb with the fog.** Every general store in Kanto -- any Mart that sells a ball or a potion -- sells the same shelf, and the shelf follows the ring rather than the story: POKé BALL and POTION through the first shrink, GREAT BALL and SUPER POTION (and a REVIVE) at ring 3, ULTRA BALL and HYPER POTION (and a FULL HEAL) at ring 4, MASTER BALL and MAX POTION (and a FULL RESTORE) from ring 5 -- the same beats the level ladder climbs on. Cumulative, so a late shelf still carries the cheap rungs and money stays a decision. The MASTER BALL is priced (¥5000) for the match and never sold outside one; Celadon's TM, vitamin, X-item and stone counters are left alone. Where you dropped stops deciding what you can buy.

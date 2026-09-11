@@ -371,6 +371,10 @@ return function(mod)
     started = false,      -- have I dropped into the world yet this match
     myName = career.name, -- chosen on the NAME row; nil falls back to the save
     skin = career.skin,   -- the walk sheet every other trainer sees (POK-79)
+    -- the trainer's own battle text (lib/lines.lua, 2026-09-10), and every
+    -- other trainer's as it arrived on a challenge or an accept
+    lines = { intro = career.intro, win = career.win, lose = career.lose },
+    linesOf = {},
     wins = Career.cleanWins(career.wins),  -- career wins: the wardrobe's key
     -- the host's match options (POK-186), off the same cache as the career
     pace = require("mods.battle_royale.lib.pace").load(mod),
@@ -485,6 +489,62 @@ return function(mod)
     self.myName = Wire.cleanName(name)
     self:saveCareer()
     return self.myName
+  end
+
+  -- The trainer's own battle text (lib/lines.lua): what the other screen
+  -- says when you walk up, when you win, when you lose.  Saved with the
+  -- career; carried on the challenge and the accept.
+  function BR:myLines()
+    local Lines = require("mods.battle_royale.lib.lines")
+    return Lines.cleanSet(self.lines)
+  end
+  function BR:setLine(kind, text)
+    local Lines = require("mods.battle_royale.lib.lines")
+    local known = false
+    for _, k in ipairs(Lines.KINDS) do if k == kind then known = true end end
+    if not known then return false end
+    self.lines = self.lines or {}
+    self.lines[kind] = Lines.clean(text)
+    self:saveCareer()
+    return self.lines[kind]
+  end
+  -- ...and the other trainer's, off the wire, remembered for the fight
+  function BR:noteLines(id, lines)
+    if lines then self.linesOf[id] = lines end
+  end
+
+  -- Dress a link battle in both trainers' lines (lib/lines.lua): the
+  -- other's intro in place of "X wants to fight!", and the outro pages
+  -- rewritten as they are queued -- LinkBattle bakes both into its own
+  -- closures, so the intro is swapped after the fact (the way
+  -- botTrainerOverlay swaps a bot's) and sayNext is wrapped to catch the
+  -- one line that is the vanilla outro.  What the fight ended up saying
+  -- is kept in BR.lastBattleText for a driver.
+  function BR:dressBattle(battle, opts)
+    local Lines = require("mods.battle_royale.lib.lines")
+    local opp = self.battle and self.battle.opponentId
+    local peer = opp and self.players[opp]
+    local theirs = opp and self.linesOf[opp]
+    local mine = self:myLines()
+    local theirName = (opts and opts.theirName) or (peer and peer.name)
+    self.lastBattleText = { intro = nil, outro = nil }
+    if not (theirs or mine) then return end
+    local intro = Lines.intro(theirs)
+    if intro then
+      battle.introText = intro
+      self.lastBattleText.intro = intro
+    end
+    local BattleState = require("src.battle.BattleState")
+    local baseSayNext = BattleState.sayNext
+    battle.sayNext = function(s, text)
+      if Lines.isOutro(text) then
+        local iWon = type(theirName) == "string" and theirName ~= ""
+                     and text:sub(1, #theirName) == theirName
+        text = Lines.outro(text, iWon, mine, theirs)
+        BR.lastBattleText.outro = text
+      end
+      return baseSayNext(s, text)
+    end
   end
 
   local function mySprite()
@@ -603,8 +663,10 @@ return function(mod)
   -- One writer for the whole career, so the name, the skin and the wins
   -- can never disagree about which of them was written last.
   function BR:saveCareer()
+    local lines = self.lines or {}
     return Career.save(mod, { name = self.myName, skin = self.skin,
-                              wins = self:winCount() }, log)
+                              wins = self:winCount(),
+                              intro = lines.intro, win = lines.win, lose = lines.lose }, log)
   end
 
   -- The player's say in POK-124.  Off means nothing is counted and nothing
@@ -1500,6 +1562,7 @@ return function(mod)
     self.armKick = nil
     self.lobbySeed = nil
     self.dailyLobby = nil
+    self.linesOf = {}
   end
 
   function BR:teardown(message)
@@ -2028,6 +2091,8 @@ return function(mod)
           opts.turnLimit = PVP_TURN_SECONDS
         end
         local battle, why = base(game, net, opts)
+        -- both trainers' own battle text (lib/lines.lua)
+        if battle and BR:inRound() then pcall(BR.dressBattle, BR, battle, opts) end
         -- whoever is watching us follows us in (lib/mirror.lua)
         if battle and BR:inRound() then BR:startRecordingLink(battle, opts) end
         -- POK-80: the link foe wears the skin they picked.  Their advertised
@@ -2367,9 +2432,11 @@ return function(mod)
       end
 
     elseif msg.t == "challenge" then
+      self:noteLines(fromId, msg.lines)
       self:onChallenge(fromId, msg.nonce)
 
     elseif msg.t == "accept" then
+      self:noteLines(fromId, msg.lines)
       self:onAccept(fromId, msg.nonce)
 
     elseif msg.t == "decline" then
@@ -2528,7 +2595,7 @@ return function(mod)
     -- a challenge from the player we are already challenging is an accept
     if self.pending and self.pending.to == fromId then
       self.pending = nil
-      self.relay:send(fromId, Wire.accept(nonce))
+      self.relay:send(fromId, Wire.accept(nonce, self:myLines()))
       self:beginBattle(fromId, Engage.isHost(self.myId, fromId), nonce)
       return
     end
@@ -2558,7 +2625,7 @@ return function(mod)
         BR.relay:send(fromId, Wire.decline(nonce, "held"))
         return
       end
-      BR.relay:send(fromId, Wire.accept(nonce))
+      BR.relay:send(fromId, Wire.accept(nonce, BR:myLines()))
       BR:beginBattle(fromId, Engage.isHost(BR.myId, fromId), nonce)
     end)
   end
@@ -2807,7 +2874,7 @@ return function(mod)
     self.pending = { to = target, nonce = self.nonceSeq,
                      host = Engage.isHost(self.myId, target), at = clock() or 0 }
     log:say("challenging %s on sight (nonce %d)", self:nameOf(target), self.nonceSeq)
-    self.relay:send(target, Wire.challenge(self.nonceSeq))
+    self.relay:send(target, Wire.challenge(self.nonceSeq, self:myLines()))
     -- and the challenger flashes while the challenge flies (POK-55)
     if ow then
       ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
@@ -3296,7 +3363,7 @@ return function(mod)
     self.pending = { to = id, nonce = self.nonceSeq,
                      host = Engage.isHost(self.myId, id), at = clock() or 0 }
     log:say("challenging %s by %s (nonce %d)", self:nameOf(id), how, self.nonceSeq)
-    self.relay:send(id, Wire.challenge(self.nonceSeq))
+    self.relay:send(id, Wire.challenge(self.nonceSeq, self:myLines()))
     if ow then
       ow.emote = { npc = ow.player, frames = ENGAGE_FLASH_FRAMES, bubble = 1 }
     end
@@ -9544,6 +9611,11 @@ return function(mod)
   mod.exports.playAgain = function() return BR:onAgain() end
   mod.exports.setRelay = function(addr) return BR:setRelayAddress(addr) end
   mod.exports.setName = function(name) return BR:setName(name) end
+  -- the trainer's own battle text (lib/lines.lua), and what the last
+  -- fight said
+  mod.exports.setLine = function(kind, text) return BR:setLine(kind, text) end
+  mod.exports.lines = function() return BR:myLines() end
+  mod.exports.battleText = function() return BR.lastBattleText end
   mod.exports.setSkin = function(id) return BR:setSkin(id) end
   mod.exports.skinState = function()
     local Skins = require("mods.battle_royale.lib.skins")
@@ -9904,7 +9976,7 @@ return function(mod)
     BR.pending = { to = id, nonce = BR.nonceSeq,
                    host = Engage.isHost(BR.myId, id), at = clock() or 0 }
     log:say("challenging %s by hand (nonce %d)", BR:nameOf(id), BR.nonceSeq)
-    BR.relay:send(id, Wire.challenge(BR.nonceSeq))
+    BR.relay:send(id, Wire.challenge(BR.nonceSeq, BR:myLines()))
     return true
   end
   -- ...what this side is holding, and what it has queued (POK-162)

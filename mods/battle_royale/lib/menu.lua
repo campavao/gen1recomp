@@ -299,25 +299,12 @@ function Menu.items(mod, BR, game)
         end,
       }))
     end)
-    -- the name every other trainer sees (and the winner banner uses);
-    -- the Gen 1 naming grid handles it since names are letters
-    setting("NAME: " .. BR:playerName(), function()
-      game.stack:push(mod.ui.NamingScreen.new(game, {
-        title = "YOUR NAME?",
-        maxLen = 7,
-        default = BR:playerName(),
-        onDone = function(name)
-          if name and name ~= "" then BR:setName(name) end
-        end,
-      }))
-    end)
-    -- the sprite every other trainer sees; wins unlock the wardrobe (POK-79)
-    setting("SKIN: " .. BR:skinLabel(), function()
-      local Skins = require("mods.battle_royale.lib.skins")
-      game.stack:push(Skins.Picker.new(game, {
-        wins = BR:winCount(), current = BR:skinId(),
-        onPick = function(id) BR:setSkin(id) end,
-      }))
+    -- Who you are to everyone else: the name, the skin and, since
+    -- 2026-09-10, your own battle text -- one row here, because this
+    -- face is exactly maxRows(2) long with a result on it (POK-161), and
+    -- the three of them are set once and rarely.
+    setting("TRAINER: " .. BR:playerName(), function()
+      Menu.openTrainer(mod, BR, game)
     end)
     -- No SERVER... row and no version row any more (POK-161): the first
     -- face was eight rows against maxRows(2) == 8, DAILY GAME earns a
@@ -461,6 +448,79 @@ end
 function Menu.openPace(mod, BR, game)
   game.stack:push(Menu.live(mod, game, function()
     return Menu.paceItems(mod, BR)
+  end))
+end
+
+-- The TRAINER screen: the name every other trainer sees (and the winner
+-- banner uses; the Gen 1 naming grid handles it since names are
+-- letters), the sprite they see (wins unlock the wardrobe, POK-79), and
+-- the trainer's own battle text (lib/lines.lua, 2026-09-10): the intro
+-- the other trainer reads when you walk up, the line they read when you
+-- beat them, the line they read when they beat you.  Each line is two
+-- rows of eighteen on the naming grid, one screen a row; an empty first
+-- row clears the line.  Pure over BR, so the suite can read the rows.
+function Menu.trainerItems(mod, BR, game)
+  local mine = BR:myLines() or {}
+  local items = {}
+  local function setting(label, onPress)
+    items[#items + 1] = { label = label, keepOpen = true, onSelect = onPress }
+  end
+  setting("NAME: " .. BR:playerName(), function()
+    game.stack:push(mod.ui.NamingScreen.new(game, {
+      title = "YOUR NAME?",
+      maxLen = 7,
+      default = BR:playerName(),
+      onDone = function(name)
+        if name and name ~= "" then BR:setName(name) end
+      end,
+    }))
+  end)
+  setting("SKIN: " .. BR:skinLabel(), function()
+    local Skins = require("mods.battle_royale.lib.skins")
+    game.stack:push(Skins.Picker.new(game, {
+      wins = BR:winCount(), current = BR:skinId(),
+      onPick = function(id) BR:setSkin(id) end,
+    }))
+  end)
+  local function line(kind, label)
+    setting(label .. ": " .. (mine[kind] and "SET" or "---"),
+            function() Menu.enterLine(mod, BR, game, kind, label) end)
+  end
+  line("intro", "INTRO")
+  line("win", "ON A WIN")
+  line("lose", "ON A LOSS")
+  setting("CLEAR TEXT", function()
+    for _, kind in ipairs({ "intro", "win", "lose" }) do BR:setLine(kind, nil) end
+  end)
+  items[#items + 1] = { label = "BACK", onSelect = function() end }
+  return items
+end
+
+function Menu.enterLine(mod, BR, game, kind, label)
+  local Lines = require("mods.battle_royale.lib.lines")
+  local rows = Lines.rows((BR:myLines() or {})[kind])
+  local acc = {}
+  local function ask(i)
+    game.stack:push(mod.ui.NamingScreen.new(game, {
+      title = label .. " " .. i .. "/" .. Lines.ROWS,
+      maxLen = Lines.WIDTH,
+      default = rows[i],
+      onDone = function(text)
+        acc[i] = text or ""
+        if i < Lines.ROWS and acc[i] ~= "" then
+          ask(i + 1)
+        else
+          BR:setLine(kind, table.concat(acc, "\n"))
+        end
+      end,
+    }))
+  end
+  ask(1)
+end
+
+function Menu.openTrainer(mod, BR, game)
+  game.stack:push(Menu.live(mod, game, function()
+    return Menu.trainerItems(mod, BR, game)
   end))
 end
 
