@@ -447,6 +447,9 @@ return function(mod)
     return self.newsQ
   end
   function BR:news(text, icon)
+    -- the ticker is drawn in a round; anywhere else the line would be
+    -- lost, so it goes the old way
+    if not self:inRound() then sayLater(text, 0) return true end
     local Ticker = require("mods.battle_royale.lib.ticker")
     if not Ticker.push(self:newsQueue(), text, icon) then return false end
     local l = self.newsLog
@@ -1994,7 +1997,9 @@ return function(mod)
       local r = msg.ring
       if r then self:applyRing(r.phase, r.cx, r.cy, r.r, r.place, r.elapsed) end
       log:say("watching: joined a match in progress, %d left", self:aliveCount())
-      sayLater("You're watching.\nLEFT and RIGHT\nswitch trainers.\fYou play the\nnext match.", 1.5)
+      self:news("You're watching.")
+      self:news("LEFT and RIGHT\nswitch trainers.")
+      self:news("You play the\nnext match.")
     end
     self.sentMap, self.sentFacing, self.resync = nil, nil, 0
     self.sentBusy = false    -- not nil: nil is "not busy", a real answer
@@ -2002,8 +2007,9 @@ return function(mod)
     if safari > 0 and not msg.late then
       -- a beat and a half after landing: past the held A that started the
       -- match, so the rules are actually readable (POK-50)
-      sayLater(("Catch what you can!\nThe PA calls time\nin %d:%02d."):format(
-        math.floor(safari / 60), safari % 60), 1.5)
+      self:news("Catch what you can!")
+      self:news(("The PA calls time\nin %d:%02d."):format(
+        math.floor(safari / 60), safari % 60))
     end
   end
 
@@ -5157,9 +5163,10 @@ return function(mod)
       if Fog.coversAll(self.ring.radius) then
         -- nowhere to send them: the announcement already said so, and a
         -- "get to X" here would be a lie
-        say("You are in the fog!")
+        self:news("You are in\nthe fog!")
       else
-        say(("You are in the fog!\nGet to %s!")
+        self:news("You are in\nthe fog!")
+        self:news(("Get to\n%s!")
           :format((self.ring.center and self.ring.center.name) or "safety"))
       end
       return
@@ -5774,9 +5781,9 @@ return function(mod)
         if now - (BR.lastClosedSay or -10) > 3 then
           BR.lastClosedSay = now
           if BR.phase == "safari" then
-            say("The PA called\ntime on you!\fWait for the\nbuzzer.")
+            BR:news("The PA called\ntime on you!")
           else
-            say("The SAFARI ZONE\nis closed for\nthe match.")
+            BR:news("The SAFARI ZONE\nis closed.")
           end
         end
         return false
@@ -5786,7 +5793,7 @@ return function(mod)
         local now = clock() or 0
         if now - (BR.lastClosedSay or -10) > 3 then
           BR.lastClosedSay = now
-          say("The SAFARI ZONE\nis closed for\nthe match.")
+          BR:news("The SAFARI ZONE\nis closed.")
         end
         return false
       elseif BR.phase == "drop" or BR.phase == "match" then
@@ -5799,7 +5806,7 @@ return function(mod)
             local now = clock() or 0
             if now - (BR.lastClosedSay or -10) > 3 then
               BR.lastClosedSay = now
-              say("OAK's LAB is\nclosed for the\nmatch.")
+              BR:news("OAK's LAB is\nclosed.")
             end
             return false
           end
@@ -5921,6 +5928,10 @@ return function(mod)
   --   paced locally on each side (only the moves are lockstep), which is
   --   what POK-65's watchdog already relied on.
   local AUTO_ADVANCE_SECONDS = 3
+  -- ...and two for a line of battle text (2026-09-10): "X used TACKLE!"
+  -- is read in one, and a fight is where the clock is felt most.  The
+  -- boxes keep three: what is left of them asks something.
+  local BATTLE_TEXT_SECONDS = 2
   function BR:tickAutoResolve(game)
     if not self.matchWorld then
       self.runnerBusySince, self.battleTextSince, self.boxSince = nil, nil, nil
@@ -5963,7 +5974,7 @@ return function(mod)
         -- user's 2026-09-05 match).  The page is pressed through the
         -- frame it can be; the jingle still plays under it.
         if self.catchPending == lb
-           or (now - self.battleTextSince) >= AUTO_ADVANCE_SECONDS then
+           or (now - self.battleTextSince) >= BATTLE_TEXT_SECONDS then
           self.battleTextSince = nil
           press("b")
         end
@@ -6207,9 +6218,9 @@ return function(mod)
     relay:broadcast(Wire.spill(spill.map, spill.mons, spill.bag))
     self.spills:add(spill)
     if #spill.mons > 0 then
-      say("Your POKeMON\nscattered!")
+      self:news("Your POKeMON\nscattered!")
     elseif spill.bag then
-      say("Your BAG hit\nthe ground!")
+      self:news("Your BAG hit\nthe ground!")
     end
   end
 
@@ -8816,7 +8827,7 @@ return function(mod)
        and ow and ow.map and ow.map.def then
       local entry = data:textEntry(ow.map.def.label, def.text)
       if entry and entry.cableClub then
-        say("The CABLE CLUB is\nclosed for\nthe match.")
+        BR:news("The CABLE CLUB\nis closed.")
         return
       end
       -- The nurse closes when the fog rolls in (POK-117).  A free, unlimited,
@@ -8924,7 +8935,7 @@ return function(mod)
     -- talk path could otherwise charge a second 500 and re-open the zone
     if BR:inRound() and ow and ow.map and ow.map.id == "SAFARI_ZONE_GATE"
        and not (BR.game and BR.game.save and BR.game.save.safari) then
-      say("The SAFARI ZONE\nis closed for\nthe match.")
+      BR:news("The SAFARI ZONE\nis closed.")
       return
     end
     -- The other half of POK-122: the youngster arms the very same escort
@@ -9451,7 +9462,7 @@ return function(mod)
               require("src.ui.Screens").push(game, "TownMap")
             end
           end)
-          if not okMap then say("The TOWN MAP is\nunreadable here.") end
+          if not okMap then BR:news("The TOWN MAP is\nunreadable here.") end
         end,
       })
     end
@@ -9490,7 +9501,7 @@ return function(mod)
       label = "OUT OF ORDER",
       keepOpen = true,
       onSelect = function()
-        say("The storage system\nis out of bounds\nduring a match!")
+        BR:news("The PC is out\nof bounds!")
       end,
     } }
   end)

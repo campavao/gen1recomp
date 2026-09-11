@@ -1379,7 +1379,10 @@ do
     local src = f:read("*a")
     f:close()
     T.check(src:find("local AUTO_ADVANCE_SECONDS = 3", 1, true) ~= nil,
-            "text auto-advances after three seconds")
+            "a box auto-advances after three seconds")
+    T.check(src:find("local BATTLE_TEXT_SECONDS = 2", 1, true) ~= nil
+            and src:find("(now - self.battleTextSince) >= BATTLE_TEXT_SECONDS", 1, true) ~= nil,
+            "...and a line of battle text after two (2026-09-10)")
     local auto = src:match("function BR:tickAutoResolve%(.-\n  end\n")
     T.check(auto ~= nil, "found BR:tickAutoResolve")
     T.check(auto and auto:find("lb.msgWaiting or lb.msgPrompt", 1, true) ~= nil
