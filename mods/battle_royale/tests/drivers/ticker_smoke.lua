@@ -116,6 +116,14 @@ return function(game)
   if game.stack:top() ~= C.ow() then
     return C.fail("A on the bag opened something: " .. tostring(game.stack:top()))
   end
+  if SHOTS then
+    -- a news line on row 0, the count stepped aside under it
+    for _ = 1, 60 do
+      if (news().text or ""):sub(1, 4) == "Took" then break end
+      U.wait(2)
+    end
+    U.shot(game, SHOTS .. "/ticker_news.png")
+  end
   if (game.save.money or 0) ~= money0 + 500 then return C.fail("A did not take the money") end
   if (game.save.inventory.POTION or 0) ~= potions0 + 1 then return C.fail("A did not take the POTION") end
   local okS, whyS = waitSaid("Took POTION x1!", 60)

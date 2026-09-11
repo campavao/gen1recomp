@@ -9159,14 +9159,32 @@ return function(mod)
     local g = gbCanvas(viewport)
     g.setColor(1, 1, 1, 1)
 
-    -- Top-right: the count -- dropped a row while the SAFARI clock is up
-    -- (POK-152).  The clock box is 13 tiles wide and the count up to 9 on
-    -- a 20-tile row, so they overlapped on tiles 11-12, and the clock
-    -- painted second: a full lobby read "1 LEFT" with the 3 underneath
-    -- the clock's border.  The other top-left boxes (FOG!, the watched
-    -- name) are 9 tiles at most, so row 0 is safe everywhere else.
+    -- The top rows, laid out together (2026-09-10).  Row 0 has the count
+    -- on the right and, on the left, whichever of FOG! / the SAFARI clock
+    -- / the watched name applies.  The ticker takes row 0 on the left
+    -- when none of those does -- the user: "without FOG it just looks
+    -- odd" down at row 3 -- and row 3 (6 in the safari, whose clock has
+    -- row 3's right-hand end for the count) when one of them does.
+    --
+    -- The count then gives way, not the news: a two-row ticker item can
+    -- be the full 20 tiles, and the count is 9 at most, so when the two
+    -- would meet on row 0 the count drops to the row under the ticker's
+    -- box.  It already moves for the SAFARI clock (POK-152: the clock is
+    -- 13 tiles and the count painted second, "1 LEFT" with the 3 under
+    -- the clock's border), so a count that steps aside is nothing new.
+    BR:lookAtSpill(ow)
+    local Ticker = require("mods.battle_royale.lib.ticker")
+    local item = Ticker.tick(BR:newsQueue(), clock() or 0)
+    local slotBusy = BR.status == "out" or BR.phase == "safari" or BR.wasInFog
+    local row = slotBusy and (BR.phase == "safari" and 6 or 3) or 0
+    local bw, bh
+    if item then bw, bh = Ticker.boxOf(item) end
+
     local left = ("%d LEFT"):format(BR:aliveCount())
-    hudBox(left, 20 - (#left + 2), BR.phase == "safari" and 3 or 0)
+    local leftW = #left + 2
+    local leftRow = BR.phase == "safari" and 3 or 0
+    if item and row == 0 and bw + leftW > 20 then leftRow = bh end
+    hudBox(left, 20 - leftW, leftRow)
 
     -- top-left: the fog, or who you are watching
     if BR.status == "out" then
@@ -9190,18 +9208,11 @@ return function(mod)
 
     -- ------- the ticker (lib/ticker.lua, 2026-09-10)
     --
-    -- Row 3, under the row-0 boxes: a two-row item could not share row 0
-    -- with N LEFT on the right, and the standing line (a ball's POKeMON,
-    -- icon beside it) is where the eye already is.  One row lower again
-    -- while the SAFARI clock has row 3's right-hand end.  Ticked from the
-    -- draw so a beat only elapses while the box can be read: news that
-    -- lands during a fight is shown after it, not lost under it.
-    BR:lookAtSpill(ow)
-    local Ticker = require("mods.battle_royale.lib.ticker")
-    local item = Ticker.tick(BR:newsQueue(), clock() or 0)
+    -- Ticked from the draw so a beat only elapses while the box can be
+    -- read: news that lands during a fight is shown after it, not lost
+    -- under it.  The standing line (a ball's POKeMON, icon beside it)
+    -- is the same box.
     if item then
-      local row = BR.phase == "safari" and 6 or 3
-      local bw, bh = Ticker.boxOf(item)
       g.setColor(1, 1, 1, 1)
       Font.drawBox(0, row, bw, bh)
       local tx = 8
