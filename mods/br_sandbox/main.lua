@@ -30,6 +30,7 @@ return function(mod)
 
   mod.content.text:register("_BrArenaSign", "BR SANDBOX")
   mod.content.text:register("_BrArenaDummy", "I DO NOT MOVE.")
+  mod.content.text:register("_BrArenaNurse", "I HEAL.")
 
   mod.content.maps:register(ARENA, {
     id = ARENA,
@@ -47,6 +48,13 @@ return function(mod)
       { index = 1, name = "BRARENA_DUMMY", sprite = "SPRITE_FISHER",
         movement = "STAY", range = "NONE", x = 16, y = 10,
         text = "TEXT_BRARENA_DUMMY" },
+      -- A nurse with no counter: the `nurse` flag on her text entry is
+      -- all the engine (OverworldController, "marts / nurses / PCs via
+      -- TX_SCRIPT markers") and the mod (its world.talk wrap) read, so
+      -- the Centre's flow can be driven here without a Centre.
+      { index = 2, name = "BRARENA_NURSE", sprite = "SPRITE_NURSE",
+        movement = "STAY", range = "NONE", x = 8, y = 6,
+        text = "TEXT_BRARENA_NURSE" },
     },
     signs = { { index = 1, x = 12, y = 4, text = "TEXT_BRARENA_SIGN" } },
   })
@@ -54,6 +62,7 @@ return function(mod)
   mod.content.text_pointers:patch("BrArena", {
     TEXT_BRARENA_SIGN = { text = "_BrArenaSign" },
     TEXT_BRARENA_DUMMY = { text = "_BrArenaDummy" },
+    TEXT_BRARENA_NURSE = { text = "_BrArenaNurse", nurse = true },
   })
 
   mod.log:info("BR_ARENA registered (" .. (W * 2) .. "x" .. (H * 2) .. " cells)")

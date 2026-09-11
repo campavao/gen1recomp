@@ -354,6 +354,7 @@ return function(mod)
     battle = nil,         -- active fight { channel, opponentId, isHost }
     nonceSeq = 0,
     pendingSays = {},     -- says waiting for a free runner (POK-49/POK-50)
+    newsLog = {},         -- the last ticker lines, for a driver to read
     events = Events.new(), -- challenges waiting for a quiet screen (POK-162)
     despawns = Despawn.new(),  -- beaten trainers, hidden on a quiet frame
     stats = nil,          -- the run's record: catches, beats, steps (POK-47)
@@ -427,6 +428,32 @@ return function(mod)
     local now = clock() or 0
     local q = BR.pendingSays
     q[#q + 1] = { text = text, at = now + (delay or 0) }
+  end
+
+  -- The ticker (2026-09-10): news in the corner, and nothing waits on it.
+  -- Most of what used to be a say -- the fog moved, a POKeMON evolved, a
+  -- leader fell -- is information, not a decision, and a text box made
+  -- the player stand still for it (POK-169's three seconds, per box).
+  -- lib/ticker.lua queues the lines; the HUD hook draws and ticks them.
+  -- Required inside: the chunk is at LuaJIT's upvalue cap.
+  function BR:newsQueue()
+    if not self.newsQ then
+      self.newsQ = require("mods.battle_royale.lib.ticker").new()
+    end
+    return self.newsQ
+  end
+  function BR:news(text, icon)
+    local Ticker = require("mods.battle_royale.lib.ticker")
+    if not Ticker.push(self:newsQueue(), text, icon) then return false end
+    local l = self.newsLog
+    l[#l + 1] = text
+    if #l > 40 then table.remove(l, 1) end
+    log:say("NEWS: %s", (text:gsub("\n", " ")))
+    return true
+  end
+  -- the standing line: what the player is looking at, until they look away
+  function BR:newsHold(text, icon)
+    require("mods.battle_royale.lib.ticker").hold(self:newsQueue(), text, icon)
   end
 
   -- ------- relay address (a mod option, editable from the menu)
@@ -539,13 +566,14 @@ return function(mod)
     local top = game.stack and game.stack:top()
     if not (ow and top) then return nil end
     if top ~= ow then return "menu" end
-    -- A dialog is a menu too (POK-162): the nurse's script runs INSIDE
-    -- the overworld state, so `top == ow` alone called a trainer mid-heal
-    -- free -- and a challenge to somebody mid-heal is the one that wedged
-    -- a match.  Somebody reading is not about to run either.
+    -- A dialog is a menu too (POK-162): a script runs INSIDE the
+    -- overworld state, so `top == ow` alone called a trainer mid-read
+    -- free.  Somebody reading is not about to run either.  The heal
+    -- machine (BR:nurseHeal) is the same: inside the state, and busy.
     if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then
       return "menu"
     end
+    if ow.healAnim then return "menu" end
     return nil
   end
 
@@ -1408,6 +1436,7 @@ return function(mod)
     self.pendingDrop = nil   -- a release that never landed (POK-34)
     self.pendingGift = nil   -- a gift whose box was never reopened (POK-112)
     self.pendingSays = {}
+    if self.newsQ then require("mods.battle_royale.lib.ticker").clear(self.newsQ) end
     Events.clear(self.events)
     self.despawns:clear()
     self.runnerBusySince, self.lastAutoA = nil, nil
@@ -1471,7 +1500,6 @@ return function(mod)
     self.armKick = nil
     self.lobbySeed = nil
     self.dailyLobby = nil
-    self.lootMenu = nil
   end
 
   function BR:teardown(message)
@@ -2377,7 +2405,7 @@ return function(mod)
       local fallen = Gyms.leaderOfObject(
         self.game and self.game.data and self.game.data.maps, msg.map, msg.obj)
       if fallen and self:inRound() then
-        sayLater(("%s has fallen!"):format(fallen.name))
+        self:news(("%s has fallen!"):format(fallen.name))
       end
 
     elseif msg.t == "took" then
@@ -2386,8 +2414,6 @@ return function(mod)
       else
         self.spills:take(msg.key)
       end
-      -- a bag we are looking into just changed under us (POK-176)
-      self:refreshLoot(msg.key)
 
     elseif msg.t == "safari" then
       -- the Safari clock is the host's too
@@ -2480,7 +2506,8 @@ return function(mod)
       self.relay:send(fromId, Wire.decline(nonce, "busy"))
       return
     end
-    if not self:screenIsQuiet() then
+    -- a menu is popped for it (POK-199); what cannot be popped queues
+    if not self:screenIsQuiet() and not self:yankScreen() then
       log:say("challenge from %s queued behind the screen (nonce %s)",
               self:nameOf(fromId), tostring(nonce))
       Events.push(self.events, { kind = "challenge", from = fromId, nonce = nonce },
@@ -2579,7 +2606,7 @@ return function(mod)
       Events.drop(self.events, "begin", fromId)
       -- "held" and "timeout" are the queue's own housekeeping (POK-162):
       -- the pair meets again on the next tick they are both free
-      if why ~= "held" and why ~= "timeout" then say("...They ran off.") end
+      if why ~= "held" and why ~= "timeout" then self:news("...They ran off.") end
     end
     -- the challenger gave up while we were holding their challenge...
     Events.drop(self.events, "challenge", fromId)
@@ -2612,7 +2639,9 @@ return function(mod)
       if self.relay then self.relay:send(ev.from, Wire.decline(ev.nonce, "held")) end
     end
     if not q.queue[1] then return end
-    if not self:screenIsQuiet() then return end
+    -- something is owed: a menu opened since it was queued comes down
+    -- for it (POK-199)
+    if not self:screenIsQuiet() and not self:yankScreen() then return end
     local ev = Events.pop(q)
     if ev.kind == "challenge" then
       self:answerChallenge(ev.from, ev.nonce)
@@ -2727,16 +2756,17 @@ return function(mod)
         others[#others + 1] = { id = id, map = p.map, x = gx, y = gy,
                                 facing = p.facing, moving = false,
                                 status = p.status,
-                                -- somebody in a fight OR a menu (POK-162):
-                                -- the challenge waits until they are back
-                                -- on the map, where they can answer it.
-                                -- A bot has no screen to be in.
-                                -- A bot is busy only mid-FIGHT (its grass
+                                -- somebody in a fight.
+                                -- A trainer in a MENU is a target (POK-199):
+                                -- their side pops the menu for the
+                                -- challenge, or, where it cannot (a script
+                                -- mid-run, the heal machine), queues it
+                                -- (POK-162) and answers when it can.  A
+                                -- bot is busy only mid-FIGHT (its grass
                                 -- dwell); one heading for the nurse may
                                 -- still be jumped (POK-160), and that is
                                 -- the same rule challengeTrainer applies.
-                                busy = p.status == "battle" or p.busy == "battle"
-                                  or (p.busy ~= nil and not Bots.isBot(id)) }
+                                busy = p.status == "battle" or p.busy == "battle" }
       end
     end
     -- terrain stops the eyeline; the other trainers on it do not, since they
@@ -2798,9 +2828,10 @@ return function(mod)
   function BR:tryBotEngage()
     if self.status ~= "alive" or self.battle or self.pending
        or self.botFight then return end
-    -- only onto a quiet screen (POK-162): a bot that spots you in a menu
-    -- would push its battle on top of it
-    if not self:screenIsQuiet() then return end
+    -- Onto a quiet screen only (POK-162): a bot that spots you in a menu
+    -- would push its battle on top of it.  The menu is popped for the bot
+    -- that actually spots you (POK-199, below), not for every frame you
+    -- spend in the PACK with a bot somewhere on the map.
     -- ...and not in the breather after a fight (POK-174): the bot parked
     -- beside your last fight does not get the next one for free
     if self:inBreather() then return end
@@ -2842,6 +2873,9 @@ return function(mod)
              { id = id, map = p.map, x = gx, y = gy, facing = p.facing,
                moving = false, status = "alive", busy = p.busy and true },
              me, { range = Bots.SIGHT, blocked = eye }) == self.myId then
+          -- it sees you: the menu comes down (POK-199), or, where it
+          -- cannot, the bot waits for the screen as before
+          if not self:screenIsQuiet() and not self:yankScreen() then return end
           self.pending = { to = id, nonce = -1, host = true, at = clock() or 0 }
           engageFlash(self.ghosts:npcOf(id), function()
             BR:walkUpThen(id, function()
@@ -3320,9 +3354,10 @@ return function(mod)
     if not dir or w.steps >= Bots.WALKUP_STEPS then
       -- It is here; the fight opens when the screen is ours (POK-162).  A
       -- menu or a dialog up at this moment used to get a battle pushed on
-      -- top of it.  Now the bot waits beside you, and pending is held for
-      -- as long as it waits (tickPending skips a walk-up).
-      if not self:screenIsQuiet() then return end
+      -- top of it.  Now the menu comes down for it (POK-199); where it
+      -- cannot, the bot waits beside you, and pending is held for as long
+      -- as it waits (tickPending skips a walk-up).
+      if not self:screenIsQuiet() and not self:yankScreen() then return end
       return arrived()
     end
     w.steps = w.steps + 1
@@ -3453,14 +3488,13 @@ return function(mod)
       local def = data and data.pokemon and data.pokemon[species]
       return (def and def.name) or tostring(species)
     end
-    local text
-    if letGo then
-      text = ("%s let %s go\nfor %s!"):format(name, nameOf(letGo), nameOf(caught))
-    else
-      text = ("%s caught\n%s!"):format(name, nameOf(caught))
-    end
+    local text = ("%s caught\n%s!"):format(name, nameOf(caught))
     self.lastCatchTold = text   -- for a driver to read (mod.exports.catchTold)
-    sayLater(text, 0)
+    self:news(text, caught)
+    -- the swap is its own beat: three rows do not fit one ticker item
+    if letGo then
+      self:news(("...and let\n%s go."):format(nameOf(letGo)), letGo)
+    end
   end
 
   -- The client's half: a botrec that grew a row, or swapped one, is a
@@ -4229,6 +4263,50 @@ return function(mod)
   -- Has the fog reached the CENTRE the player is standing in (POK-140)?
   -- Resolved through the town the building's door opens onto, because an
   -- interior has no square on the ring's grid -- see Fog.outdoorFor.
+  -- The counter, the match's way (2026-09-10).  The engine's nurse is five
+  -- boxes and a bow -- welcome, HEAL/CANCEL, "we'll need your POKeMON",
+  -- the machine, "fighting fit", the farewell -- and in a match every one
+  -- of them was a press, or three seconds, with the clock running and a
+  -- rival possibly at the door.  This is one question and the machine.
+  -- Talk is single-winner with mods ahead of base, so the engine's
+  -- OverworldState:nurseHeal never runs in a session.
+  --
+  -- The rule the user set: you can be challenged while she is ASKING
+  -- (the box is a menu; POK-199 pops it), and not from HEAL until the
+  -- machine is done -- ow.healAnim is the lock, read by screenIsQuiet and
+  -- myBusy -- and there is nothing after the machine to sit in.  Pokemon
+  -- heal (the engine's own), the machine (its own animation, stepped by
+  -- OverworldState:update: balls, jingle, map theme back), the nurse
+  -- faces you again, and the ticker says so.  No lastHeal: a whiteout in
+  -- a match is an elimination, not a walk back here.
+  function BR:nurseHeal(ow, npc)
+    local game = self.game
+    if not (game and ow and ow.player) then return false end
+    local TextBox = require("src.render.TextBox")
+    local Theme = require("src.ui.Theme")
+    if npc and npc.facePlayer then npc:facePlayer(ow.player) end
+    game.stack:push(TextBox.new(game, "Heal your\nPOKeMON?", nil, {
+      choice = function(yes)
+        if not yes then return end
+        if ow.healAnim then return end
+        if npc then npc.facing = "left" end
+        require("src.core.Music").stop()
+        local Pokemon = require("src.pokemon.Pokemon")
+        for _, mon in ipairs(game.save.party or {}) do Pokemon.heal(mon) end
+        local px, py = ow.player.cellX * 16, ow.player.cellY * 16
+        ow.healAnim = { balls = #(game.save.party or {}), lit = 0, timer = 0,
+                        visible = true, px = px, py = py }
+        ow.healAnim.onDone = function()
+          if npc and npc.facePlayer then npc:facePlayer(ow.player) end
+          BR:news("Your POKeMON are\nfighting fit!")
+        end
+        log:say("HEALED: you, at the counter")
+      end,
+      choiceLabels = { "HEAL", "CANCEL" }, choiceBox = Theme.healCancelBox,
+    }))
+    return true
+  end
+
   function BR:nurseClosed()
     if not self.ring then return false end
     local ow = mod.world:current()
@@ -4669,8 +4747,8 @@ return function(mod)
       -- the eye is public from the landing (POK-39): the ring itself stays
       -- quiet until it first shrinks, but where it will shrink TO is not a
       -- secret -- and the TOWN MAP in the bag can show it
-      sayLater(("The fog will close\non %s.\fCheck your\nTOWN MAP."):format(
-        place or "KANTO"))
+      self:news(("The fog closes on\n%s."):format(place or "KANTO"))
+      self:news("Check your\nTOWN MAP.")
     elseif was ~= phase and phase > 1 then
       -- ONE box per shrink, not three.  The ring, the level rung and the
       -- rod all move on the same beat by design -- lib/levels.lua and
@@ -4680,11 +4758,13 @@ return function(mod)
       -- did not.  The level number and the rod's name were the detail
       -- nobody was reading; that the fog moved and everything got
       -- stronger is the news.  WHERE it closed stays on the TOWN MAP,
-      -- which the opening message above points at.
+      -- which the opening message above points at.  On the ticker since
+      -- 2026-09-10: nobody stops walking for it, and tickLevels names
+      -- each POKeMON the rung evolved right after.
       if Fog.coversAll(radius) then
-        sayLater("The fog covers\nall of KANTO!\fYour POKeMON and\nitems grew\nstronger!")
+        self:news("The fog covers\nall of KANTO!")
       else
-        sayLater("The fog spreads!\fYour POKeMON and\nitems grew\nstronger!")
+        self:news("The fog spreads!\nAll grew stronger!")
       end
     end
     -- after the announcement, so the news lands before the gift
@@ -4735,7 +4815,7 @@ return function(mod)
     -- the say needs a world to land in; a promotion in the lobby is
     -- the screen's own news, and the log has it either way
     if not self:inRound() then return end
-    sayLater("The host left.\fYou are the host\nnow.")
+    self:news("The host left.\nYou are host now!")
     -- the eye as it was announced, rather than re-derived from the seed
     if self.ring and self.ring.center then self.ringCenter = self.ring.center end
     -- applyRing has been keeping the clock from the host's own `e`.  A
@@ -4893,7 +4973,58 @@ return function(mod)
     local ow = mod.world:overworld()
     if not (game and ow and game.stack:top() == ow) then return false end
     if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then return false end
+    -- the heal machine runs INSIDE the overworld state (BR:nurseHeal),
+    -- and it is the one moment at the counter a fight may not open
+    if ow.healAnim then return false end
     return self:liveLocalBattle() == nil
+  end
+
+  -- Pop the player's own screens off the overworld so a fight can open
+  -- (POK-199).  A menu bought immunity: a challenge that landed under the
+  -- PACK was queued until the PACK closed, and a trainer who never closed
+  -- it could not be reached -- the challenger's side gave up after
+  -- Engage.PENDING_SECONDS.  Answering under the menu is not the fix (a
+  -- battle pushed beneath it is pushed where StateStack:update never
+  -- looks, which is the wedge POK-162 was), so the menu goes first.
+  --
+  -- Only screens that are nothing but a view are popped -- START, the
+  -- PACK, the party, the TOWN MAP, a list, a text box, a shop, a summary,
+  -- the FLY list, a choice, a quantity -- and only when EVERY screen above
+  -- the overworld is one of them.  A running script owns a box and waits
+  -- under it (popping the box strands the script); the heal machine, a
+  -- transition, an evolution and a battle are not views.  Those refuse,
+  -- and the challenge waits in the queue as before.  True when the
+  -- screen is quiet afterwards, whether or not anything was popped.
+  function BR:yankScreen()
+    local game = self.game
+    local ow = mod.world:overworld()
+    if not (game and ow and game.stack and game.stack.states) then return false end
+    if ow.runner and ow.runner.isRunning and ow.runner:isRunning() then return false end
+    if ow.healAnim or ow.transitioning or self:liveLocalBattle() then return false end
+    local states = game.stack.states
+    local base
+    for i, s in ipairs(states) do if s == ow then base = i end end
+    if not base then return false end
+    if base == #states then return self:screenIsQuiet() end
+    local views = {}
+    for _, name in ipairs({
+      "src.ui.StartMenu", "src.ui.BagMenu", "src.ui.PartyMenu", "src.ui.TownMap",
+      "src.ui.ListMenu", "src.render.TextBox", "src.ui.Menu", "src.ui.ShopMenu",
+      "src.ui.SummaryMenu", "src.ui.FlyMenu", "src.ui.ChoiceBox", "src.ui.QuantityBox",
+    }) do
+      local okM, M = pcall(require, name)
+      if okM and type(M) == "table" then views[M] = true end
+    end
+    for i = base + 1, #states do
+      if not views[getmetatable(states[i])] then return false end
+    end
+    local popped = 0
+    while game.stack:top() ~= ow and game.stack:top() do
+      game.stack:pop()
+      popped = popped + 1
+    end
+    log:say("yanked %d screen(s) for a fight (POK-199)", popped)
+    return self:screenIsQuiet()
   end
 
   -- The other half of POK-31: the enemy's bench ticks like ours, and the
@@ -5871,24 +6002,29 @@ return function(mod)
     self.lastLevelTick = now
 
     local target = self:level()
-    local raised, evolved = 0, nil
+    local raised, evolved = 0, {}
     for _, mon in ipairs(self.game.save.party or {}) do
       if Levels.needsScaling(mon, target) then
         local was = mon.species
         if scaleMon(self.game, mon, target) then
           raised = raised + 1
-          if mon.species ~= was then evolved = mon.species end
+          if mon.species ~= was then
+            evolved[#evolved + 1] = { from = was, to = mon.species }
+          end
         end
       end
     end
-    if raised > 0 and self.announcedLevel ~= target then
-      self.announcedLevel = target
-      -- The rung itself is announced by the ring that caused it, in the
-      -- one message that also covers the rod (see applyRing).  An
-      -- evolution is the part of that beat the ring cannot carry -- it is
-      -- per-player and not known until the party is actually scaled --
-      -- and it is rare enough to be news rather than noise.
-      if evolved then sayLater("One of your\nPOKeMON evolved!") end
+    if raised > 0 then self.announcedLevel = target end
+    -- The rung itself is announced by the ring that caused it (see
+    -- applyRing).  An evolution is the part of that beat the ring cannot
+    -- carry -- it is per-player and not known until the party is actually
+    -- scaled -- and it is news by name: WHICH one, INTO what, on the
+    -- ticker with the new face beside it (2026-09-10).
+    local pk = self.game.data and self.game.data.pokemon or {}
+    for _, e in ipairs(evolved) do
+      local fromName = (pk[e.from] and pk[e.from].name) or tostring(e.from)
+      local toName = (pk[e.to] and pk[e.to].name) or tostring(e.to)
+      self:news(("%s evolved\ninto %s!"):format(fromName, toName), e.to)
     end
   end
 
@@ -6010,16 +6146,20 @@ return function(mod)
     end
   end
 
-  -- Open one: the prompt Oak's lab uses for the starters, take or leave.
-  -- It used to start a catch battle against the fallen Pokemon at 1 HP; the
-  -- hard part was the battle its owner already lost, and fighting it again
-  -- to earn it was ceremony -- and slow, under fog pressure.  A beaten team
-  -- is yours if you reach it first.
+  -- Open one: A takes it.  It used to start a catch battle against the
+  -- fallen Pokemon at 1 HP; the hard part was the battle its owner already
+  -- lost, and fighting it again to earn it was ceremony -- and slow, under
+  -- fog pressure.  Then it asked "This contains a X.  Do you want it?",
+  -- and that was two more presses for a question whose answer was always
+  -- yes (2026-09-10): the ticker names the POKeMON, icon and all, the
+  -- moment you face the ball (lookAtSpill), so by the time A is pressed
+  -- the looking has been done.  A beaten team is yours if you reach it
+  -- first.  A bag is the same press: everything that fits, in one go.
   --
-  -- The ball is claimed for everyone only on YES.  NO -- or backing out of
-  -- the drop picker at a full party -- leaves it on the ground for the next
-  -- trainer, and a claim that lands while a menu is still open is answered
-  -- by the ball being gone.
+  -- The ball is claimed for everyone at the press.  Backing out of the
+  -- drop picker at a full party leaves it on the ground for the next
+  -- trainer, and a claim that lands while the picker is still open is
+  -- answered by the ball being gone.
   function BR:openSpill(key)
     local ball = self.spills:get(key)
     local game = self.game
@@ -6028,83 +6168,77 @@ return function(mod)
     local ow = mod.world:overworld()
     if not ow then return nil, "no overworld" end
     if ow.transitioning then return nil, "mid-warp" end
-    if ball.bag then return self:openBag(key, ball) end
+    if ball.bag then return self:lootTakeAll(key) end
     local data = game.data
     local def = data.pokemon and data.pokemon[ball.species]
     local name = (def and def.name) or tostring(ball.species)
-    local TextBox = require("src.render.TextBox")
-    game.stack:push(TextBox.new(game,
-      ("This contains a\n%s.\nDo you want it?"):format(name), nil, {
-      choice = function(yes)
-        if not yes then return end
-        if not self.spills:get(key) then
-          say("It's gone --\nsomeone was\nquicker.")
-          return
-        end
-        local save = game.save
-        if #(save.party or {}) >= 6 then
-          -- POK-34: full is not a refusal any more -- you choose who makes
-          -- room, and what you release lands here as a ball.  Cancel (or
-          -- losing the race while the picker is up) keeps the status quo:
-          -- the ball stays right where it is.
-          self:offerDropForBall(key, ball, name)
-          return
-        end
-        self:claimSpill(key, ball, name)
-      end,
-    }))
+    local save = game.save
+    if #(save.party or {}) >= 6 then
+      -- POK-34: full is not a refusal -- you choose who makes room, and
+      -- what you release lands here as a ball.  Cancel (or losing the
+      -- race while the picker is up) keeps the status quo: the ball
+      -- stays right where it is.
+      self:offerDropForBall(key, ball, name)
+      return true
+    end
+    self:claimSpill(key, ball, name)
     return true
   end
 
-  -- A fallen trainer's BAG (POK-25, reshaped by POK-176): A on it opens the
-  -- bag itself -- the engine's own item list, holding only what this bag
-  -- holds -- and each row offers USE / TAKE / CANCEL.  No text first: the
-  -- old flow read the contents out two lines a page, asked "Take it?",
-  -- then asked again whether to open the PACK, and a player under fog
-  -- pressure pressed through five boxes to reach one POTION.
-  --
-  -- Taking is PER ITEM on the wire (Wire.took with item and count,
-  -- PROTOCOL 11): what you leave stays on the ground for the next
-  -- trainer, and every client's copy of the bag gets lighter by the same
-  -- amount.  The money is a row of its own, TAKE only.  USE takes the
-  -- item and then runs the engine's own use -- the PACK opens on that
-  -- row with USE already chosen -- so a POTION picks its target, a TM
-  -- teaches, a stone evolves, exactly as from the START menu.
-  local MONEY_ROW = "money"
-
-  local TAKE_ALL_ROW = "takeall"
-
-  function BR:lootRows(key)
-    local game = self.game
-    local ball = self.spills:get(key)
-    local bag = ball and ball.bag
-    local rows = {}
-    for _, it in ipairs(bag and bag.items or {}) do
-      local def = game.data.items and game.data.items[it.id]
-      rows[#rows + 1] = { value = it.id, label = (def and def.name) or it.id,
-                          right = "x" .. tostring(it.n) }
+  -- What the player is looking at (2026-09-10): a spilled ball ahead or
+  -- underfoot puts its POKeMON's name and icon on the ticker's standing
+  -- line, a bag its owner's name, for as long as they look.  Ahead beats
+  -- underfoot, as the engine's own A press does (world.interacted only
+  -- falls back to the tile under you when the faced cell answers
+  -- nothing).  Every frame from the HUD draw, so a ball that vanishes --
+  -- somebody else took it -- takes its line with it.
+  function BR:lookAtSpill(ow)
+    local p = ow and ow.player
+    if not (self.status == "alive" and p and ow.map and self.spills and self.game) then
+      self:newsHold(nil)
+      return
     end
-    if bag and (bag.money or 0) > 0 then
-      rows[#rows + 1] = { value = MONEY_ROW, label = ("¥%d"):format(bag.money) }
+    local dx, dy = 0, 0
+    if p.facing == "up" then dy = -1 elseif p.facing == "down" then dy = 1
+    elseif p.facing == "left" then dx = -1 elseif p.facing == "right" then dx = 1 end
+    local mapId = ow.map.id
+    local key = self.spills:keyAt(mapId, p.cellX + dx, p.cellY + dy)
+             or self.spills:keyAt(mapId, p.cellX, p.cellY)
+    local ball = key and self.spills:get(key)
+    if not ball then
+      self:newsHold(nil)
+    elseif ball.bag then
+      self:newsHold(((ball.bag.name or "Someone") .. "'s BAG"))
+    else
+      local pk = self.game.data and self.game.data.pokemon
+      local def = pk and pk[ball.species]
+      self:newsHold((def and def.name) or tostring(ball.species), ball.species)
     end
-    -- the lot in one press (BR-31): at two-left that is everyone
-    if #rows > 0 then
-      table.insert(rows, 1, { value = TAKE_ALL_ROW, label = "TAKE ALL" })
-    end
-    return rows
   end
 
-  -- TAKE ALL (BR-31): every stack the pack has room for and the money,
-  -- in one press, one line per kind.  What does not fit stays on the
-  -- ground -- a stack is taken whole or not at all, as lootTake takes it.
+  -- A fallen trainer's BAG (POK-25): A on it takes it.  The flow has
+  -- only ever got shorter.  It read the contents out two lines a page,
+  -- asked "Take it?", then asked whether to open the PACK; POK-176 made it
+  -- a list with USE / TAKE / CANCEL per row and TAKE ALL on top (BR-31);
+  -- and the user's 2026-09-10 call was that nobody ever wanted anything
+  -- but TAKE ALL -- there is no cost to carrying it and a USE from the
+  -- ground is a USE from the PACK a moment later -- so A IS TAKE ALL, the
+  -- ticker names what came, and the list is gone.
+  --
+  -- Taking is PER ITEM on the wire (Wire.took with item and count,
+  -- PROTOCOL 11): what does not fit stays on the ground for the next
+  -- trainer, and every client's copy of the bag gets lighter by the same
+  -- amount.  The money rides as its own row id.
+  local MONEY_ROW = "money"
+  -- Every stack the pack has room for and the money, in one press, one
+  -- ticker line per kind.  A stack is taken whole or not at all.
   function BR:lootTakeAll(key)
     local game = self.game
     local save = game.save
     local ball = self.spills:get(key)
     local bag = ball and ball.bag
     if not bag then
-      say("It's gone --\nsomeone was\nquicker.")
-      self:refreshLoot(key)
+      self:news("Gone! Someone\nwas quicker.")
       return false
     end
     local Bag = require("src.inventory.Bag")
@@ -6128,163 +6262,15 @@ return function(mod)
       if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
       lines[#lines + 1] = ("Took ¥%d!"):format(got)
     end
-    self:refreshLoot(key)
     if #lines == 0 then
-      say("You can't carry\nany more!")
+      self:news("The PACK is full!")
       return false
     end
-    if left > 0 then lines[#lines + 1] = "The rest won't\nfit." end
+    if left > 0 then lines[#lines + 1] = "The rest won't fit." end
     log:say("LOOT: took all from %s's bag (%d kinds)", tostring(bag.name), #lines)
-    say(table.concat(lines, "\n"))
+    -- one ticker beat per kind: nobody reads a list under fog pressure
+    for _, line in ipairs(lines) do self:news(line) end
     return true
-  end
-
-  -- Redraw the open loot list after the bag changed -- ours or a rival's
-  -- take -- and close it when the bag is gone.
-  function BR:refreshLoot(key)
-    local loot = self.lootMenu
-    if not (loot and loot.key == key) then return end
-    local list = loot.list
-    list.items = self:lootRows(key)
-    if #list.items == 0 then
-      self.lootMenu = nil
-      list:close()
-      return
-    end
-    list.index = math.max(1, math.min(list.index or 1, #list.items))
-  end
-
-  function BR:openBag(key, ball)
-    local game = self.game
-    local who = ball.bag.name or "Someone"
-    local ListMenu = require("src.ui.ListMenu")
-    local list
-    list = ListMenu.new(game, (who .. "'s BAG"):sub(1, 17), self:lootRows(key), {
-      kind = "loot",
-      itemBox = true,
-      onChoose = function(row) self:lootChoose(key, row.value) end,
-    })
-    game.stack:push(list)
-    self.lootMenu = { key = key, list = list }
-    return true
-  end
-
-  -- Move `id` (all of it, or the money) from the bag on the ground into
-  -- ours, tell the room, and redraw.  A bag we cannot fit refuses whole:
-  -- the item stays on the ground rather than half of it vanishing.
-  function BR:lootTake(key, id)
-    local game = self.game
-    local save = game.save
-    local ball = self.spills:get(key)
-    local bag = ball and ball.bag
-    if not bag then
-      say("It's gone --\nsomeone was\nquicker.")
-      self:refreshLoot(key)
-      return false
-    end
-    if id == MONEY_ROW then
-      if (bag.money or 0) <= 0 then self:refreshLoot(key) return false end
-      local got = bag.money
-      save.money = math.min(999999, (save.money or 0) + got)
-      self.spills:takeItem(key, nil, nil, true)
-      if self.relay then self.relay:broadcast(Wire.took(key, MONEY_ROW, 1, true)) end
-      self:refreshLoot(key)
-      say(("Took ¥%d!"):format(got))
-      return true
-    end
-    local n
-    for _, it in ipairs(bag.items or {}) do
-      if it.id == id then n = it.n break end
-    end
-    if not n then self:refreshLoot(key) return false end
-    local Bag = require("src.inventory.Bag")
-    if not Bag.add(save, id, n, game.data) then
-      say("You can't carry\nany more!")
-      return false
-    end
-    self.spills:takeItem(key, id, n)
-    if self.relay then self.relay:broadcast(Wire.took(key, id, n)) end
-    self:refreshLoot(key)
-    return true
-  end
-
-  -- USE from the loot list: take it, then the PACK opens on that row with
-  -- USE already chosen, which is the engine's own use path from here on.
-  function BR:lootUse(key, id)
-    if not self:lootTake(key, id) then return false end
-    local game = self.game
-    local BagMenu = require("src.ui.BagMenu")
-    local pack = BagMenu.new(game, {})
-    local at
-    for i, row in ipairs(pack.items or {}) do
-      if row.value == id then at = i break end
-    end
-    if not at then return false end
-    pack.index = at
-    game.stack:push(pack)
-    -- the PACK's own A: the USE / TOSS box, whose first row is USE
-    if pack.onChoose then pack.onChoose(pack.items[at]) end
-    local sub = game.stack:top()
-    if sub ~= pack and sub and sub.items and sub.items[1] and sub.items[1].onSelect then
-      game.stack:pop()
-      sub.items[1].onSelect()
-    end
-    -- The PACK is scaffolding (POK-184): the engine's use flow returns
-    -- to the menu that asked, and that used to strand a player in their
-    -- own PACK when they backed out of the target picker or read OAK's
-    -- refusal -- the loot list was one more B away and nobody knew.  So
-    -- the moment the flow lands back on the PACK, tickLootPack pops it
-    -- and the loot list is on top again, whatever the flow's outcome.
-    self.lootPack = { pack = pack, key = key, frames = 0 }
-    return true
-  end
-
-  -- Per frame while a loot USE is in flight.  The pop waits until the
-  -- engine's flow has actually put something ABOVE the pack (the target
-  -- picker, a text box) and then come back to it: the picker's push can
-  -- land a frame after USE, and popping the pack under it left the flow
-  -- closing the loot list instead.  A flow that never pushes anything at
-  -- all is given a moment, then the pack goes the same way.
-  function BR:tickLootPack()
-    local w = self.lootPack
-    if not w then return end
-    local stack = self.game and self.game.stack
-    if not stack then self.lootPack = nil return end
-    w.frames = (w.frames or 0) + 1
-    local top = stack:top()
-    if top ~= w.pack then
-      -- something of the flow's is up: the pack has been asked
-      local present = false
-      for _, s in ipairs(stack.states or {}) do
-        if s == w.pack then present = true break end
-      end
-      if not present then self.lootPack = nil return end
-      w.armed = true
-      return
-    end
-    if w.armed or w.frames > 30 then
-      stack:pop()
-      self.lootPack = nil
-      self:refreshLoot(w.key)
-      return
-    end
-  end
-
-  function BR:lootChoose(key, id)
-    local game = self.game
-    if id == TAKE_ALL_ROW then
-      self:lootTakeAll(key)
-      return
-    end
-    local Menu = require("src.ui.Menu")
-    local rows = {}
-    if id ~= MONEY_ROW then
-      rows[#rows + 1] = { label = "USE", onSelect = function() self:lootUse(key, id) end }
-    end
-    rows[#rows + 1] = { label = "TAKE", onSelect = function() self:lootTake(key, id) end }
-    rows[#rows + 1] = { label = "CANCEL", onSelect = function() end }
-    -- the PACK's own USE / TOSS box geometry (BagMenu)
-    game.stack:push(Menu.new(game, rows, { tx = 13, ty = 10, tw = 7, th = 2 * #rows + 1 }))
   end
 
   -- Take a claimed spill ball: build the mon at 1 HP exactly as it fell,
@@ -6309,21 +6295,25 @@ return function(mod)
       dex.owned[ball.species] = true
     end
     -- A ball that changed hands is a trade (POK-179): KADABRA, MACHOKE,
-    -- GRAVELER and HAUNTER evolve on pickup, the engine's own trade
-    -- movie and all, when somebody ELSE dropped them -- a bot or a Kanto
-    -- trainer counts.  Your own drop picked back up is not a trade.  The
-    -- joined line first, then the movie, so the beat reads in order.
+    -- GRAVELER and HAUNTER evolve on pickup when somebody ELSE dropped
+    -- them -- a bot or a Kanto trainer counts.  Your own drop picked back
+    -- up is not a trade.  It used to play the engine's trade movie (and
+    -- the move-learn boxes after it); since 2026-09-10 the change is
+    -- applied on the spot, the way the fog's rung applies its own
+    -- (scaleMon), and the ticker says who became what, new face beside
+    -- it.  The joined line first, so the beat reads in order.
     local Evolution = require("src.pokemon.Evolution")
-    local trade = { kind = "trade" }
-    if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then
-      local TextBox = require("src.render.TextBox")
-      log:say("TRADE: %s out of %s's ball evolves on pickup",
-              tostring(name), tostring(Spills.ownerOf(key)))
-      game.stack:push(TextBox.new(game, ("%s joined\nyour party!"):format(name),
-        function() Evolution.request(game, mon, trade) end))
-      return
+    local pk = game.data.pokemon
+    local into = (not Spills.isOwn(key, self.myId))
+                 and Evolution.pendingFor(game, mon, { kind = "trade" })
+    self:news(("%s joined\nyour party!"):format(name), ball.species)
+    if into then
+      log:say("TRADE: %s out of %s's ball evolves on pickup into %s",
+              tostring(name), tostring(Spills.ownerOf(key)), tostring(into))
+      Evolution.apply(game, mon, into, "TRADE")
+      local toName = (pk[into] and pk[into].name) or tostring(into)
+      self:news(("%s evolved\ninto %s!"):format(name, toName), into)
     end
-    say(("%s joined\nyour party!"):format(name))
   end
 
   -- One mon on the ground, in the spill's own language: the same placement
@@ -6364,7 +6354,7 @@ return function(mod)
       pickOnly = true,
       onSwitch = function(dropped)
         if not self.spills:get(key) then
-          say("It's gone --\nsomeone was\nquicker.")
+          self:news("Gone! Someone\nwas quicker.")
           return
         end
         for i, member in ipairs(save.party) do
@@ -7817,8 +7807,8 @@ return function(mod)
           psave.bagOrder = nil
           psave.money = (psave.money or 0) + Gyms.PURSE
           if BR.stats then BR.stats.beats = BR.stats.beats + 1 end
-          sayLater(("%s fell!\fThe %s is\nyours, and %d\ncame with it!"):format(
-            prize.name, prize.label, Gyms.PURSE))
+          BR:news(("%s fell!"):format(prize.name))
+          BR:news(("Got %s\nand ¥%d!"):format(prize.label, Gyms.PURSE))
         end
       end
     end
@@ -8181,7 +8171,6 @@ return function(mod)
     -- below until the player has read it.  Move this call under that block
     -- and the banner is silently dropped on the frame the match ends.
     if BR.phase ~= "off" then BR:tickSays() end
-    if BR.lootPack then BR:tickLootPack() end
     if BR.phase ~= "off" then
       BR.despawns:drain(BR.game, mod.world:overworld(), BR:screenIsQuiet())
     end
@@ -8787,8 +8776,13 @@ return function(mod)
       -- Phase 1's radius is Fog.NOWHERE, which clears the grid's diagonal,
       -- so every town reads safe during the grace period and the counters
       -- stay open on the same rule rather than on a second one.
-      if entry and entry.nurse and BR:inRound() and BR:nurseClosed() then
-        say("Sorry -- we're\nclosed! The fog\nis coming!")
+      if entry and entry.nurse then
+        if BR:inRound() and BR:nurseClosed() then
+          BR:news("Closed! The fog\nis coming!")
+          return
+        end
+        -- open: the match's own counter (BR:nurseHeal), one question long
+        BR:nurseHeal(ow, npc)
         return
       end
       -- The stone counter (POK-178): Celadon's 4F clerk sells every
@@ -8811,14 +8805,10 @@ return function(mod)
           if BR.shopPrices == nil then
             BR.shopPrices = Shops.price(data)
           end
+          -- ...and no "Hi there!  May I help you?" first (2026-09-10):
+          -- the list is the answer
           npc:facePlayer(ow.player)
-          local TextBox = require("src.render.TextBox")
-          local Screens = require("src.ui.Screens")
-          local romText = require("src.core.RomText")
-          local game = BR.game
-          game.stack:push(TextBox.new(game,
-            romText(data, "_PokemartGreetingText", "Hi there!\nMay I help you?"),
-            function() Screens.push(game, "ShopMenu", stock) end))
+          require("src.ui.Screens").push(BR.game, "ShopMenu", stock)
           return
         end
       end
@@ -9196,6 +9186,41 @@ return function(mod)
       -- blink on the fog's own beat, so the box pulses with the bite
       local t = clock() or 0
       if math.floor(t * 2) % 2 == 0 then hudBox("FOG!", 0, 0) end
+    end
+
+    -- ------- the ticker (lib/ticker.lua, 2026-09-10)
+    --
+    -- Row 3, under the row-0 boxes: a two-row item could not share row 0
+    -- with N LEFT on the right, and the standing line (a ball's POKeMON,
+    -- icon beside it) is where the eye already is.  One row lower again
+    -- while the SAFARI clock has row 3's right-hand end.  Ticked from the
+    -- draw so a beat only elapses while the box can be read: news that
+    -- lands during a fight is shown after it, not lost under it.
+    BR:lookAtSpill(ow)
+    local Ticker = require("mods.battle_royale.lib.ticker")
+    local item = Ticker.tick(BR:newsQueue(), clock() or 0)
+    if item then
+      local row = BR.phase == "safari" and 6 or 3
+      local bw, bh = Ticker.boxOf(item)
+      g.setColor(1, 1, 1, 1)
+      Font.drawBox(0, row, bw, bh)
+      local tx = 8
+      if item.icon then
+        -- the party screen's own icon, still: the engine resolves the
+        -- sheet, the frame and the OBP bake
+        pcall(function()
+          require("src.ui.PartyMenu").drawIcon(game,
+            { species = item.icon, hp = 1, stats = { hp = 1 } },
+            8, (row + 1) * 8, false, 0)
+        end)
+        g.setColor(1, 1, 1, 1)
+        tx = 8 + 16 + 8
+      end
+      local ty = (row + 1) * 8
+      if item.icon and #item.rows == 1 then ty = ty + 4 end
+      for i, r in ipairs(item.rows) do
+        Font.draw(r, tx, ty + (i - 1) * 8)
+      end
     end
 
     -- ------- what everyone else is doing, over their heads (POK-113)
@@ -9848,6 +9873,13 @@ return function(mod)
     BR.myFledUntil = (clock() or 0) + (tonumber(secs) or Flee.GRACE_SECONDS)
     return true
   end
+  -- a say through the script runner, for the "held" scenario: a runner
+  -- mid-script is the one dialog a challenge may NOT pop (POK-199), and a
+  -- sign is a bare TextBox, which it may
+  mod.exports.debugSay = function(text)
+    sayLater(tostring(text or "Reading."), 0)
+    return true
+  end
   -- a wild battle on demand, for the clock driver
   mod.exports.debugWild = function(species, level)
     return mod.world:startWildBattle(species, level)
@@ -9871,6 +9903,16 @@ return function(mod)
     return { to = p.to, nonce = p.nonce, host = p.host }
   end
   mod.exports.queued = function() return Events.count(BR.events) end
+  -- the ticker: what is on show, what waits, and the last lines pushed
+  mod.exports.news = function()
+    local Ticker = require("mods.battle_royale.lib.ticker")
+    local t = BR:newsQueue()
+    local s = Ticker.showing(t)
+    return { text = s and s.text, icon = s and s.icon,
+             held = t.held and t.held.text, heldIcon = t.held and t.held.icon,
+             pending = Ticker.pending(t), log = BR.newsLog }
+  end
+  mod.exports.yankScreen = function() return BR:yankScreen() end
   -- the mark's arithmetic, for a driver reading a screenshot (POK-166)
   mod.exports.markProbe = function(id)
     local ow = mod.world:overworld()

@@ -125,25 +125,28 @@ by what is actually on screen, and a trainer is engaged on the cell your
 screen has *drawn* them on rather than the cell the wire says they reached,
 so a fight never opens against a sprite that was never there. Win, lose or
 run; a lost battle only ends your match if it was your last Pokémon. **Knock someone out and their BAG hits the ground where they
-fell** — items and money, one bag with its own sprite; A on it opens the bag
-itself, a TAKE ALL row at the top empties it in one press (every stack the
-pack has room for, one "Took ..." line per kind), and below that each item
-offers USE / TAKE / CANCEL, so you take what you want
-and leave the rest on the ground for the next trainer — and their team lands
+fell** — items and money, one bag with its own sprite — and their team lands
 around it as Poké Balls. Balls and bags are walkable: a pile is something you
-wade through, and A on the piece under your feet picks it up. **Opening a ball is a gift, not a fight**: it
-shows the prompt Oak's lab uses —
+wade through. Face a piece (or stand on it) and the **ticker** in the top-left
+corner names it — the Pokémon with its party icon, or whose bag it is — and
+**A takes it**: the whole bag in one press (every stack the pack has room for
+and the money; what does not fit stays on the ground for the next trainer),
+or the Pokémon, no question asked. It joins your party at 1 HP, exactly as it
+fell; a full party opens the party screen so you choose who makes room, and
+whoever you release lands at your feet as a ball for somebody else.
 
-**A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — with the engine's own evolution scene. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
+**The ticker.** Most of what the match has to tell you — the fog moved, which
+of your Pokémon evolved and into what, a leader fell across town, what came
+out of a bag — is news, not a decision, so it scrolls through a small box in
+the top-left corner, one line at a time for a couple of seconds each, and
+nothing waits on it. Text boxes are kept for the things that actually ask you
+something.
+
+**A ball that changed hands is a trade.** KADABRA, MACHOKE, GRAVELER and HAUNTER evolve on pickup when somebody else dropped them — a rival, a bot, one of Kanto's own trainers — on the spot, with the ticker saying who became what. Your own drop picked back up is not a trade. And for the length of a match Celadon Dept. Store's 4F counter sells every evolution stone, the MOON STONE included, at the other stones' price.
 
 **The Marts climb with the fog.** Every general store in Kanto -- any Mart that sells a ball or a potion -- sells the same shelf, and the shelf follows the ring rather than the story: POKé BALL and POTION through the first shrink, GREAT BALL and SUPER POTION (and a REVIVE) at ring 3, ULTRA BALL and HYPER POTION (and a FULL HEAL) at ring 4, MASTER BALL and MAX POTION (and a FULL RESTORE) from ring 5 -- the same beats the level ladder climbs on. Cumulative, so a late shelf still carries the cheap rungs and money stays a decision. The MASTER BALL is priced (¥5000) for the match and never sold outside one; Celadon's TM, vitamin, X-item and stone counters are left alone. Where you dropped stops deciding what you can buy.
 
-> This contains a NIDORINO.
-> Do you want it?
-
-— take or leave. The Pokémon joins your party at 1 HP, exactly as it fell;
-leaving puts the ball back for the next trainer, and a full party leaves it
-too. Reopen `ROYALE` any time to leave the match.
+Reopen `ROYALE` any time to leave the match.
 
 **Kanto's own trainers wait to be asked.** For the length of a match a route
 or gym trainer never ambushes you across their sight line; walk past, or
@@ -333,6 +336,15 @@ never overwrite your actual playthrough.
   out undoes it: the fog takes a tenth of everyone's maximum every four
   seconds precisely so damage accumulates. The nurse shuts at the same
   moment the ring does. The PC beside her was already out of order.
+  While she is open the counter is one question — HEAL / CANCEL — and the
+  machine; no welcome, no "fighting fit", no farewell (the ticker says it).
+  You can be challenged while she is asking; from HEAL until the machine
+  is done, and only then, you cannot.
+- **A menu is not a hiding place.** Another trainer can challenge you while
+  you are in the START menu, the PACK, the party screen or the TOWN MAP:
+  the menu closes for it and the fight opens. Only a battle already under
+  way, a script mid-run and the healing machine make you wait, and a
+  challenge that lands then is answered the moment they finish.
 - **Every PC is OUT OF ORDER.** Boxes are a second health bar in a mode
   where the party IS your health — deposit fresh Pokémon, fight with one,
   withdraw and repeat — so storage, Pokémon and items both, is unreachable

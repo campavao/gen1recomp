@@ -771,8 +771,9 @@ do
               "while the walk that ARRIVES still opens the fight (POK-85)")
       -- ...onto a quiet screen only (POK-162): a bot standing beside a
       -- player in a menu waits, and does not push its battle over it
-      T.check(walk:find("if not self:screenIsQuiet() then return end\n      return arrived()", 1, true) ~= nil,
-              "...and waits beside a player whose screen is busy")
+      -- ...and since POK-199 the menu comes down for it, where it can
+      T.check(walk:find("if not self:screenIsQuiet() and not self:yankScreen() then return end\n      return arrived()", 1, true) ~= nil,
+              "...and pops the menu, or waits beside a player whose screen cannot be popped")
       T.check(walk:find("self.pending = nil", 1, true) ~= nil,
               "an abandoned walk-up clears the pending challenge with it")
     end
@@ -942,8 +943,8 @@ do
     T.check(chal ~= nil, "found BR:onChallenge")
     T.check(chal and chal:find('Events.push(self.events, { kind = "challenge"', 1, true) ~= nil,
             "a challenge that lands on a busy screen is queued, not answered")
-    T.check(chal and chal:find("if not self:screenIsQuiet() then", 1, true) ~= nil,
-            "...and the gate is the one the parade and the exit wait on")
+    T.check(chal and chal:find("if not self:screenIsQuiet() and not self:yankScreen() then", 1, true) ~= nil,
+            "...and the gate is the one the parade and the exit wait on, a menu popped first (POK-199)")
     T.check(chal and chal:find("Engage.answer", 1, true) == nil,
             "onChallenge itself no longer answers; answerChallenge does")
 
@@ -982,8 +983,8 @@ do
     T.check(ev and ev:find("Events.expire(q, now, Events.HOLD_SECONDS)", 1, true) ~= nil
             and ev:find('Wire.decline(ev.nonce, "held")', 1, true) ~= nil,
             "a challenge held too long is declined, not forgotten")
-    T.check(ev and ev:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
-            "the queue drains onto a quiet screen only")
+    T.check(ev and ev:find("if not self:screenIsQuiet() and not self:yankScreen() then return end", 1, true) ~= nil,
+            "the queue drains onto a quiet screen only, popping a menu to get one (POK-199)")
 
     -- and the tick runs both, next to the walk-up
     T.check(src:find("BR:tickWalkUp()\n    -- the challenges waiting for a quiet screen", 1, true) ~= nil
@@ -995,20 +996,42 @@ do
     local try = body("tryEngage")
     T.check(try and try:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
             "tryEngage fires from a quiet screen only")
-    T.check(try and try:find("(p.busy ~= nil and not Bots.isBot(id))", 1, true) ~= nil,
-            "...and does not challenge a trainer in a menu (a bot has no menu)")
+    T.check(try and try:find('busy = p.status == "battle" or p.busy == "battle" }', 1, true) ~= nil,
+            "...and DOES challenge a trainer in a menu (POK-199); a fight is what shields")
     T.check(try and try:find('p.busy == "battle"', 1, true) ~= nil,
             "...nor a bot mid-fight, the rule the bump shares (POK-165)")
     local bot = body("tryBotEngage")
-    T.check(bot and bot:find("if not self:screenIsQuiet() then return end", 1, true) ~= nil,
-            "a bot does not spot a player whose screen is busy")
+    T.check(bot and bot:find("if not self:screenIsQuiet() and not self:yankScreen() then return end", 1, true) ~= nil,
+            "a bot that spots a player in a menu pops the menu, or waits (POK-199)")
+    T.check(bot and bot:find("== self.myId then\n          -- it sees you", 1, true) ~= nil,
+            "...and only for the bot that actually sees them")
     local busy = src:match("local function myBusy%(%).-\n  end\n")
     T.check(busy and busy:find("ow.runner:isRunning()", 1, true) ~= nil,
             "a running dialog is broadcast as a menu")
+    T.check(busy and busy:find("if ow.healAnim then return \"menu\" end", 1, true) ~= nil,
+            "...and so is the heal machine")
+    local quiet = body("screenIsQuiet")
+    T.check(quiet and quiet:find("if ow.healAnim then return false end", 1, true) ~= nil,
+            "the heal machine is not a quiet screen")
+    -- what the yank refuses: a script, the machine, a transition, a battle
+    local yank = body("yankScreen")
+    T.check(yank ~= nil, "found BR:yankScreen")
+    T.check(yank and yank:find("ow.runner:isRunning() then return false end", 1, true) ~= nil
+            and yank:find("if ow.healAnim or ow.transitioning or self:liveLocalBattle() then return false end", 1, true) ~= nil,
+            "a running script, the heal machine, a transition and a battle are never yanked")
+    T.check(yank and yank:find("if not views[getmetatable(states[i])] then return false end", 1, true) ~= nil,
+            "...and every screen above the overworld must be a view")
+    T.check(yank and yank:find('"src.ui.BagMenu"', 1, true) ~= nil
+            and yank:find('"src.render.TextBox"', 1, true) ~= nil
+            and yank:find('"src.ui.EvolutionState"', 1, true) == nil,
+            "the PACK and a text box are views; an evolution is not")
+    local chal = body("onChallenge")
+    T.check(chal and chal:find("if not self:screenIsQuiet() and not self:yankScreen() then", 1, true) ~= nil,
+            "an inbound challenge pops the menu before it queues")
 
     -- resetMatch drops the queue with the rest of the match
-    T.check(src:find("    self.pendingSays = {}\n    Events.clear(self.events)\n", 1, true) ~= nil,
-            "resetMatch clears the queue")
+    T.check(src:find("    self.pendingSays = {}\n    if self.newsQ then require(\"mods.battle_royale.lib.ticker\").clear(self.newsQ) end\n    Events.clear(self.events)\n", 1, true) ~= nil,
+            "resetMatch clears the queue, and the ticker with it")
   end
 end
 
@@ -1128,7 +1151,8 @@ end
 
 -- ------- a ball that changed hands is a trade (POK-179), read off the
 -- source: claimSpill asks the engine's own trade check, only for a ball
--- somebody else dropped, and plays the engine's own movie.
+-- somebody else dropped, and applies it on the spot -- the ticker, not
+-- the movie, says so (2026-09-10).
 
 do
   local f = io.open("mods/battle_royale/main.lua", "r")
@@ -1139,12 +1163,15 @@ do
     f:close()
     local claim = src:match("function BR:claimSpill%(.-\n  end\n")
     T.check(claim ~= nil, "found BR:claimSpill")
-    T.check(claim and claim:find("if not Spills.isOwn(key, self.myId) and Evolution.pendingFor(game, mon, trade) then", 1, true) ~= nil,
-            "a trade evolution is asked only for a ball somebody else dropped")
-    T.check(claim and claim:find('local trade = { kind = "trade" }', 1, true) ~= nil,
-            "...through the engine's own TRADE method")
-    T.check(claim and claim:find("Evolution.request(game, mon, trade)", 1, true) ~= nil,
-            "...and plays the engine's own evolution movie")
+    T.check(claim and claim:find("local into = (not Spills.isOwn(key, self.myId))\n                 and Evolution.pendingFor(game, mon, { kind = \"trade\" })", 1, true) ~= nil,
+            "a trade evolution is asked only for a ball somebody else dropped, through the engine's own TRADE method")
+    T.check(claim and claim:find('Evolution.apply(game, mon, into, "TRADE")', 1, true) ~= nil,
+            "...and is applied on the spot")
+    T.check(claim and claim:find("Evolution.request(", 1, true) == nil
+            and claim:find("TextBox", 1, true) == nil,
+            "...with no movie and no box")
+    T.check(claim and claim:find('self:news(("%s evolved\\ninto %s!"):format(name, toName), into)', 1, true) ~= nil,
+            "...the ticker says who became what, new face beside it")
     T.check(claim and claim:find("Party.add(save.party, mon)", 1, true) ~= nil
             and claim:find("Party.add(", 1, true) < claim:find("Evolution.pendingFor(", 1, true),
             "the mon joins the party before it evolves")
@@ -1166,8 +1193,23 @@ do
     T.check(talk ~= nil, "found the talk hook")
     T.check(talk and talk:find("Shops.stock(entry.label, entry.mart, BR.ring and BR.ring.phase)", 1, true) ~= nil,
             "a mart entry is asked whether it is the stone counter or a store, at the ring's phase")
-    T.check(talk and talk:find('Screens.push(game, "ShopMenu", stock)', 1, true) ~= nil,
+    T.check(talk and talk:find('require("src.ui.Screens").push(BR.game, "ShopMenu", stock)', 1, true) ~= nil,
             "...and the counter opens the engine's own shop over the extended list")
+    T.check(talk and talk:find("_PokemartGreetingText", 1, true) == nil,
+            "...with no greeting page first (2026-09-10)")
+    -- the nurse (2026-09-10): one question, the machine, the ticker
+    T.check(talk and talk:find("BR:nurseHeal(ow, npc)", 1, true) ~= nil,
+            "an open counter runs the match's own heal")
+    local nurse = src:match("function BR:nurseHeal%(.-\n  end\n")
+    T.check(nurse ~= nil, "found BR:nurseHeal")
+    T.check(nurse and nurse:find('choiceLabels = { "HEAL", "CANCEL" }', 1, true) ~= nil,
+            "...which asks HEAL/CANCEL, the cart's own labels")
+    T.check(nurse and nurse:find("ow.healAnim = {", 1, true) ~= nil
+            and nurse:find("Pokemon.heal(mon)", 1, true) ~= nil,
+            "...heals the party and runs the engine's own machine")
+    T.check(nurse and nurse:find("fighting fit", 1, true) ~= nil
+            and nurse:find("TextBox.new", 1, true) == nurse:find("TextBox.new", nurse:find("TextBox.new", 1, true) + 1, true) and false or true,
+            "...and says fighting fit on the ticker, in no second box")
     -- the counter sits under the session guard the cable club and nurse share
     local guard = talk and talk:find("if BR:inSession() and def and def.text and data and data.textEntry", 1, true)
     local counter = talk and talk:find("Shops.stock(entry.label, entry.mart, BR.ring and BR.ring.phase)", 1, true)
@@ -1179,45 +1221,52 @@ do
   end
 end
 
--- ------- A on a bag opens the bag (POK-176), read off the source: no
--- text box before the list, USE / TAKE / CANCEL per row, and a take that
--- travels by the item so the rest stays on the ground.
+-- ------- A on a bag takes the bag (2026-09-10, over POK-176's list), read
+-- off the source: no list, no text box, every stack that fits and the
+-- money in one press, by the item on the wire so what stays stays for
+-- the next trainer.  A on a ball takes the ball, no question first.
 
 do
   local f = io.open("mods/battle_royale/main.lua", "r")
   if not f then
-    io.write("  (skipping the loot-bag scan: main.lua not found)\n")
+    io.write("  (skipping the loot scan: main.lua not found)\n")
   else
     local src = f:read("*a")
     f:close()
-    local open = src:match("function BR:openBag%(.-\n  end\n")
-    T.check(open ~= nil, "found BR:openBag")
-    T.check(open and open:find('ListMenu.new(game, (who .. "\'s BAG"):sub(1, 17), self:lootRows(key)', 1, true) ~= nil,
-            "A on a bag pushes the item list of that bag alone")
-    T.check(open and open:find("TextBox", 1, true) == nil and open:find("Take it?", 1, true) == nil,
-            "...with no text box first")
-    local choose = src:match("function BR:lootChoose%(.-\n  end\n")
-    T.check(choose ~= nil, "found BR:lootChoose")
-    T.check(choose and choose:find('label = "USE"', 1, true) ~= nil
-            and choose:find('label = "TAKE"', 1, true) ~= nil
-            and choose:find('label = "CANCEL"', 1, true) ~= nil,
-            "a row offers USE / TAKE / CANCEL")
-    T.check(choose and choose:find("if id ~= MONEY_ROW then", 1, true) ~= nil,
-            "...and the money row only TAKE")
-    local take = src:match("function BR:lootTake%(.-\n  end\n")
-    T.check(take ~= nil, "found BR:lootTake")
-    T.check(take and take:find("self.relay:broadcast(Wire.took(key, id, n))", 1, true) ~= nil,
+    local open = src:match("function BR:openSpill%(.-\n  end\n")
+    T.check(open ~= nil, "found BR:openSpill")
+    T.check(open and open:find("if ball.bag then return self:lootTakeAll(key) end", 1, true) ~= nil,
+            "A on a bag takes all of it")
+    T.check(open and open:find("TextBox", 1, true) == nil and open:find("Do you want it?", 1, true) == nil,
+            "...and A on a ball asks nothing first")
+    T.check(open and open:find("self:offerDropForBall(key, ball, name)", 1, true) ~= nil
+            and open:find("self:claimSpill(key, ball, name)", 1, true) ~= nil,
+            "...a full party still picks who makes room (POK-34)")
+    for _, gone in ipairs({ "openBag", "lootRows", "lootChoose", "lootTake", "lootUse",
+                            "refreshLoot", "tickLootPack" }) do
+      T.check(src:find("function BR:" .. gone .. "(", 1, true) == nil,
+              "the loot list's " .. gone .. " is gone with the list")
+    end
+    local all = src:match("function BR:lootTakeAll%(.-\n  end\n")
+    T.check(all ~= nil, "found BR:lootTakeAll")
+    T.check(all and all:find("self.relay:broadcast(Wire.took(key, it.id, it.n))", 1, true) ~= nil,
             "a take travels by the item and count")
-    T.check(take and take:find("Bag.add(save, id, n, game.data)", 1, true) ~= nil,
+    T.check(all and all:find("Bag.add(save, it.id, it.n, game.data)", 1, true) ~= nil,
             "...through the bag's own capacity rule")
-    local use = src:match("function BR:lootUse%(.-\n  end\n")
-    T.check(use and use:find("if not self:lootTake(key, id) then return false end", 1, true) ~= nil
-            and use:find("BagMenu.new(game, {})", 1, true) ~= nil,
-            "USE takes the item and opens the PACK on it")
+    T.check(all and all:find("for _, line in ipairs(lines) do self:news(line) end", 1, true) ~= nil
+            and all:find("[^:]say%(") == nil,
+            "...and what came is said on the ticker, not in a box")
     T.check(src:find("self.spills:takeItem(msg.key, msg.item, msg.n, msg.cash)", 1, true) ~= nil,
             "a rival's per-item take lightens our copy of the bag")
-    T.check(src:find('"Open the PACK\\nnow?"', 1, true) == nil,
-            "the second question is gone")
+    -- the standing line: what you face, named before you press
+    local look = src:match("function BR:lookAtSpill%(.-\n  end\n")
+    T.check(look ~= nil, "found BR:lookAtSpill")
+    T.check(look and look:find("self.spills:keyAt(mapId, p.cellX + dx, p.cellY + dy)\n             or self.spills:keyAt(mapId, p.cellX, p.cellY)", 1, true) ~= nil,
+            "the faced cell is named first, the one underfoot second")
+    T.check(look and look:find("self:newsHold((def and def.name) or tostring(ball.species), ball.species)", 1, true) ~= nil,
+            "...a ball by its POKeMON, icon beside it")
+    T.check(look and look:find("'s BAG", 1, true) ~= nil, "...a bag by its owner")
+    T.check(src:find("    BR:lookAtSpill(ow)\n", 1, true) ~= nil, "...asked from the HUD draw")
   end
 end
 

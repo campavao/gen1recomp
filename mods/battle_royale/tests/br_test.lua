@@ -6196,5 +6196,83 @@ do
   eq(Wire.decode(Wire.mirror("m3", { n = 1, k = "run" }, "x")).as, nil, "a tag that is not an id is dropped")
 end
 
+-- ------- the ticker (2026-09-10): news that does not stop the game
+
+do
+  local Ticker = require("mods.battle_royale.lib.ticker")
+  -- the wrap
+  eq(table.concat(Ticker.fit("The fog spreads!"), "|"), "The fog spreads!", "a short line is one row")
+  eq(table.concat(Ticker.fit("GRAVELER evolved\ninto GOLEM!"), "|"), "GRAVELER evolved|into GOLEM!",
+     "an explicit break is a row break")
+  eq(table.concat(Ticker.fit("LT.SURGE has fallen!"), "|"), "LT.SURGE has|fallen!",
+     "a long line breaks at its last space")
+  eq(table.concat(Ticker.fit("The fog closes on\nCINNABAR ISLAND."), "|"),
+     "The fog closes on|CINNABAR ISLAND.", "the longest town fits its own row")
+  eq(#Ticker.fit("one two three four five six seven eight nine ten eleven"), 2,
+     "a third row is cut, not shown")
+  eq(Ticker.fit("ABCDEFGHIJKLMNOPQRSTUVWXYZ")[1], "ABCDEFGHIJKLMNOPQR", "a word too long is cut")
+  eq(Ticker.fit(""), nil, "nothing to show is nil")
+  eq(Ticker.fit("   "), nil, "...and so is blank")
+  eq(Ticker.fit(nil), nil, "...and so is no text")
+  eq(table.concat(Ticker.fit("  padded  "), "|"), "padded", "padding is trimmed")
+
+  -- the queue
+  local t = Ticker.new()
+  eq(Ticker.tick(t, 0), nil, "an empty ticker shows nothing")
+  ok(Ticker.push(t, "The fog spreads!"), "a line is queued")
+  ok(not Ticker.push(t, "The fog spreads!"), "the same line twice is one item")
+  ok(Ticker.push(t, "SAM has fallen!"), "a different line follows it")
+  eq(Ticker.pending(t), 2, "two waiting")
+  eq(Ticker.tick(t, 10).text, "The fog spreads!", "the first goes up on the first tick")
+  eq(Ticker.pending(t), 1, "...and leaves the queue")
+  eq(Ticker.tick(t, 10 + Ticker.SECONDS - 0.1).text, "The fog spreads!", "it stays for its beat")
+  eq(Ticker.tick(t, 10 + Ticker.SECONDS).text, "SAM has fallen!", "then the next goes up")
+  eq(Ticker.tick(t, 20 + Ticker.SECONDS), nil, "and the box comes down after the last")
+  ok(not Ticker.push(t, ""), "nothing is not queued")
+  for i = 1, Ticker.MAX_QUEUE + 3 do Ticker.push(t, "line " .. i) end
+  eq(Ticker.pending(t), Ticker.MAX_QUEUE, "the queue is capped")
+  eq(t.q[1].text, "line 4", "...dropping the oldest")
+  Ticker.clear(t)
+  eq(Ticker.pending(t), 0, "clear empties the queue")
+  eq(Ticker.tick(t, 30), nil, "...and the box")
+
+  -- the standing line
+  Ticker.hold(t, "PIKACHU", "PIKACHU")
+  eq(Ticker.tick(t, 40).text, "PIKACHU", "a held line shows with nothing queued")
+  eq(Ticker.showing(t).icon, "PIKACHU", "...with its icon")
+  Ticker.push(t, "SAM has fallen!")
+  eq(Ticker.tick(t, 41).text, "PIKACHU", "the held line outranks the news")
+  eq(Ticker.tick(t, 41 + Ticker.SECONDS * 4).text, "PIKACHU", "...for as long as it is held")
+  eq(Ticker.pending(t), 1, "...and the news waits in the queue")
+  local held = t.held
+  Ticker.hold(t, "PIKACHU", "PIKACHU")
+  ok(t.held == held, "re-holding the same line keeps the item")
+  Ticker.hold(t, nil)
+  eq(Ticker.tick(t, 50).text, "SAM has fallen!", "looking away lets the news through")
+  eq(Ticker.tick(t, 50 + Ticker.SECONDS - 0.1).text, "SAM has fallen!", "...for its own beat")
+  -- a beat interrupted by a look starts over when the look ends
+  Ticker.push(t, "The fog spreads!")
+  Ticker.tick(t, 50 + Ticker.SECONDS)
+  eq(Ticker.showing(t).text, "The fog spreads!", "the next line is up")
+  Ticker.hold(t, "SAM's BAG")
+  eq(Ticker.tick(t, 52 + Ticker.SECONDS).text, "SAM's BAG", "a bag holds without an icon")
+  Ticker.hold(t, nil)
+  eq(Ticker.tick(t, 60).text, "The fog spreads!", "the interrupted line comes back")
+  eq(Ticker.tick(t, 60 + Ticker.SECONDS - 0.1).text, "The fog spreads!", "...with a fresh beat")
+  eq(Ticker.tick(t, 60 + Ticker.SECONDS), nil, "...and then goes")
+
+  -- the box
+  local w, h = Ticker.boxOf({ rows = { "The fog spreads!" } })
+  eq(w, 18, "a plain row is its text plus the border")
+  eq(h, 3, "...one row tall inside")
+  w, h = Ticker.boxOf({ rows = { "GRAVELER evolved", "into GOLEM!" } })
+  eq(w, 18, "two rows take the wider")
+  eq(h, 4, "...two rows tall inside")
+  w, h = Ticker.boxOf({ rows = { "PIKACHU" }, icon = "PIKACHU" })
+  eq(w, 12, "an icon adds its two tiles and a gap")
+  eq(h, 4, "...and is always two rows tall")
+  eq(Ticker.WIDTH + 2, 20, "the widest plain box is the screen")
+end
+
 io.write(("\nbattle royale: %d passed, %d failed\n"):format(passed, failed))
 os.exit(failed == 0 and 0 or 1)
