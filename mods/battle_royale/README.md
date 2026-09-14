@@ -38,6 +38,15 @@ eliminated trainer gets, `LEFT` / `RIGHT` between whoever is still standing
 — and when it ends you are seated for the next one with everybody else. A
 watcher is never counted among the living and never holds a match up.
 
+**With other people, by choice:** `LOBBIES`. Every open room on the relay
+as a list: the host as their sprite and name, how many trainers are in it
+over the room's size (`3/30` is three people and twenty-seven bot seats),
+and a padlock when the host put a passcode on the door. Pick a row and
+you are in; a padlocked row asks for the passcode first. Inside the half
+hour before the `DAILY GAME` its row leads the list with the countdown
+(`IN 27M`), whether or not anyone has pressed the row yet. The list
+refreshes itself while you look at it.
+
 The relay picks the *fullest* joinable room rather than the first, so a
 handful of strangers arriving at once becomes one match instead of three
 lonely lobbies.
@@ -80,8 +89,12 @@ port-forwarding.
    hosted rooms only: the daily game and quick play, which nobody hosts,
    always run at FAST with animations OFF. **DEBUG** (the log's deep tier,
    below) is in this box too.
-7. **OPEN: YES** lists the room for `QUICK PLAY`, so strangers can find it
-   without a code. Rooms are private until you say otherwise.
+7. **OPEN** has three states, one press apart. **YES** (the default) puts
+   the room on `LOBBIES` and lets `QUICK PLAY` land strangers in it. **NO**
+   hides it: only the code gets anyone in. **PASS 1234** keeps it on
+   `LOBBIES` with a padlock, and the code alone does not open the door --
+   a guest is asked for the passcode, on the same widget the code is
+   typed on. The row shows the passcode you set so you can read it out.
 8. The host sees the seats fill in and picks **START MATCH**. Everyone
    lands in the SAFARI ZONE at once.
 
