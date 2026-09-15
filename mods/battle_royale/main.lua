@@ -7725,6 +7725,22 @@ return function(mod)
     return next(mon, ctx)
   end)
 
+  -- No survey zoom in a match (POK-208).  The engine's wheel / Ctrl+minus
+  -- / OPTIONS ZOOM steps the overworld out past FIT and draws the
+  -- neighbouring maps in -- which in a battle royale is every trainer on
+  -- the route, the fog's edge and every spill on one screen (a friend's
+  -- 2026-09-14 "my sprite disappeared" was this: zoomed out until the
+  -- player was off the top).  zoom.range is the engine's own seam for
+  -- the legal offset window: the floor rises to FIT for the length of
+  -- the round, so a held OUT offset is clamped to FIT on the next frame
+  -- and the wheel stops there; zooming IN stays theirs.  Outside a round
+  -- the range is whatever it was.
+  mod.hooks:wrap("zoom.range", function(next, lo, hi, S)
+    local baseLo, baseHi = next(lo, hi, S)
+    if inMatch() then return 0, math.max(0, baseHi or 0) end
+    return baseLo, baseHi
+  end)
+
   -- No EXP from ANY battle during a round (POK-74, widened by POK-139).
   -- The rung is the only power curve: D12 scaling never demotes, so paid
   -- EXP compounds into a party above the fog's beat while every opponent
