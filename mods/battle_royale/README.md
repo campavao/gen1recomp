@@ -302,6 +302,22 @@ never overwrite your actual playthrough.
   does nothing while the other side moves; the menu comes back with a
   fresh clock. The Safari's BALL/BAIT/ROCK menu is the one exception.
   Sitting in a menu is not a roof anywhere.
+- **The bag works against a person, not just a bot.** Cable rules say no
+  items, and the engine keeps them by default: ITEM in a link battle used
+  to print "Items can't be used in a link battle!", which made the
+  potions and X items you scrape off the ground worth nothing in the one
+  fight that decides the match. Now the ITEM row opens the real bag in a
+  duel, the same rows and the same rules a fight against a bot has, and
+  **the item is your turn** — you heal or you attack, never both, so a
+  POTION is a move you chose not to make. The other screen watches it
+  happen and prints it: "RED used POTION!", and their copy of your team
+  heals with it. What the bag allows is what a trainer battle allows —
+  medicines, X items, the flute; a ball is refused at the other trainer's
+  Pokémon, as it always was. The clock does not stop for an open bag:
+  leave it open past the same thirty seconds and the bag closes itself,
+  back at the menu, with the countdown running. Needs the engine release
+  that carries it (RFC 0021); on an older one the ITEM row goes back to
+  saying no, and nothing else changes.
 - **Running from another trainer is hard.** RUN in a PvP battle is a
   roll — one in four at equal speed, half at twice their speed, never
   better than five in eight, a little better each retry — and a failed
@@ -816,6 +832,7 @@ regression-tested with two real clients fighting over a local relay:
 python mods/battle_royale/tests/drivers/pvp/run_pvp.py            # duel
 python mods/battle_royale/tests/drivers/pvp/run_pvp.py stall      # shot clock
 python mods/battle_royale/tests/drivers/pvp/run_pvp.py spectate   # a spectator's screen
+python mods/battle_royale/tests/drivers/pvp/run_pvp.py items      # a POTION on the cable
 ```
 
 The harness boots `relay/server.js` on `127.0.0.1`, launches two LOVE
@@ -832,7 +849,12 @@ until they move, so the win must come from the shot clock forfeiting them.
 match alive, turn its camera on the winner and wait: the guest's next wild
 fight must open on the host's screen as a replay, play through with no
 input at all, and close with the result and turn count the guest's own
-fight came to.
+fight came to. **items** has the guest take a hit and then spend a turn on
+a POTION from the bag mid-duel: the host must resolve a heal it never
+chose -- the enemy's HP going UP between turns -- and the fight must go on
+resolving turns afterwards.  That last part is the whole test: the item
+rides an `action` message, and a peer that receives one it cannot read
+spends the turn anyway and desyncs with nothing on either screen to say so.
 
 It needs a `gen1recomp` checkout, an imported ROM (`POKEPORT_IMPORT_ROM`),
 `node`, and LOVE (`LOVEC` overrides the default path). A run takes a few
