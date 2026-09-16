@@ -25,6 +25,15 @@ local function noEffect(data)
   return romText(data, "_ItemUseNoEffectText", "It won't have\nany effect.")
 end
 
+-- PrintItemUseTextAndRemoveItem's used-line (item_effects.asm).  Named so
+-- that a peer replaying somebody else's item can print it too, with no bag
+-- of its own to have read it from (src/link/LinkItems.lua, RFC 0021).
+local function itemUseLine(data, save, name)
+  return romText(data, "_ItemUseText001", "%s used\n%s!", save.player.name, name)
+end
+
+ItemEffects.itemUseLine = itemUseLine
+
 local function registeredEffect(data, itemDef)
     if not data or not itemDef or not itemDef.effect then
         return nil
@@ -225,6 +234,11 @@ function ItemEffects.use(data, save, itemId, target, battle, moveIndex, ow)
   end
 
   if BALLS[itemId] then
+    -- a ball has nothing to catch on the cable: a link battle that allows
+    -- items (RFC 0021) still refuses one, the way a trainer's mon blocks it
+    if battle and battle.kind == "link" then
+      return "failed", { notTime(data, save) }
+    end
     return "ball"
   end
 

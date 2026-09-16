@@ -66,6 +66,15 @@ local function vanillaUseOn(game, battle, id, target, list, moveIndex, picker)
     if picker then picker:close() end
   end
 
+  -- spending the turn: the battle learns which item, on whom, and which
+  -- move -- a link battle that allows items puts exactly that on the wire
+  -- (src/link/LinkItems.lua, RFC 0021); a local one reads none of it
+  local function spent(messages, o)
+    o = o or {}
+    o.item, o.target, o.moveIndex = id, target, moveIndex
+    battle:itemUsed(messages, o)
+  end
+
   -- field POKé FLUTE: play the tune, then the no-effect text
   if result == "flute_field" then
     require("src.core.Sound").play(game.data, "Pokeflute")
@@ -249,7 +258,7 @@ local function vanillaUseOn(game, battle, id, target, list, moveIndex, picker)
   if result == "flute" then
     list:close()
     require("src.core.Sound").play(game.data, "Pokeflute")
-    showMessages(game, payload, function() battle:itemUsed({}) end)
+    showMessages(game, payload, function() spent({}) end)
     return
   end
 
@@ -283,7 +292,7 @@ local function vanillaUseOn(game, battle, id, target, list, moveIndex, picker)
     if battle then
         list:close()
         showMessages(game, payload, function()
-            battle:itemUsed({})
+            spent({})
         end)
     else
         showMessages(game, payload, closePicker)
@@ -381,7 +390,7 @@ local function vanillaUseOn(game, battle, id, target, list, moveIndex, picker)
     end
     if battle then
       list:close()
-      showMessages(game, payload, function() battle:itemUsed({}) end)
+      showMessages(game, payload, function() spent({}) end)
     else
       showMessages(game, payload, closePicker)
     end
